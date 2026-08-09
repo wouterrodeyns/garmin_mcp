@@ -10,9 +10,14 @@ from typing import Any
 from garmin_mcp.ai_training.providers import (
     RUNNING_TYPE_KEYS,
     ProviderResult,
+    get_daily_stats,
+    get_hrv,
     get_last_run,
     get_period_activities,
     get_scheduled_workouts,
+    get_sleep,
+    get_training_readiness,
+    get_training_status,
 )
 
 AVAILABILITY_KEYS = (
@@ -58,6 +63,17 @@ def _finite_number(value: Any) -> float | None:
         return None
     numeric = float(value)
     return numeric if isfinite(numeric) else None
+
+
+def _normalized_number(value: Any) -> int | float | None:
+    numeric = _finite_number(value)
+    if numeric is None:
+        return None
+    return int(numeric) if numeric.is_integer() else numeric
+
+
+def _normalized_text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _activity_sport(activity: dict[str, Any]) -> str | None:
@@ -275,6 +291,221 @@ def _populate_scheduled_workouts(result: dict[str, Any], provider_result: Provid
         )
 
 
+def _populate_daily_stats(result: dict[str, Any], raw: Any) -> None:
+    if not isinstance(raw, dict):
+        return
+    source_date = _iso_day(raw.get("calendarDate"))
+    resting_hr = _normalized_number(raw.get("restingHeartRate"))
+    resting_average = _normalized_number(raw.get("lastSevenDaysAvgRestingHeartRate"))
+    body_battery = _normalized_number(raw.get("bodyBatteryMostRecentValue"))
+    if resting_hr is not None or resting_average is not None:
+        result["availability"]["resting_heart_rate"] = True
+        result["heart_rate"].update(
+            date=source_date,
+            resting_hr=resting_hr,
+            resting_hr_7_day_avg=resting_average,
+        )
+    if body_battery is not None:
+        result["availability"]["body_battery"] = True
+        result["recovery"]["body_battery"] = body_battery
+        result["recovery"]["body_battery_date"] = source_date
+
+
+def _sleep_metrics(raw: Any) -> tuple[dict[str, Any] | None, bool]:
+    """Return normalized sleep values and whether a response is retryably empty."""
+    if raw is None or raw == [] or raw == {}:
+        return None, True
+    if not isinstance(raw, dict) or "dailySleepDTO" not in raw:
+        return None, False
+    dto = raw.get("dailySleepDTO")
+    if dto is None or dto == {}:
+        return None, True
+    if not isinstance(dto, dict):
+        return None, False
+    seconds = _finite_number(dto.get("sleepTimeSeconds"))
+    scores = dto.get("sleepScores")
+    overall = scores.get("overall") if isinstance(scores, dict) else None
+    score = _normalized_number(overall.get("value")) if isinstance(overall, dict) else None
+    qualifier = _normalized_text(overall.get("qualifierKey")) if isinstance(overall, dict) else None
+    if seconds is None and score is None and qualifier is None:
+        return None, not any(key in dto for key in ("sleepTimeSeconds", "sleepScores"))
+    return {
+        "date": _iso_day(dto.get("calendarDate")),
+        "duration_hours": round(seconds / 3600, 1) if seconds is not None else None,
+        "score": score,
+        "score_qualifier": qualifier,
+    }, False
+
+
+def _hrv_metrics(raw: Any) -> tuple[dict[str, Any] | None, bool]:
+    if raw is None or raw == [] or raw == {}:
+        return None, True
+    if not isinstance(raw, dict) or "hrvSummary" not in raw:
+        return None, False
+    summary = raw.get("hrvSummary")
+    if summary is None or summary == {}:
+        return None, True
+    if not isinstance(summary, dict):
+        return None, False
+    baseline = summary.get("baseline")
+    baseline = baseline if isinstance(baseline, dict) else {}
+    metrics = {
+        "date": _iso_day(summary.get("calendarDate")),
+        "last_night_avg_ms": _normalized_number(summary.get("lastNightAvg")),
+        "weekly_avg_ms": _normalized_number(summary.get("weeklyAvg")),
+        "status": _normalized_text(summary.get("status")),
+        "baseline_balanced_low_ms": _normalized_number(baseline.get("balancedLow")),
+        "baseline_balanced_upper_ms": _normalized_number(baseline.get("balancedUpper")),
+    }
+    if not any(value is not None for key, value in metrics.items() if key != "date"):
+        known = {"lastNightAvg", "weeklyAvg", "status", "baseline"}
+        return None, not any(key in summary for key in known)
+    return metrics, False
+
+
+def _readiness_metrics(raw: Any) -> tuple[dict[str, Any] | None, bool]:
+    if raw is None or raw == [] or raw == {}:
+        return None, True
+    if not isinstance(raw, dict):
+        return None, False
+    score = None
+    for key in ("readinessScore", "score", "trainingReadinessLevel"):
+        score = _normalized_number(raw.get(key))
+        if score is not None:
+            break
+    level = None
+    for key in ("readinessLevel", "level", "trainingReadinessLevelKey"):
+        level = _normalized_text(raw.get(key))
+        if level is not None:
+            break
+    recovery_minutes = _finite_number(raw.get("recoveryTime"))
+    if score is None and level is None and recovery_minutes is None:
+        known = {
+            "readinessScore", "score", "trainingReadinessLevel", "readinessLevel",
+            "level", "trainingReadinessLevelKey", "recoveryTime",
+        }
+        return None, not any(key in raw for key in known)
+    return {
+        "date": _iso_day(raw.get("calendarDate")),
+        "score": score,
+        "level": level,
+        "recovery_hours": round(recovery_minutes / 60, 1) if recovery_minutes is not None else None,
+    }, False
+
+
+def _read_with_previous_day_fallback(
+    getter: Any, client: Any, today: date, normalizer: Any
+) -> tuple[dict[str, Any] | None, str]:
+    today_text = today.isoformat()
+    raw = getter(client, today_text)
+    metrics, retry = normalizer(raw)
+    source_date = today_text
+    if retry:
+        source_date = today.fromordinal(today.toordinal() - 1).isoformat()
+        metrics, _ = normalizer(getter(client, source_date))
+    return metrics, source_date
+
+
+def _populate_sleep(result: dict[str, Any], client: Any, today: date) -> None:
+    metrics, source_date = _read_with_previous_day_fallback(get_sleep, client, today, _sleep_metrics)
+    if metrics is None:
+        return
+    metrics["date"] = metrics["date"] or source_date
+    result["sleep"].update(metrics)
+    result["availability"]["sleep"] = True
+
+
+def _populate_hrv(result: dict[str, Any], client: Any, today: date) -> None:
+    metrics, source_date = _read_with_previous_day_fallback(get_hrv, client, today, _hrv_metrics)
+    if metrics is None:
+        return
+    metrics["date"] = metrics["date"] or source_date
+    result["hrv"].update(metrics)
+    result["availability"]["hrv"] = True
+
+
+def _populate_readiness(result: dict[str, Any], client: Any, today: date) -> None:
+    metrics, source_date = _read_with_previous_day_fallback(
+        get_training_readiness, client, today, _readiness_metrics
+    )
+    if metrics is None:
+        return
+    result["recovery"]["readiness_date"] = metrics["date"] or source_date
+    result["recovery"]["training_readiness"] = metrics["score"]
+    result["recovery"]["training_readiness_level"] = metrics["level"]
+    result["recovery"]["recovery_hours"] = metrics["recovery_hours"]
+    result["availability"]["training_readiness"] = (
+        metrics["score"] is not None or metrics["level"] is not None
+    )
+    result["availability"]["recovery_time"] = metrics["recovery_hours"] is not None
+
+
+def _primary_device(device_map: Any, preferred_id: Any = None) -> dict[str, Any]:
+    if not isinstance(device_map, dict):
+        return {}
+    if isinstance(preferred_id, str):
+        preferred = device_map.get(preferred_id)
+        if isinstance(preferred, dict):
+            return preferred
+    first: dict[str, Any] = {}
+    for candidate in device_map.values():
+        if not isinstance(candidate, dict):
+            continue
+        if not first:
+            first = candidate
+        if candidate.get("primaryTrainingDevice") is True:
+            return candidate
+    return first
+
+
+def _populate_training_status(result: dict[str, Any], raw: Any) -> None:
+    if not isinstance(raw, dict):
+        return
+    recent = raw.get("mostRecentTrainingStatus")
+    latest = recent.get("latestTrainingStatusData") if isinstance(recent, dict) else None
+    primary_device_id = raw.get("primaryTrainingDevice")
+    status = _primary_device(latest, primary_device_id)
+    load = status.get("acuteTrainingLoadDTO")
+    load = load if isinstance(load, dict) else {}
+
+    status_values = {
+        "training_status": _normalized_text(status.get("trainingStatus")),
+        "training_status_feedback": _normalized_text(status.get("trainingStatusFeedbackPhrase")),
+        "fitness_trend": _normalized_text(status.get("fitnessTrend")),
+    }
+    load_values = {
+        "acute_load": _normalized_number(load.get("dailyTrainingLoadAcute")),
+        "chronic_load": _normalized_number(load.get("dailyTrainingLoadChronic")),
+        "acute_chronic_ratio": _normalized_number(load.get("dailyAcuteChronicWorkloadRatio")),
+        "acwr_status": _normalized_text(load.get("acwrStatus")),
+    }
+    result["fitness"].update(status_values)
+    result["fitness"].update(load_values)
+    result["availability"]["training_status"] = any(value is not None for value in status_values.values())
+    result["availability"]["training_load"] = any(value is not None for value in load_values.values())
+
+    balance = raw.get("mostRecentTrainingLoadBalance")
+    load_map = balance.get("metricsTrainingLoadBalanceDTOMap") if isinstance(balance, dict) else None
+    focus = _primary_device(load_map, primary_device_id)
+    focus_values = {
+        "aerobic_low": _normalized_number(focus.get("monthlyLoadAerobicLow")),
+        "aerobic_high": _normalized_number(focus.get("monthlyLoadAerobicHigh")),
+        "anaerobic": _normalized_number(focus.get("monthlyLoadAnaerobic")),
+        "feedback": _normalized_text(focus.get("trainingBalanceFeedbackPhrase")),
+    }
+    result["fitness"]["load_focus"].update(focus_values)
+    result["availability"]["load_focus"] = any(value is not None for value in focus_values.values())
+
+    vo2 = raw.get("mostRecentVO2Max")
+    generic = vo2.get("generic") if isinstance(vo2, dict) else None
+    cycling = vo2.get("cycling") if isinstance(vo2, dict) else None
+    running_vo2 = _normalized_number(generic.get("vo2MaxValue")) if isinstance(generic, dict) else None
+    cycling_vo2 = _normalized_number(cycling.get("vo2MaxValue")) if isinstance(cycling, dict) else None
+    result["fitness"]["vo2max_running"] = running_vo2
+    result["fitness"]["vo2max_cycling"] = cycling_vo2
+    result["availability"]["vo2max"] = running_vo2 is not None or cycling_vo2 is not None
+
+
 def get_training_context_service(client: Any, days: int = 14, today: date | None = None) -> dict[str, Any]:
     """Return a compact training-context envelope with stable null sections."""
     effective_today = today or date.today()
@@ -294,4 +525,9 @@ def get_training_context_service(client: Any, days: int = 14, today: date | None
     _populate_activities(result, period_result)
     _populate_scheduled_workouts(result, schedule_result)
     _populate_last_run(result, last_run_result, effective_today)
+    _populate_daily_stats(result, get_daily_stats(client, end))
+    _populate_sleep(result, client, effective_today)
+    _populate_hrv(result, client, effective_today)
+    _populate_readiness(result, client, effective_today)
+    _populate_training_status(result, get_training_status(client, end))
     return result

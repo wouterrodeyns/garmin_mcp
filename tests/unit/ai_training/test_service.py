@@ -159,11 +159,13 @@ def test_successful_empty_period_is_available_with_zero_aggregates(providers: di
     assert result["recent_activities"] == []
 
 
-def test_task_two_does_not_read_unpopulated_optional_sections(providers: dict[str, Mock]):
+def test_optional_sections_are_read_with_one_empty_overnight_fallback(providers: dict[str, Mock]):
     get_training_context_service(Mock(), today=TODAY)
 
-    for name in ("daily_stats", "sleep", "hrv", "readiness", "training_status"):
-        assert providers[name].call_count == 0
+    assert providers["daily_stats"].call_count == 1
+    assert providers["training_status"].call_count == 1
+    for name in ("sleep", "hrv", "readiness"):
+        assert [call.args[1] for call in providers[name].call_args_list] == ["2026-02-14", "2026-02-13"]
 
 
 def test_unavailable_empty_period_keeps_unknown_aggregates_null(providers: dict[str, Mock]):
@@ -353,3 +355,211 @@ def test_scheduled_workouts_redact_structured_field_values(providers: dict[str, 
         "provider": "scheduled_workouts", "code": "invalid_provider_response",
         "message": "Scheduled workout response had an unexpected item.",
     }]
+
+
+def test_daily_stats_populates_metric_granular_heart_rate_and_body_battery(providers: dict[str, Mock]):
+    providers["daily_stats"].return_value = {
+        "calendarDate": "2026-02-14",
+        "restingHeartRate": 49,
+        "lastSevenDaysAvgRestingHeartRate": 51,
+        "bodyBatteryMostRecentValue": 78,
+    }
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["heart_rate"] == {
+        "date": "2026-02-14", "resting_hr": 49, "resting_hr_7_day_avg": 51,
+    }
+    assert result["recovery"]["body_battery"] == 78  # type: ignore[index]
+    assert result["recovery"]["body_battery_date"] == "2026-02-14"  # type: ignore[index]
+    assert result["availability"]["resting_heart_rate"] is True  # type: ignore[index]
+    assert result["availability"]["body_battery"] is True  # type: ignore[index]
+
+
+def test_daily_stats_does_not_make_absent_metric_groups_available(providers: dict[str, Mock]):
+    providers["daily_stats"].return_value = {"calendarDate": "2026-02-14", "restingHeartRate": 48}
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["availability"]["resting_heart_rate"] is True  # type: ignore[index]
+    assert result["availability"]["body_battery"] is False  # type: ignore[index]
+    assert result["recovery"]["body_battery"] is None  # type: ignore[index]
+
+
+def test_sleep_normalizes_nested_score_and_falls_back_only_when_today_is_empty(providers: dict[str, Mock]):
+    providers["sleep"].side_effect = [
+        {"dailySleepDTO": {}},
+        {"dailySleepDTO": {
+            "calendarDate": "2026-02-13",
+            "sleepTimeSeconds": 27360,
+            "sleepScores": {"overall": {"value": 82, "qualifierKey": "GOOD"}},
+        }},
+    ]
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["sleep"] == {
+        "date": "2026-02-13", "duration_hours": 7.6,
+        "score": 82, "score_qualifier": "GOOD",
+    }
+    assert result["availability"]["sleep"] is True  # type: ignore[index]
+    assert [call.args[1] for call in providers["sleep"].call_args_list] == ["2026-02-14", "2026-02-13"]
+
+
+def test_nonempty_unknown_sleep_shape_does_not_trigger_fallback(providers: dict[str, Mock]):
+    providers["sleep"].return_value = {"unexpected": "private payload"}
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["sleep"] == {
+        "date": None, "duration_hours": None, "score": None, "score_qualifier": None,
+    }
+    assert result["availability"]["sleep"] is False  # type: ignore[index]
+    providers["sleep"].assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "payload", "availability_key"),
+    [
+        ("sleep", {"dailySleepDTO": {"sleepTimeSeconds": "invalid"}}, "sleep"),
+        ("hrv", {"hrvSummary": {"lastNightAvg": "invalid"}}, "hrv"),
+        ("readiness", {"readinessScore": "invalid"}, "training_readiness"),
+    ],
+)
+def test_malformed_nonempty_overnight_payload_never_triggers_fallback(
+    provider_name: str, payload: dict[str, object], availability_key: str, providers: dict[str, Mock]
+):
+    providers[provider_name].return_value = payload
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    providers[provider_name].assert_called_once()
+    assert result["availability"][availability_key] is False  # type: ignore[index]
+
+
+def test_hrv_normalizes_summary_baseline_and_actual_fallback_date(providers: dict[str, Mock]):
+    providers["hrv"].side_effect = [None, {"hrvSummary": {
+        "calendarDate": "2026-02-13", "lastNightAvg": 54, "weeklyAvg": 52,
+        "status": "BALANCED", "baseline": {"balancedLow": 46, "balancedUpper": 62},
+    }}]
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["hrv"] == {
+        "date": "2026-02-13", "last_night_avg_ms": 54, "weekly_avg_ms": 52,
+        "status": "BALANCED", "baseline_balanced_low_ms": 46,
+        "baseline_balanced_upper_ms": 62,
+    }
+    assert result["availability"]["hrv"] is True  # type: ignore[index]
+    assert [call.args[1] for call in providers["hrv"].call_args_list] == ["2026-02-14", "2026-02-13"]
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_score", "expected_level"),
+    [
+        ({"readinessScore": 72, "readinessLevel": "HIGH"}, 72, "HIGH"),
+        ({"score": 68, "level": "MEDIUM"}, 68, "MEDIUM"),
+        ({"trainingReadinessLevel": 64, "trainingReadinessLevelKey": "GOOD"}, 64, "GOOD"),
+    ],
+)
+def test_training_readiness_supports_all_verified_alias_pairs(
+    payload: dict[str, object], expected_score: int, expected_level: str, providers: dict[str, Mock]
+):
+    providers["readiness"].return_value = {"calendarDate": "2026-02-14", **payload}
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["recovery"]["readiness_date"] == "2026-02-14"  # type: ignore[index]
+    assert result["recovery"]["training_readiness"] == expected_score  # type: ignore[index]
+    assert result["recovery"]["training_readiness_level"] == expected_level  # type: ignore[index]
+    assert result["availability"]["training_readiness"] is True  # type: ignore[index]
+
+
+def test_readiness_recovery_minutes_are_converted_only_when_present(providers: dict[str, Mock]):
+    providers["readiness"].side_effect = [[], {"recoveryTime": 270, "score": 70}]
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["recovery"]["readiness_date"] == "2026-02-13"  # type: ignore[index]
+    assert result["recovery"]["recovery_hours"] == 4.5  # type: ignore[index]
+    assert result["availability"]["recovery_time"] is True  # type: ignore[index]
+    assert [call.args[1] for call in providers["readiness"].call_args_list] == ["2026-02-14", "2026-02-13"]
+
+
+def test_invalid_recovery_time_is_not_coerced_or_made_available(providers: dict[str, Mock]):
+    providers["readiness"].return_value = {"readinessScore": 70, "recoveryTime": None}
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["recovery"]["recovery_hours"] is None  # type: ignore[index]
+    assert result["availability"]["recovery_time"] is False  # type: ignore[index]
+
+
+def test_overnight_provider_exception_never_triggers_previous_day_fallback(providers: dict[str, Mock]):
+    providers["sleep"].side_effect = RuntimeError("unavailable")
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        get_training_context_service(Mock(), today=TODAY)
+
+    providers["sleep"].assert_called_once()
+
+
+def test_training_status_selects_primary_devices_independently_and_uses_exact_paths(providers: dict[str, Mock]):
+    providers["training_status"].return_value = {
+        "primaryTrainingDevice": "primary",
+        "mostRecentTrainingStatus": {"latestTrainingStatusData": {
+            "secondary": {"trainingStatus": "MAINTAINING"},
+            "primary": {
+                "trainingStatus": "PRODUCTIVE",
+                "trainingStatusFeedbackPhrase": "KEEP_GOING",
+                "fitnessTrend": "INCREASING",
+                "acuteTrainingLoadDTO": {
+                    "dailyTrainingLoadAcute": 250,
+                    "dailyTrainingLoadChronic": 217,
+                    "dailyAcuteChronicWorkloadRatio": 1.15,
+                    "acwrStatus": "OPTIMAL",
+                },
+            },
+        }},
+        "mostRecentTrainingLoadBalance": {"metricsTrainingLoadBalanceDTOMap": {
+            "other": {"monthlyLoadAerobicLow": 1},
+            "primary": {
+                "monthlyLoadAerobicLow": 320,
+                "monthlyLoadAerobicHigh": 190,
+                "monthlyLoadAnaerobic": 80,
+                "trainingBalanceFeedbackPhrase": "BALANCED",
+            },
+        }},
+        "mostRecentVO2Max": {
+            "generic": {"vo2MaxValue": 51},
+            "cycling": {"vo2MaxValue": 55},
+        },
+    }
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["fitness"] == {
+        "training_status": "PRODUCTIVE", "training_status_feedback": "KEEP_GOING",
+        "fitness_trend": "INCREASING", "acute_load": 250, "chronic_load": 217,
+        "acute_chronic_ratio": 1.15, "acwr_status": "OPTIMAL",
+        "vo2max_running": 51, "vo2max_cycling": 55,
+        "load_focus": {"aerobic_low": 320, "aerobic_high": 190, "anaerobic": 80, "feedback": "BALANCED"},
+    }
+    for key in ("training_status", "training_load", "load_focus", "vo2max"):
+        assert result["availability"][key] is True  # type: ignore[index]
+
+
+def test_training_status_never_derives_acwr_from_acute_and_chronic_load(providers: dict[str, Mock]):
+    providers["training_status"].return_value = {
+        "mostRecentTrainingStatus": {"latestTrainingStatusData": {"device": {
+            "acuteTrainingLoadDTO": {"dailyTrainingLoadAcute": 250, "dailyTrainingLoadChronic": 217},
+        }}},
+    }
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["fitness"]["acute_load"] == 250  # type: ignore[index]
+    assert result["fitness"]["chronic_load"] == 217  # type: ignore[index]
+    assert result["fitness"]["acute_chronic_ratio"] is None  # type: ignore[index]
+    assert result["fitness"]["acwr_status"] is None  # type: ignore[index]
+    assert result["availability"]["training_load"] is True  # type: ignore[index]
