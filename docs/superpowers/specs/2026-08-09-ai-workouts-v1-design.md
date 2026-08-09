@@ -18,9 +18,9 @@ create_workout(name: str, sport: str, steps: list[dict], schedule_date: str | No
 
 It supports running, cycling, walking, and conservative strength workouts;
 executable warmup, cooldown, work/run/interval, recovery, and rest steps;
-nested repeat groups; time, distance, reps, and lap-button end conditions; and
-pace, named heart-rate zone, custom heart-rate range, power zone, and absolute
-power targets.
+one repeat-group level with 1-50 iterations; time, distance, reps, and
+lap-button end conditions; and pace, named heart-rate zone, custom heart-rate
+range, power zone, and absolute power targets.
 
 V1 also adds an opt-in `ai-coach` tool profile. It does not add high-level move,
 update, unschedule, delete, training-context, or recent-training aggregation
@@ -85,6 +85,8 @@ documentation.
 Accepted action keys are `warmup`, `cooldown`, `work`, `run`, `interval`,
 `recovery`, and `rest`. The aliases `work`, `run`, and `interval` all lower to
 Garmin's interval step type. `recovery` and `rest` remain distinct step types.
+A repeat group may contain executable actions but not another repeat group;
+repeat counts are integers from 1 through 50.
 
 Each executable action must contain exactly one end condition:
 
@@ -120,7 +122,8 @@ Validation rejects:
 - an unsupported sport or action;
 - an empty workout or repeat group;
 - an action/repeat object with unknown or conflicting structural keys;
-- non-positive durations, distances, reps, or repeat counts;
+- repeat nesting beyond one group level or a repeat count outside 1-50;
+- non-positive durations, distances, or reps;
 - malformed or inverted pace, heart-rate, or power ranges;
 - multiple targets or end conditions on one action;
 - pace on unsupported sports;

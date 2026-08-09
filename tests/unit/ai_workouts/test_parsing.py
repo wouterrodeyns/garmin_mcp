@@ -199,6 +199,47 @@ def test_validate_rejects_invalid_repeat_count(count):
         )
 
 
+def test_validate_allows_repeat_count_at_v1_safety_limit():
+    workout = validate_workout(
+        "Fifty Repeats",
+        "running",
+        [{"repeat": 50, "steps": [{"run": {"duration": "1m"}}]}],
+    )
+
+    assert workout.steps[0] == RepeatStep(
+        50,
+        (ActionStep("run", EndCondition("duration", 60.0)),),
+    )
+
+
+def test_validate_rejects_repeat_count_above_v1_safety_limit():
+    with pytest.raises(ValueError, match="repeat must not exceed 50"):
+        validate_workout(
+            "Too Many Repeats",
+            "running",
+            [{"repeat": 51, "steps": [{"run": {"duration": "1m"}}]}],
+        )
+
+
+def test_validate_rejects_repeat_nested_inside_repeat_group():
+    with pytest.raises(ValueError, match="repeat nesting must not exceed 1"):
+        validate_workout(
+            "Nested Repeats",
+            "running",
+            [
+                {
+                    "repeat": 2,
+                    "steps": [
+                        {
+                            "repeat": 2,
+                            "steps": [{"run": {"duration": "1m"}}],
+                        }
+                    ],
+                }
+            ],
+        )
+
+
 def test_validate_rejects_ambiguous_end_conditions_and_targets():
     with pytest.raises(ValueError, match="exactly one end condition"):
         validate_workout("Bad", "running", [{"run": {"duration": "5m", "distance": "1km"}}])

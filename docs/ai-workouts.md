@@ -33,8 +33,9 @@ Supported sports are `running`, `cycling`, `walking`, and `strength`.
 `strength_training` is accepted as a compatibility alias and normalized to
 `strength`.
 Actions are `warmup`, `cooldown`, `work`, `run`, `interval`, `recovery`, and
-`rest`. A repeat group is `{ "repeat": 4, "steps": [...] }`; nested repeat
-groups are allowed.
+`rest`. A repeat group is `{ "repeat": 4, "steps": [...] }`. One repeat level
+is supported: its `steps` must be actions, not repeat groups. Repeat counts are
+integers from 1 through 50; nested repeat groups are not supported.
 
 Every action has exactly one end condition:
 

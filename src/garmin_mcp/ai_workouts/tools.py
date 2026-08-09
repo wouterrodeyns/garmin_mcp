@@ -31,9 +31,10 @@ def register_tools(app: Any) -> Any:
 
         Supported sports are running, cycling, walking, and strength. Use
         actions warmup, cooldown, work, run, interval, recovery, or rest;
-        repeat groups use ``repeat`` and nested ``steps``. Each action has one
-        end condition: duration, distance, reps (strength only), or
-        lap_button.
+        repeat groups use ``repeat`` and nested ``steps``. One repeat level is
+        supported, with 1-50 iterations; nested repeat groups are not
+        supported. Each action has one end condition: duration, distance, reps
+        (strength only), or lap_button.
 
         Use these exact friendly units: duration ``"15m"`` (minutes),
         ``"90s"``, or ``"1.5h"``; distance ``"800m"`` (metres) or

@@ -74,6 +74,13 @@ def test_ai_workouts_docs_protects_schema_cardinality_and_strength_limitations()
         assert expected in create_lower
 
 
+def test_ai_workouts_docs_protects_repeat_safety_limits():
+    create = SECTIONS["create one workout"].lower()
+    assert "one repeat level" in create
+    assert "50" in create
+    assert "nested repeat groups are not supported" in create
+
+
 def test_ai_workouts_docs_protects_complete_friendly_vocabularies_and_constraints():
     create = SECTIONS["create one workout"]
     sports = re.search(r"Supported sports are (.+?)\.", create, re.DOTALL)

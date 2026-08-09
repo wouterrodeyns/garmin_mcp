@@ -140,6 +140,26 @@ def test_invalid_input_returns_error_before_upload(
     mock_garmin_client.upload_workout.assert_not_called()
 
 
+def test_deeply_nested_repeats_return_error_without_upload(mock_garmin_client):
+    steps = [{"run": {"duration": "1s"}}]
+    for _ in range(300):
+        steps = [{"repeat": 1, "steps": steps}]
+
+    result = create_workout_service(
+        mock_garmin_client,
+        "Deeply Nested",
+        "running",
+        steps,
+    )
+
+    assert result == {
+        "status": "error",
+        "name": "Deeply Nested",
+        "message": "repeat nesting must not exceed 1",
+    }
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
 def test_upload_exception_returns_error_and_never_schedules(mock_garmin_client, monkeypatch):
     mock_garmin_client.upload_workout.side_effect = RuntimeError("upload unavailable")
     schedule = MagicMock()

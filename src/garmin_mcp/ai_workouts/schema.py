@@ -12,6 +12,8 @@ SPORTS = {"running", "cycling", "walking", "strength"}
 SPORT_ALIASES = {"strength_training": "strength"}
 ACTIONS = {"warmup", "cooldown", "work", "run", "interval", "recovery", "rest"}
 _ACTION_METADATA = {"exercise", "category"}
+MAX_REPEAT_NESTING = 1
+MAX_REPEAT_ITERATIONS = 50
 
 
 @dataclass(frozen=True)
@@ -67,16 +69,25 @@ def _normalize_sport(value: Any) -> str:
     return sport
 
 
-def _validate_repeat(raw_step: dict[str, Any], sport: str) -> RepeatStep:
+def _validate_repeat(
+    raw_step: dict[str, Any], sport: str, repeat_nesting: int
+) -> RepeatStep:
     if set(raw_step) != {"repeat", "steps"}:
         raise ValueError("repeat groups must contain exactly repeat and steps")
+    if repeat_nesting > MAX_REPEAT_NESTING:
+        raise ValueError(f"repeat nesting must not exceed {MAX_REPEAT_NESTING}")
     iterations = raw_step["repeat"]
     if isinstance(iterations, bool) or not isinstance(iterations, int) or iterations <= 0:
         raise ValueError("repeat must be a positive integer")
+    if iterations > MAX_REPEAT_ITERATIONS:
+        raise ValueError(f"repeat must not exceed {MAX_REPEAT_ITERATIONS}")
     nested = raw_step["steps"]
     if not isinstance(nested, list) or not nested:
         raise ValueError("repeat steps must be a non-empty list")
-    return RepeatStep(iterations, tuple(_validate_step(step, sport) for step in nested))
+    return RepeatStep(
+        iterations,
+        tuple(_validate_step(step, sport, repeat_nesting) for step in nested),
+    )
 
 
 def _parse_end_condition(config: dict[str, Any]) -> EndCondition:
@@ -136,7 +147,9 @@ def _validate_action(raw_step: dict[str, Any], action: str, sport: str) -> Actio
     return ActionStep(action, end_condition, target, exercise, category)
 
 
-def _validate_step(raw_step: Any, sport: str) -> WorkoutStep:
+def _validate_step(
+    raw_step: Any, sport: str, repeat_nesting: int = 0
+) -> WorkoutStep:
     if not isinstance(raw_step, dict):
         raise ValueError("each step must be an object")
     unknown = set(raw_step) - (ACTIONS | {"repeat", "steps"})
@@ -149,7 +162,7 @@ def _validate_step(raw_step: Any, sport: str) -> WorkoutStep:
             raise ValueError("a step must contain exactly one action key or repeat and steps")
         if "repeat" not in raw_step or "steps" not in raw_step:
             raise ValueError("repeat groups must contain exactly repeat and steps")
-        return _validate_repeat(raw_step, sport)
+        return _validate_repeat(raw_step, sport, repeat_nesting + 1)
     if len(action_keys) != 1:
         raise ValueError("each step must contain exactly one action key")
     if len(raw_step) != 1:
