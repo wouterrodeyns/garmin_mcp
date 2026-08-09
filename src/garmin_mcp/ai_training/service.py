@@ -36,6 +36,44 @@ AVAILABILITY_KEYS = (
     "vo2max",
 )
 
+_PROVIDER_MESSAGES = {
+    "activities": ("Activities are unavailable.", "Activities returned an invalid response."),
+    "last_run": ("Latest run is unavailable.", "Latest run returned an invalid response."),
+    "scheduled_workouts": (
+        "Scheduled workouts are unavailable.",
+        "Scheduled workouts returned an invalid response.",
+    ),
+    "daily_stats": (
+        "Daily statistics are unavailable.",
+        "Daily statistics returned an invalid response.",
+    ),
+    "sleep": ("Sleep is unavailable.", "Sleep returned an invalid response."),
+    "hrv": ("HRV is unavailable.", "HRV returned an invalid response."),
+    "training_readiness": (
+        "Training readiness is unavailable.",
+        "Training readiness returned an invalid response.",
+    ),
+    "training_status": (
+        "Training status is unavailable.",
+        "Training status returned an invalid response.",
+    ),
+}
+
+
+def _warning(provider: str, code: str) -> dict[str, str]:
+    message_index = 1 if code == "invalid_provider_response" else 0
+    return {
+        "provider": provider,
+        "code": code,
+        "message": _PROVIDER_MESSAGES[provider][message_index],
+    }
+
+
+def _append_failure_warning(result: dict[str, Any], provider: str, code: str) -> None:
+    warning = _warning(provider, code)
+    if warning not in result["warnings"]:
+        result["warnings"].append(warning)
+
 
 def _iso_day(value: Any) -> str | None:
     """Return a canonical ISO date from a local Garmin timestamp."""
@@ -266,7 +304,7 @@ def _scheduled_item(item: Any) -> tuple[dict[str, Any], bool] | None:
     return reduced, invalid
 
 
-def _populate_scheduled_workouts(result: dict[str, Any], provider_result: ProviderResult) -> None:
+def _populate_scheduled_workouts(result: dict[str, Any], provider_result: ProviderResult) -> bool:
     _append_warnings(result, provider_result)
     result["availability"]["scheduled_workouts"] = not provider_result.failed
     raw_items = provider_result.data if isinstance(provider_result.data, (tuple, list)) else ()
@@ -289,6 +327,7 @@ def _populate_scheduled_workouts(result: dict[str, Any], provider_result: Provid
                 "message": "Scheduled workout response had an unexpected item.",
             }
         )
+    return invalid_item
 
 
 def _populate_daily_stats(result: dict[str, Any], raw: Any) -> None:
@@ -433,41 +472,47 @@ def _readiness_metrics(raw: Any) -> tuple[dict[str, Any] | None, bool]:
 
 def _read_with_previous_day_fallback(
     getter: Any, client: Any, today: date, normalizer: Any
-) -> tuple[dict[str, Any] | None, str]:
+) -> tuple[dict[str, Any] | None, str, bool]:
     today_text = today.isoformat()
     raw = getter(client, today_text)
     metrics, retry = normalizer(raw)
     source_date = today_text
     if retry:
         source_date = today.fromordinal(today.toordinal() - 1).isoformat()
-        metrics, _ = normalizer(getter(client, source_date))
-    return metrics, source_date
+        metrics, retry = normalizer(getter(client, source_date))
+    return metrics, source_date, metrics is None and not retry
 
 
-def _populate_sleep(result: dict[str, Any], client: Any, today: date) -> None:
-    metrics, source_date = _read_with_previous_day_fallback(get_sleep, client, today, _sleep_metrics)
+def _populate_sleep(result: dict[str, Any], client: Any, today: date) -> bool:
+    metrics, source_date, invalid = _read_with_previous_day_fallback(
+        get_sleep, client, today, _sleep_metrics
+    )
     if metrics is None:
-        return
+        return invalid
     metrics["date"] = metrics["date"] or source_date
     result["sleep"].update(metrics)
     result["availability"]["sleep"] = True
+    return False
 
 
-def _populate_hrv(result: dict[str, Any], client: Any, today: date) -> None:
-    metrics, source_date = _read_with_previous_day_fallback(get_hrv, client, today, _hrv_metrics)
+def _populate_hrv(result: dict[str, Any], client: Any, today: date) -> bool:
+    metrics, source_date, invalid = _read_with_previous_day_fallback(
+        get_hrv, client, today, _hrv_metrics
+    )
     if metrics is None:
-        return
+        return invalid
     metrics["date"] = metrics["date"] or source_date
     result["hrv"].update(metrics)
     result["availability"]["hrv"] = True
+    return False
 
 
-def _populate_readiness(result: dict[str, Any], client: Any, today: date) -> None:
-    metrics, source_date = _read_with_previous_day_fallback(
+def _populate_readiness(result: dict[str, Any], client: Any, today: date) -> bool:
+    metrics, source_date, invalid = _read_with_previous_day_fallback(
         get_training_readiness, client, today, _readiness_metrics
     )
     if metrics is None:
-        return
+        return invalid
     result["recovery"]["readiness_date"] = metrics["date"] or source_date
     result["recovery"]["training_readiness"] = metrics["score"]
     result["recovery"]["training_readiness_level"] = metrics["level"]
@@ -476,6 +521,7 @@ def _populate_readiness(result: dict[str, Any], client: Any, today: date) -> Non
         metrics["score"] is not None or metrics["level"] is not None
     )
     result["availability"]["recovery_time"] = metrics["recovery_hours"] is not None
+    return False
 
 
 def _status_device_usable(candidate: dict[str, Any]) -> bool:
@@ -569,6 +615,93 @@ def _populate_training_status(result: dict[str, Any], raw: Any) -> None:
     result["availability"]["vo2max"] = running_vo2 is not None or cycling_vo2 is not None
 
 
+def _failed_provider_result(provider: str) -> ProviderResult:
+    return ProviderResult(data=(), failed=True, warnings=(_warning(provider, "provider_unavailable"),))
+
+
+def _read_core(provider: str, getter: Any, *args: Any) -> ProviderResult:
+    try:
+        provider_result = getter(*args)
+    except Exception:
+        return _failed_provider_result(provider)
+    if not isinstance(provider_result, ProviderResult):
+        return ProviderResult(
+            data=(), failed=True,
+            warnings=(_warning(provider, "invalid_provider_response"),),
+        )
+    if provider_result.failed and not provider_result.warnings:
+        return ProviderResult(
+            data=provider_result.data,
+            failed=True,
+            truncated=provider_result.truncated,
+            warnings=(_warning(provider, "provider_unavailable"),),
+        )
+    return provider_result
+
+
+def _read_optional(
+    result: dict[str, Any], provider: str, operation: Any
+) -> tuple[Any, bool]:
+    try:
+        return operation(), False
+    except Exception:
+        _append_failure_warning(result, provider, "provider_unavailable")
+        return None, True
+
+
+def _daily_stats_shape_valid(raw: Any) -> bool:
+    if raw is None or raw == {}:
+        return True
+    if not isinstance(raw, dict):
+        return False
+    metric_keys = (
+        "restingHeartRate", "lastSevenDaysAvgRestingHeartRate",
+        "bodyBatteryMostRecentValue",
+    )
+    if not ({"calendarDate", *metric_keys}.intersection(raw)):
+        return False
+    if raw.get("calendarDate") is not None and _iso_day(raw.get("calendarDate")) is None:
+        return False
+    return all(
+        raw.get(key) is None or _finite_number(raw.get(key)) is not None
+        for key in metric_keys
+    )
+
+
+def _training_status_shape_valid(raw: Any) -> bool:
+    if raw is None or raw == {}:
+        return True
+    if not isinstance(raw, dict):
+        return False
+    recognized = {
+        "primaryTrainingDevice", "mostRecentTrainingStatus",
+        "mostRecentTrainingLoadBalance", "mostRecentVO2Max",
+    }
+    if not recognized.intersection(raw):
+        return False
+    for key in ("mostRecentTrainingStatus", "mostRecentTrainingLoadBalance", "mostRecentVO2Max"):
+        value = raw.get(key)
+        if value is not None and not isinstance(value, dict):
+            return False
+    recent = raw.get("mostRecentTrainingStatus")
+    if isinstance(recent, dict):
+        latest = recent.get("latestTrainingStatusData")
+        if latest is not None and not isinstance(latest, dict):
+            return False
+    balance = raw.get("mostRecentTrainingLoadBalance")
+    if isinstance(balance, dict):
+        load_map = balance.get("metricsTrainingLoadBalanceDTOMap")
+        if load_map is not None and not isinstance(load_map, dict):
+            return False
+    vo2 = raw.get("mostRecentVO2Max")
+    if isinstance(vo2, dict):
+        for key in ("generic", "cycling"):
+            value = vo2.get(key)
+            if value is not None and not isinstance(value, dict):
+                return False
+    return True
+
+
 def get_training_context_service(client: Any, days: int = 14, today: date | None = None) -> dict[str, Any]:
     """Return a compact training-context envelope with stable null sections."""
     effective_today = today or date.today()
@@ -579,18 +712,81 @@ def get_training_context_service(client: Any, days: int = 14, today: date | None
         return result
 
     result = _base_result(effective_today, days)
+    if client is None:
+        result["status"] = "error"
+        result["error"] = {
+            "code": "client_unavailable",
+            "message": "Garmin client is unavailable. Authenticate with garmin-mcp-auth and retry.",
+        }
+        return result
+
     start = result["period"]["start_date"]
     end = result["period"]["end_date"]
     schedule_end = result["schedule_period"]["end_date"]
-    period_result = get_period_activities(client, start, end, days)
-    schedule_result = get_scheduled_workouts(client, end, schedule_end)
-    last_run_result = get_last_run(client)
+    period_result = _read_core(
+        "activities", get_period_activities, client, start, end, days
+    )
+    schedule_result = _read_core(
+        "scheduled_workouts", get_scheduled_workouts, client, end, schedule_end
+    )
     _populate_activities(result, period_result)
-    _populate_scheduled_workouts(result, schedule_result)
+    schedule_invalid = _populate_scheduled_workouts(result, schedule_result)
+    isolated_failure = period_result.failed or schedule_result.failed or schedule_invalid
+
+    if not result["availability"]["activities"] and not result["availability"]["scheduled_workouts"]:
+        if period_result.failed and not period_result.warnings:
+            _append_failure_warning(result, "activities", "provider_unavailable")
+        if schedule_result.failed and not schedule_result.warnings:
+            _append_failure_warning(result, "scheduled_workouts", "provider_unavailable")
+        result["status"] = "error"
+        result["error"] = {
+            "code": "context_unavailable",
+            "message": (
+                "Core Garmin context is unavailable. Re-run garmin-mcp-auth if your "
+                "session expired; otherwise retry later."
+            ),
+        }
+        return result
+
+    last_run_result = _read_core("last_run", get_last_run, client)
     _populate_last_run(result, last_run_result, effective_today)
-    _populate_daily_stats(result, get_daily_stats(client, end))
-    _populate_sleep(result, client, effective_today)
-    _populate_hrv(result, client, effective_today)
-    _populate_readiness(result, client, effective_today)
-    _populate_training_status(result, get_training_status(client, end))
+    isolated_failure = isolated_failure or last_run_result.failed
+
+    daily_stats, failed = _read_optional(
+        result, "daily_stats", lambda: get_daily_stats(client, end)
+    )
+    isolated_failure = isolated_failure or failed
+    if not failed:
+        if _daily_stats_shape_valid(daily_stats):
+            _populate_daily_stats(result, daily_stats)
+        else:
+            _append_failure_warning(result, "daily_stats", "invalid_provider_response")
+            isolated_failure = True
+
+    for provider, populate in (
+        ("sleep", _populate_sleep),
+        ("hrv", _populate_hrv),
+        ("training_readiness", _populate_readiness),
+    ):
+        invalid, failed = _read_optional(
+            result, provider, lambda _populate=populate: _populate(result, client, effective_today)
+        )
+        isolated_failure = isolated_failure or failed
+        if not failed and invalid:
+            _append_failure_warning(result, provider, "invalid_provider_response")
+            isolated_failure = True
+
+    training_status, failed = _read_optional(
+        result, "training_status", lambda: get_training_status(client, end)
+    )
+    isolated_failure = isolated_failure or failed
+    if not failed:
+        if _training_status_shape_valid(training_status):
+            _populate_training_status(result, training_status)
+        else:
+            _append_failure_warning(result, "training_status", "invalid_provider_response")
+            isolated_failure = True
+
+    if isolated_failure:
+        result["status"] = "partial_success"
     return result

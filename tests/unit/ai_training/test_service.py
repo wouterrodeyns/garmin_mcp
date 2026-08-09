@@ -6,6 +6,7 @@ from datetime import date
 from unittest.mock import Mock
 
 import pytest
+from garminconnect import GarminConnectAuthenticationError, GarminConnectConnectionError
 
 from garmin_mcp.ai_training.providers import ProviderResult
 from garmin_mcp.ai_training.service import AVAILABILITY_KEYS, get_training_context_service
@@ -143,6 +144,31 @@ def test_period_and_schedule_bounds_and_provider_order(days: int, start: str, pr
     assert providers["activities"].call_args.args[1:] == (start, "2026-02-14", days)
     assert providers["scheduled"].call_args.args[1:] == ("2026-02-14", "2026-02-20")
     assert calls == ["activities", "scheduled", "last_run"]
+
+
+def test_successful_reads_follow_the_approved_sequential_order(providers: dict[str, Mock]):
+    calls: list[str] = []
+    for name, result in (
+        ("activities", ProviderResult(data=())),
+        ("scheduled", ProviderResult(data=())),
+        ("last_run", ProviderResult(data=None)),
+        ("daily_stats", {}),
+        ("sleep", {"dailySleepDTO": {"sleepTimeSeconds": 1}}),
+        ("hrv", {"hrvSummary": {"lastNightAvg": 1}}),
+        ("readiness", {"score": 1}),
+        ("training_status", {}),
+    ):
+        providers[name].side_effect = (
+            lambda *args, _name=name, _result=result, **kwargs:
+            (calls.append(_name), _result)[1]
+        )
+
+    get_training_context_service(Mock(), today=TODAY)
+
+    assert calls == [
+        "activities", "scheduled", "last_run", "daily_stats", "sleep", "hrv",
+        "readiness", "training_status",
+    ]
 
 
 def test_successful_empty_period_is_available_with_zero_aggregates(providers: dict[str, Mock]):
@@ -306,14 +332,14 @@ def test_scheduled_workouts_reduce_known_fields_and_completion(providers: dict[s
 def test_provider_warnings_and_activity_truncation_are_propagated(providers: dict[str, Mock]):
     warning = {"provider": "activities", "code": "activities_truncated", "message": "bounded"}
     providers["activities"].return_value = ProviderResult(data=(activity(),), failed=True, truncated=True, warnings=(warning,))
-    providers["scheduled"].return_value = ProviderResult(data=(), warnings=({"provider": "scheduled_workouts", "code": "notice", "message": "x"},))
-    providers["last_run"].return_value = ProviderResult(data=None, truncated=True, warnings=({"provider": "last_run", "code": "notice", "message": "y"},))
+    providers["scheduled"].return_value = ProviderResult(data=())
+    providers["last_run"].return_value = ProviderResult(data=None, truncated=True, warnings=({"provider": "last_run", "code": "activities_truncated", "message": "y"},))
 
     result = get_training_context_service(Mock(), today=TODAY)
 
     assert result["training"]["activity_count"] == 1  # type: ignore[index]
     assert result["training"]["activities_truncated"] is True  # type: ignore[index]
-    assert result["warnings"] == [warning, {"provider": "scheduled_workouts", "code": "notice", "message": "x"}, {"provider": "last_run", "code": "notice", "message": "y"}]
+    assert result["warnings"] == [warning, {"provider": "last_run", "code": "activities_truncated", "message": "y"}]
 
 
 def test_retained_activities_remain_available_after_a_later_page_failure(providers: dict[str, Mock]):
@@ -538,10 +564,14 @@ def test_invalid_recovery_time_is_not_coerced_or_made_available(providers: dict[
 def test_overnight_provider_exception_never_triggers_previous_day_fallback(providers: dict[str, Mock]):
     providers["sleep"].side_effect = RuntimeError("unavailable")
 
-    with pytest.raises(RuntimeError, match="unavailable"):
-        get_training_context_service(Mock(), today=TODAY)
+    result = get_training_context_service(Mock(), today=TODAY)
 
     providers["sleep"].assert_called_once()
+    assert result["status"] == "partial_success"
+    assert result["warnings"] == [{
+        "provider": "sleep", "code": "provider_unavailable",
+        "message": "Sleep is unavailable.",
+    }]
 
 
 def test_training_status_selects_primary_devices_independently_and_uses_exact_paths(providers: dict[str, Mock]):
@@ -629,3 +659,201 @@ def test_training_status_skips_empty_preferred_and_fallback_device_entries(
     assert result["fitness"]["load_focus"]["aerobic_low"] == 321  # type: ignore[index]
     assert result["availability"]["training_status"] is True  # type: ignore[index]
     assert result["availability"]["load_focus"] is True  # type: ignore[index]
+
+
+def test_missing_client_returns_stable_sanitized_error_without_reads(providers: dict[str, Mock]):
+    result = get_training_context_service(None, today=TODAY)
+
+    assert result["status"] == "error"
+    assert result["error"] == {
+        "code": "client_unavailable",
+        "message": "Garmin client is unavailable. Authenticate with garmin-mcp-auth and retry.",
+    }
+    assert result["period"] == {
+        "days": 14, "start_date": "2026-02-01", "end_date": "2026-02-14",
+    }
+    assert result["schedule_period"] == {
+        "start_date": "2026-02-14", "end_date": "2026-02-20",
+    }
+    assert all(value is False for value in result["availability"].values())
+    assert result["warnings"] == []
+    assert all(provider.call_count == 0 for provider in providers.values())
+
+
+def test_both_core_failures_stop_all_enrichment_reads(providers: dict[str, Mock]):
+    providers["activities"].return_value = ProviderResult(
+        data=(), failed=True, warnings=({
+            "provider": "activities", "code": "provider_unavailable",
+            "message": "Activities are unavailable.",
+        },),
+    )
+    providers["scheduled"].return_value = ProviderResult(
+        data=(), failed=True, warnings=({
+            "provider": "scheduled_workouts", "code": "provider_unavailable",
+            "message": "Scheduled workouts are unavailable.",
+        },),
+    )
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "error"
+    assert result["error"] == {
+        "code": "context_unavailable",
+        "message": (
+            "Core Garmin context is unavailable. Re-run garmin-mcp-auth if your "
+            "session expired; otherwise retry later."
+        ),
+    }
+    assert [warning["provider"] for warning in result["warnings"]] == [
+        "activities", "scheduled_workouts",
+    ]
+    assert result["period"] == {
+        "days": 14, "start_date": "2026-02-01", "end_date": "2026-02-14",
+    }
+    assert result["schedule_period"] == {
+        "start_date": "2026-02-14", "end_date": "2026-02-20",
+    }
+    for name in ("last_run", "daily_stats", "sleep", "hrv", "readiness", "training_status"):
+        providers[name].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("failed_core", "successful_core"),
+    [("activities", "scheduled"), ("scheduled", "activities")],
+)
+def test_one_core_failure_continues_enrichment_and_returns_partial_success(
+    failed_core: str, successful_core: str, providers: dict[str, Mock]
+):
+    provider_name = "activities" if failed_core == "activities" else "scheduled_workouts"
+    providers[failed_core].return_value = ProviderResult(
+        data=(), failed=True, warnings=({
+            "provider": provider_name, "code": "provider_unavailable",
+            "message": f"{provider_name} unavailable.",
+        },),
+    )
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "partial_success"
+    assert result["error"] is None
+    assert result["availability"]["activities"] is (successful_core == "activities")
+    assert result["availability"]["scheduled_workouts"] is (successful_core == "scheduled")
+    for name in ("last_run", "daily_stats", "sleep", "hrv", "readiness", "training_status"):
+        assert providers[name].call_count >= 1
+
+
+def test_retained_activity_page_failure_is_partial_but_keeps_core_available(providers: dict[str, Mock]):
+    providers["activities"].return_value = ProviderResult(
+        data=(activity(),), failed=True, truncated=True, warnings=({
+            "provider": "activities", "code": "provider_unavailable",
+            "message": "Activity history is incomplete because a later page was unavailable.",
+        },),
+    )
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "partial_success"
+    assert result["availability"]["activities"] is True
+    assert result["training"]["activity_count"] == 1
+    assert result["training"]["activities_truncated"] is True
+
+
+def test_informational_truncation_warning_does_not_change_success_status(providers: dict[str, Mock]):
+    providers["activities"].return_value = ProviderResult(
+        data=(activity(),), truncated=True, warnings=({
+            "provider": "activities", "code": "activities_truncated",
+            "message": "Activity history reached the 200-record limit; period totals are lower bounds.",
+        },),
+    )
+    providers["last_run"].return_value = ProviderResult(
+        data=None, truncated=True, warnings=({
+            "provider": "last_run", "code": "activities_truncated",
+            "message": "Latest-run search reached the 1000-record limit and was inconclusive.",
+        },),
+    )
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "success"
+    assert result["error"] is None
+    assert len(result["warnings"]) == 2
+
+
+@pytest.mark.parametrize(
+    ("provider_key", "provider_name", "message"),
+    [
+        ("last_run", "last_run", "Latest run is unavailable."),
+        ("sleep", "sleep", "Sleep is unavailable."),
+        ("hrv", "hrv", "HRV is unavailable."),
+        ("readiness", "training_readiness", "Training readiness is unavailable."),
+        ("training_status", "training_status", "Training status is unavailable."),
+    ],
+)
+def test_optional_provider_exceptions_are_sanitized_and_isolated(
+    provider_key: str, provider_name: str, message: str, providers: dict[str, Mock]
+):
+    providers[provider_key].side_effect = RuntimeError("token=super-secret raw response")
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "partial_success"
+    assert result["error"] is None
+    assert {
+        "provider": provider_name, "code": "provider_unavailable", "message": message,
+    } in result["warnings"]
+    assert "super-secret" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "exc_type", [GarminConnectAuthenticationError, GarminConnectConnectionError]
+)
+def test_daily_stats_authentication_and_connection_failures_are_isolated(
+    exc_type: type[Exception], providers: dict[str, Mock]
+):
+    providers["daily_stats"].side_effect = exc_type("privacy token secret")
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "partial_success"
+    assert result["warnings"] == [{
+        "provider": "daily_stats", "code": "provider_unavailable",
+        "message": "Daily statistics are unavailable.",
+    }]
+    assert "privacy token secret" not in str(result)
+
+
+@pytest.mark.parametrize(
+    ("provider_key", "payload", "provider_name", "message"),
+    [
+        ("daily_stats", ["raw secret"], "daily_stats", "Daily statistics returned an invalid response."),
+        ("daily_stats", {"restingHeartRate": "raw secret"}, "daily_stats", "Daily statistics returned an invalid response."),
+        ("sleep", {"unexpected": "raw secret"}, "sleep", "Sleep returned an invalid response."),
+        ("hrv", {"unexpected": "raw secret"}, "hrv", "HRV returned an invalid response."),
+        ("readiness", {"unexpected": "raw secret"}, "training_readiness", "Training readiness returned an invalid response."),
+        ("training_status", ["raw secret"], "training_status", "Training status returned an invalid response."),
+        ("training_status", {"mostRecentVO2Max": ["raw secret"]}, "training_status", "Training status returned an invalid response."),
+    ],
+)
+def test_malformed_optional_responses_are_sanitized_and_isolated(
+    provider_key: str,
+    payload: object,
+    provider_name: str,
+    message: str,
+    providers: dict[str, Mock],
+):
+    providers[provider_key].return_value = payload
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "partial_success"
+    assert {
+        "provider": provider_name, "code": "invalid_provider_response", "message": message,
+    } in result["warnings"]
+    assert "raw secret" not in str(result)
+
+
+def test_legitimate_optional_absence_keeps_success_without_warnings(providers: dict[str, Mock]):
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "success"
+    assert result["warnings"] == []
