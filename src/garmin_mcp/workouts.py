@@ -4,6 +4,7 @@ Workout-related functions for Garmin Connect MCP Server
 import json
 import re
 import datetime
+from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union
 
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
@@ -333,6 +334,15 @@ def _validate_target_type_steps(workout_data: dict) -> None:
             _validate_target_type_step(step, path)
 
 
+def prepare_workout_for_upload(workout_data: dict) -> dict:
+    """Return a normalized, validated upload copy without changing the input."""
+    prepared_workout = deepcopy(workout_data)
+    _normalize_workout_steps(prepared_workout)
+    _validate_end_condition_steps(prepared_workout)
+    _validate_target_type_steps(prepared_workout)
+    return prepared_workout
+
+
 def _curate_workout_summary(workout: dict) -> dict:
     """Extract essential workout metadata for list views"""
     sport_type = workout.get('sportType', {})
@@ -592,13 +602,16 @@ def _curate_scheduled_workout(scheduled: dict) -> dict:
     return {k: v for k, v in summary.items() if v is not None}
 
 
-def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
+def _is_already_scheduled(
+    workout_id: int, calendar_date: str, client: Any = None
+) -> bool:
     """Return True if workout_id is already scheduled on calendar_date.
 
     Used to make schedule_workout / schedule_workouts idempotent. The Garmin
     schedule endpoint is not idempotent: a second POST creates a second
     calendar entry on the same day. Querying first avoids the duplicate.
     """
+    active_client = client if client is not None else garmin_client
     try:
         _validate_date(calendar_date, "calendar_date")
         query = {
@@ -607,7 +620,7 @@ def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
                 f'startDate:"{calendar_date}", endDate:"{calendar_date}")}}'
             )
         }
-        result = garmin_client.query_garmin_graphql(query) or {}
+        result = active_client.query_garmin_graphql(query) or {}
         existing = (
             result.get("data", {}).get("workoutScheduleSummariesScalar", []) or []
         )
@@ -622,6 +635,48 @@ def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
         # path so we don't block a legitimate scheduling attempt.
         return False
     return False
+
+
+def schedule_workout_for_date(
+    workout_id: int, calendar_date: str, client: Any = None
+) -> dict:
+    """Schedule a workout once with an optional explicitly bound client."""
+    _validate_date(calendar_date, "calendar_date")
+    active_client = client if client is not None else garmin_client
+
+    if _is_already_scheduled(workout_id, calendar_date, client=active_client):
+        return {
+            "status": "success",
+            "workout_id": workout_id,
+            "scheduled_date": calendar_date,
+            "idempotent": True,
+            "message": (
+                f"Workout {workout_id} already scheduled for "
+                f"{calendar_date} — no action taken"
+            ),
+        }
+
+    response = active_client.client.post(
+        "connectapi",
+        f"workout-service/schedule/{workout_id}",
+        json={"date": calendar_date},
+    )
+
+    if response.status_code == 200:
+        return {
+            "status": "success",
+            "workout_id": workout_id,
+            "scheduled_date": calendar_date,
+            "message": f"Successfully scheduled workout {workout_id} for {calendar_date}",
+        }
+
+    return {
+        "status": "failed",
+        "workout_id": workout_id,
+        "scheduled_date": calendar_date,
+        "http_status": response.status_code,
+        "message": f"Failed to schedule workout: HTTP {response.status_code}",
+    }
 
 
 def _get_garmin_coach_workouts(calendar_date: str) -> str:
@@ -839,7 +894,7 @@ def register_tools(app):
         targetValueOne/targetValueTwo for custom heart-rate ranges.
 
         IMPORTANT: Sport type IDs for workouts (different from activity API!):
-        - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio, 11 = walking
+        - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio, 12 = walking
 
         IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
         Garmin treats conditionTypeId as authoritative, so mismatches such as
@@ -859,12 +914,15 @@ def register_tools(app):
         Access these resources using your MCP client's resource reading capability, modify the template
         as needed, and pass the resulting JSON as the workout_data parameter.
 
-        **Strength training workouts** require these additional fields on each exercise step:
-        - "category": exercise category (e.g. "BENCH_PRESS", "PULL_UP", "CURL", "SHOULDER_PRESS",
-          "ROW", "SQUAT", "DEADLIFT", "TRICEPS_EXTENSION", "PLANK", "LUNGE", "CARDIO")
-        - "exerciseName": specific exercise (e.g. "BARBELL_BENCH_PRESS", "PULL_UP",
-          "DUMBBELL_BICEPS_CURL", "DUMBBELL_SHOULDER_PRESS", "BENT_OVER_ROW_WITH_DUMBELL",
+        **Strength training workouts**: each named exercise step uses these fields:
+        - "exerciseName": required to identify the specific exercise (e.g.
+          "BARBELL_BENCH_PRESS", "PULL_UP", "DUMBBELL_BICEPS_CURL",
+          "DUMBBELL_SHOULDER_PRESS", "BENT_OVER_ROW_WITH_DUMBELL",
           "BODY_WEIGHT_DIP", "BARBELL_SQUAT", "BARBELL_DEADLIFT")
+        - "category": optional exercise category, passed through when supplied (e.g.
+          "BENCH_PRESS", "PULL_UP", "CURL", "SHOULDER_PRESS", "ROW", "SQUAT",
+          "DEADLIFT", "TRICEPS_EXTENSION", "PLANK", "LUNGE", "CARDIO"). Garmin
+          accepts a missing category; supplied values must match Garmin's catalog.
         - "weightValue" (optional): weight as number (e.g. 24.0)
         - "weightUnit" (optional): {"unitId": 8, "unitKey": "kilogram", "factor": 1000.0}
         Use endCondition reps (conditionTypeId: 10) for exercises, rest (stepTypeId: 5) between sets.
@@ -1175,38 +1233,11 @@ def register_tools(app):
             }, indent=2)
 
         try:
-            if _is_already_scheduled(workout_id, calendar_date):
-                return json.dumps({
-                    "status": "success",
-                    "workout_id": workout_id,
-                    "scheduled_date": calendar_date,
-                    "idempotent": True,
-                    "message": (
-                        f"Workout {workout_id} already scheduled for "
-                        f"{calendar_date} — no action taken"
-                    )
-                }, indent=2)
-
-            url = f"workout-service/schedule/{workout_id}"
-            response = garmin_client.client.post("connectapi", url, json={"date": calendar_date})
-
-            if response.status_code == 200:
-                return json.dumps({
-                    "status": "success",
-                    "workout_id": workout_id,
-                    "scheduled_date": calendar_date,
-                    "message": f"Successfully scheduled workout {workout_id} for {calendar_date}"
-                }, indent=2)
-            else:
-                return json.dumps({
-                    "status": "failed",
-                    "workout_id": workout_id,
-                    "scheduled_date": calendar_date,
-                    "http_status": response.status_code,
-                    "message": f"Failed to schedule workout: HTTP {response.status_code}"
-                }, indent=2)
+            result = schedule_workout_for_date(workout_id, calendar_date)
         except Exception as e:
             return f"Error scheduling workout: {str(e)}"
+
+        return json.dumps(result, indent=2)
 
     @app.tool()
     async def schedule_workouts(schedules: list[dict]) -> str:

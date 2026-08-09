@@ -22,6 +22,7 @@ from garmin_mcp import weight_management
 from garmin_mcp import challenges
 from garmin_mcp import training
 from garmin_mcp import workouts
+from garmin_mcp import ai_workouts
 from garmin_mcp import workout_templates
 from garmin_mcp import data_management
 from garmin_mcp import womens_health
@@ -106,8 +107,65 @@ def _parse_tool_set(value):
     return {name.strip().lower() for name in value.split(",") if name.strip()}
 
 
-enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
-disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+TOOL_PROFILES = {
+    "ai-coach": {
+        "create_workout",
+        "get_activities",
+        "get_activities_by_date",
+        "get_activity",
+        "get_workouts",
+        "get_workout_by_id",
+        "get_scheduled_workouts",
+        "schedule_workout",
+        "unschedule_workout",
+        "delete_workout",
+    },
+}
+
+
+def _resolve_tool_filters(profile_value, enabled_value, disabled_value):
+    """Resolve profile, allowlist, and denylist settings into tool filters."""
+    explicit_enabled = _parse_tool_set(enabled_value)
+    if explicit_enabled:
+        return explicit_enabled, set()
+
+    disabled = _parse_tool_set(disabled_value)
+    profile_name = profile_value.strip().lower() if profile_value else ""
+    if profile_name:
+        if profile_name not in TOOL_PROFILES:
+            valid_profiles = ", ".join(sorted(TOOL_PROFILES))
+            raise ValueError(
+                f"Unknown GARMIN_TOOL_PROFILE {profile_value!r}; "
+                f"valid profile(s): {valid_profiles}"
+            )
+        return TOOL_PROFILES[profile_name] - disabled, set()
+
+    return set(), disabled
+
+
+def _resolve_tool_filters_from_environment():
+    """Read tool-filter settings at server startup, not package import time."""
+    profile_value = os.getenv("GARMIN_TOOL_PROFILE")
+    enabled_value = os.getenv("GARMIN_ENABLED_TOOLS")
+    disabled_value = os.getenv("GARMIN_DISABLED_TOOLS")
+    enabled_tools, disabled_tools = _resolve_tool_filters(
+        profile_value,
+        enabled_value,
+        disabled_value,
+    )
+    parsed_enabled = _parse_tool_set(enabled_value)
+    profile_name = profile_value.strip().lower() if profile_value else ""
+    allowlist_active = bool(parsed_enabled) or profile_name in TOOL_PROFILES
+
+    # Include all profile members in typo detection, even if a denylist removes
+    # them. This keeps a future profile/tool-name mismatch visible at startup.
+    configured_names = None
+    if profile_name in TOOL_PROFILES and not parsed_enabled:
+        configured_names = TOOL_PROFILES[profile_name] | _parse_tool_set(
+            disabled_value
+        )
+
+    return enabled_tools, disabled_tools, allowlist_active, configured_names
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
@@ -181,15 +239,27 @@ class _ToolFilter:
     attribute access (``run``, ``resource``, ...) passes through to the app.
     """
 
-    def __init__(self, app, enabled, disabled):
+    def __init__(
+        self,
+        app,
+        enabled,
+        disabled,
+        allowlist_active=None,
+        configured_names=None,
+    ):
         self._app = app
         self._enabled = enabled
         self._disabled = disabled
+        self._allowlist_active = (
+            bool(enabled) if allowlist_active is None else allowlist_active
+        )
+        self._configured_names = configured_names
         self._seen = set()  # tool names encountered, for typo detection
+        self._registered = set()  # tool names that reached the wrapped app
 
     def _allowed(self, name):
         name = name.lower()
-        if self._enabled:
+        if self._allowlist_active:
             return name in self._enabled
         return name not in self._disabled
 
@@ -205,15 +275,25 @@ class _ToolFilter:
             name = explicit or getattr(fn, "__name__", "")
             self._seen.add(name.lower())
             if self._allowed(name):
-                return decorator(fn)
+                registered = decorator(fn)
+                self._registered.add(name.lower())
+                return registered
             return fn  # skip registration; tool never reaches the LLM
 
         return wrapper
 
     def unknown_filter_names(self):
         """Configured names that never matched a real tool (likely typos)."""
-        configured = self._enabled or self._disabled
+        configured = (
+            self._configured_names
+            if self._configured_names is not None
+            else self._enabled or self._disabled
+        )
         return sorted(configured - self._seen)
+
+    def registered_tool_names(self):
+        """Return names successfully registered with the wrapped application."""
+        return set(self._registered)
 
     def __getattr__(self, item):
         return getattr(self._app, item)
@@ -387,6 +467,17 @@ def main():
         print(str(exc), file=sys.stderr)
         sys.exit(1)
 
+    try:
+        (
+            enabled_tools,
+            disabled_tools,
+            tool_filter_active,
+            configured_filter_names,
+        ) = _resolve_tool_filters_from_environment()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+
     # Initialize Garmin client
     garmin_client = init_api(email, password)
     if not garmin_client:
@@ -408,6 +499,7 @@ def main():
     challenges.configure(garmin_client)
     training.configure(garmin_client)
     workouts.configure(garmin_client)
+    ai_workouts.configure(garmin_client)
     data_management.configure(garmin_client)
     womens_health.configure(garmin_client)
     nutrition.configure(garmin_client)
@@ -418,8 +510,14 @@ def main():
     # Create the MCP app, wrapped so the env-var filter can drop tools.
     # host/port only matter for the HTTP transports; stdio ignores them.
     fastmcp = FastMCP("Garmin Connect v1.0", host=http_host, port=http_port)
-    app = _ToolFilter(fastmcp, enabled_tools, disabled_tools)
-    if enabled_tools:
+    app = _ToolFilter(
+        fastmcp,
+        enabled_tools,
+        disabled_tools,
+        allowlist_active=tool_filter_active,
+        configured_names=configured_filter_names,
+    )
+    if tool_filter_active:
         print(f"Tool filter: allowlist of {len(enabled_tools)} tool(s).", file=sys.stderr)
     elif disabled_tools:
         print(f"Tool filter: denylist of {len(disabled_tools)} tool(s).", file=sys.stderr)
@@ -434,6 +532,7 @@ def main():
     app = challenges.register_tools(app)
     app = training.register_tools(app)
     app = workouts.register_tools(app)
+    app = ai_workouts.register_tools(app)
     app = data_management.register_tools(app)
     app = womens_health.register_tools(app)
     app = nutrition.register_tools(app)
@@ -449,6 +548,11 @@ def main():
     if unknown:
         print(
             f"Tool filter: warning — name(s) not found and ignored: {', '.join(unknown)}",
+            file=sys.stderr,
+        )
+    if tool_filter_active and not app.registered_tool_names():
+        print(
+            "Tool filter: warning — active allowlist permits no tools.",
             file=sys.stderr,
         )
 

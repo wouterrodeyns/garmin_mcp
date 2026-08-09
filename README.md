@@ -101,6 +101,21 @@ Example — expose only sleep, stress, and recent activities:
 
 ## High-level workout tools
 
+### AI-friendly workout creation
+
+For a single, readable workout request, call `create_workout` with the friendly
+schema and optionally `schedule_date`. It supports running, cycling, walking,
+and strength workouts with repeats, duration/distance/reps/lap-button endings,
+and sport-appropriate pace, heart-rate, or power targets. See the complete
+[AI-friendly workout guide](docs/ai-workouts.md) for the schema, response
+statuses, and API assumptions.
+
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose the exact 10-tool AI-coach
+surface. `GARMIN_ENABLED_TOOLS` still takes precedence, and
+`GARMIN_DISABLED_TOOLS` subtracts from the selected profile. With no profile or
+allowlist, the default remains full upstream tool registration (unchanged):
+when `GARMIN_TOOL_PROFILE` is unset, all tools remain registered by default.
+
 These builder tools let an LLM create and schedule workouts without writing raw Garmin JSON.
 
 ### `create_walk_run_workout`
@@ -278,11 +293,12 @@ per second:
 }
 ```
 
-That example represents `8:00–8:30 min/km`. The lower numeric bound is listed
-first for consistency with the heart-rate example; Garmin normalizes either
-bound order. Garmin silently discards values nested inside `targetType`, leaving
-a pace target with no active range. The upload tools repair that unambiguous
-nesting mistake, but reject the request if nested and step-level values conflict.
+That example represents `8:00–8:30 min/km`. The live-verified safe order for
+Garmin pace bounds is ascending metres per second: slower speed first
+(`targetValueOne`) and faster speed second (`targetValueTwo`). Garmin silently
+discards values nested inside `targetType`, leaving a pace target with no active
+range. The upload tools repair that unambiguous nesting mistake, but reject the
+request if nested and step-level values conflict.
 
 For a named Garmin HR zone, use the same target type with `zoneNumber` instead:
 

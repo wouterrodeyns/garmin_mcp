@@ -3,6 +3,8 @@ Integration tests for workouts module MCP tools
 
 Tests workout tools using FastMCP integration with mocked Garmin API responses.
 """
+from copy import deepcopy
+
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
@@ -11,6 +13,8 @@ from garmin_mcp import workouts
 from garmin_mcp.workouts import (
     _fix_repeat_group_step,
     _normalize_workout_steps,
+    prepare_workout_for_upload,
+    schedule_workout_for_date,
 )
 from tests.fixtures.garmin_responses import (
     MOCK_WORKOUTS,
@@ -1968,6 +1972,65 @@ async def test_upload_workouts_rejects_target_type_mismatch(app_with_workouts, m
     mock_garmin_client.upload_workout.assert_called_once_with(good_workout)
 
 
+# schedule_workout_for_date helper tests
+def test_schedule_workout_for_date_skips_post_when_already_scheduled(
+    app_with_workouts, mock_garmin_client
+):
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {
+            "workoutScheduleSummariesScalar": [{
+                "workoutId": 123456,
+                "scheduleDate": "2024-01-15",
+            }],
+        },
+    }
+
+    result = schedule_workout_for_date(123456, "2024-01-15")
+
+    assert result == {
+        "status": "success",
+        "workout_id": 123456,
+        "scheduled_date": "2024-01-15",
+        "idempotent": True,
+        "message": "Workout 123456 already scheduled for 2024-01-15 — no action taken",
+    }
+    mock_garmin_client.client.post.assert_not_called()
+
+
+def test_schedule_workout_for_date_reports_http_failure(
+    app_with_workouts, mock_garmin_client
+):
+    from unittest.mock import MagicMock
+
+    response = MagicMock()
+    response.status_code = 500
+    mock_garmin_client.client.post.return_value = response
+
+    result = schedule_workout_for_date(123456, "2024-01-15")
+
+    assert result == {
+        "status": "failed",
+        "workout_id": 123456,
+        "scheduled_date": "2024-01-15",
+        "http_status": 500,
+        "message": "Failed to schedule workout: HTTP 500",
+    }
+
+
+@pytest.mark.asyncio
+async def test_schedule_workout_preserves_post_value_error(
+    app_with_workouts, mock_garmin_client
+):
+    mock_garmin_client.client.post.side_effect = ValueError("Malformed API response")
+
+    result = await app_with_workouts.call_tool(
+        "schedule_workout",
+        {"workout_id": 123456, "calendar_date": "2024-01-15"},
+    )
+
+    assert result[0][0].text == "Error scheduling workout: Malformed API response"
+
+
 # schedule_workouts tests
 @pytest.mark.asyncio
 async def test_schedule_workouts_single(app_with_workouts, mock_garmin_client):
@@ -2403,6 +2466,37 @@ async def test_schedule_workouts_inline_upload_no_id_returned(app_with_workouts,
 # ---------------------------------------------------------------------------
 # Target/repeat normalization helper tests
 # ---------------------------------------------------------------------------
+
+
+def test_prepare_workout_for_upload_normalizes_only_returned_copy():
+    workout_data = _running_workout_with_steps([
+        _distance_pace_step_with_nested_bounds(),
+    ])
+    original = deepcopy(workout_data)
+
+    prepared = prepare_workout_for_upload(workout_data)
+
+    prepared_step = prepared["workoutSegments"][0]["workoutSteps"][0]
+    assert prepared_step["targetValueOne"] == 2.0833333
+    assert prepared_step["targetValueTwo"] == 1.9607843
+    assert "targetValueOne" not in prepared_step["targetType"]
+    assert "targetValueTwo" not in prepared_step["targetType"]
+    assert workout_data == original
+
+
+def test_prepare_workout_for_upload_keeps_input_unchanged_on_validation_error():
+    workout_data = _running_workout_with_steps([
+        _timed_interval_step({
+            "workoutTargetTypeId": 6,
+            "workoutTargetTypeKey": "heart.rate",
+        }),
+    ])
+    original = deepcopy(workout_data)
+
+    with pytest.raises(ValueError, match="targetType mismatch"):
+        prepare_workout_for_upload(workout_data)
+
+    assert workout_data == original
 
 
 def test_nested_target_conflict_does_not_partially_mutate_step():
