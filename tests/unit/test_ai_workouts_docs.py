@@ -6,6 +6,7 @@ ROOT = Path(__file__).parents[2]
 README = (ROOT / "README.md").read_text()
 DOCS_PATH = ROOT / "docs/ai-workouts.md"
 DOCS = DOCS_PATH.read_text() if DOCS_PATH.exists() else ""
+WORKOUTS_SOURCE = (ROOT / "src/garmin_mcp/workouts.py").read_text()
 
 
 def _normalize_heading(value: str) -> str:
@@ -125,6 +126,32 @@ def test_ai_workouts_docs_protects_complete_friendly_vocabularies_and_constraint
     assert "pace" in create and re.search(r"running\s+only", target_lower)
     assert "heart-rate" in create and "any sport" in target_lower
     assert "power" in create and re.search(r"cycling\s+only", target_lower)
+
+
+def test_ai_workouts_docs_states_units_limits_and_optional_schedule_date():
+    create = SECTIONS["create one workout"]
+    create_lower = create.lower()
+    for expected in (
+        "units are field-specific",
+        "m` means minutes",
+        "metres only for `distance`",
+        "one repeat level",
+        "50 repeat iterations",
+        "24h",
+        "500km",
+        "30 bpm",
+        "omit `schedule_date` or pass `null`",
+        "empty string is invalid",
+    ):
+        assert expected.lower() in create_lower
+
+
+def test_raw_upload_strength_docs_match_optional_category_contract():
+    source_lower = WORKOUTS_SOURCE.lower()
+    assert "each named exercise step" in source_lower
+    assert '"exercisename"' in source_lower
+    assert '"category": optional' in source_lower
+    assert "passed through" in source_lower
 
 
 def test_ai_workouts_docs_names_package_seam_and_unchanged_compatibility():

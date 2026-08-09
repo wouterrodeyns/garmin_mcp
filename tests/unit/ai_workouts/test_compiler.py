@@ -176,6 +176,18 @@ def test_compile_strength_preserves_reps_exercise_and_category():
     assert step["category"] == "SQUAT"
 
 
+def test_compile_strength_exercise_without_category_omits_category():
+    result = compile_friendly(
+        "Strength Without Category",
+        "strength",
+        [{"work": {"reps": 10, "exercise": "BARBELL_SQUAT"}}],
+    )
+
+    step = result["workoutSegments"][0]["workoutSteps"][0]
+    assert step["exerciseName"] == "BARBELL_SQUAT"
+    assert "category" not in step
+
+
 def test_compile_lap_button_has_no_end_condition_value():
     result = compile_friendly("Open End", "running", [{"run": {"lap_button": True}}])
     step = result["workoutSegments"][0]["workoutSteps"][0]

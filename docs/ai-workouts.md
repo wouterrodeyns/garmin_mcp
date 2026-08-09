@@ -44,6 +44,12 @@ Every action has exactly one end condition:
 - `reps`: a positive integer, useful for strength steps.
 - `lap_button`: `true` to let the athlete press the lap button to finish.
 
+Units are field-specific: `m` means minutes only for `duration` (for example,
+`"15m"`), and `m` means metres only for `distance` (for example, `"800m"`).
+Do not use distance notation as a duration. V1 safety limits are one repeat
+level, at most 50 repeat iterations, duration of at most 24h, distance of at
+most 500km, and a custom heart-rate range whose low value is at least 30 bpm.
+
 Targets are optional and deliberately constrained by sport:
 
 There is at most one target field per action; do not combine pace,
@@ -65,6 +71,9 @@ Strength `exercise` and `category` fields are pass-through metadata. Garmin
 only retains an `exercise` value when it matches one of Garmin's exercise
 keys; this seam does not translate free-form names. A supplied `category` is
 also sent as-is and must be a category Garmin accepts.
+
+To create a workout without scheduling, omit `schedule_date` or pass `null`.
+An empty string is invalid; scheduled dates must use canonical `YYYY-MM-DD`.
 
 ## What the call does
 

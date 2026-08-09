@@ -914,12 +914,15 @@ def register_tools(app):
         Access these resources using your MCP client's resource reading capability, modify the template
         as needed, and pass the resulting JSON as the workout_data parameter.
 
-        **Strength training workouts** require these additional fields on each exercise step:
-        - "category": exercise category (e.g. "BENCH_PRESS", "PULL_UP", "CURL", "SHOULDER_PRESS",
-          "ROW", "SQUAT", "DEADLIFT", "TRICEPS_EXTENSION", "PLANK", "LUNGE", "CARDIO")
-        - "exerciseName": specific exercise (e.g. "BARBELL_BENCH_PRESS", "PULL_UP",
-          "DUMBBELL_BICEPS_CURL", "DUMBBELL_SHOULDER_PRESS", "BENT_OVER_ROW_WITH_DUMBELL",
+        **Strength training workouts**: each named exercise step uses these fields:
+        - "exerciseName": required to identify the specific exercise (e.g.
+          "BARBELL_BENCH_PRESS", "PULL_UP", "DUMBBELL_BICEPS_CURL",
+          "DUMBBELL_SHOULDER_PRESS", "BENT_OVER_ROW_WITH_DUMBELL",
           "BODY_WEIGHT_DIP", "BARBELL_SQUAT", "BARBELL_DEADLIFT")
+        - "category": optional exercise category, passed through when supplied (e.g.
+          "BENCH_PRESS", "PULL_UP", "CURL", "SHOULDER_PRESS", "ROW", "SQUAT",
+          "DEADLIFT", "TRICEPS_EXTENSION", "PLANK", "LUNGE", "CARDIO"). Garmin
+          accepts a missing category; supplied values must match Garmin's catalog.
         - "weightValue" (optional): weight as number (e.g. 24.0)
         - "weightUnit" (optional): {"unitId": 8, "unitKey": "kilogram", "factor": 1000.0}
         Use endCondition reps (conditionTypeId: 10) for exercises, rest (stepTypeId: 5) between sets.
