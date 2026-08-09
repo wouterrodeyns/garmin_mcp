@@ -49,6 +49,26 @@ def test_parse_distance_supports_metres_and_kilometres():
     assert parse_distance("5km") == 5000.0
 
 
+@pytest.mark.parametrize(
+    ("parser", "value", "field"),
+    [
+        (parse_duration, "9" * 400 + "s", "duration"),
+        (parse_distance, "9" * 400 + "m", "distance"),
+        (parse_heart_rate, "1-" + "9" * 400 + "bpm", "heart rate"),
+        (parse_power, "1-" + "9" * 400 + "W", "power"),
+    ],
+)
+def test_parse_numeric_boundaries_reject_non_finite_values(parser, value, field):
+    with pytest.raises(ValueError, match=field):
+        parser(value)
+
+
+def test_parse_pace_rejects_extreme_values_with_value_error():
+    extreme = "9" * 400
+    with pytest.raises(ValueError, match="pace"):
+        parse_pace(f"{extreme}:00-{extreme}:01/km")
+
+
 def test_parse_pace_returns_faster_then_slower_mps():
     assert parse_pace("4:20-4:30/km") == pytest.approx((1000 / 260, 1000 / 270))
 

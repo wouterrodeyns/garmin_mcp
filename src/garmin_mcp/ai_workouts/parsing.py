@@ -8,6 +8,7 @@ changing the validation entry point.
 from __future__ import annotations
 
 from datetime import date
+import math
 import re
 from collections.abc import Callable
 from typing import Any
@@ -28,7 +29,8 @@ def _positive_string_number(value: Any, pattern: re.Pattern[str], field: str) ->
     match = pattern.fullmatch(value)
     if match is None:
         raise ValueError(f"invalid {field}: expected a positive value")
-    if float(match.group(1)) <= 0:
+    number = float(match.group(1))
+    if not math.isfinite(number) or number <= 0:
         raise ValueError(f"invalid {field}: value must be positive")
     return match
 
@@ -38,7 +40,10 @@ def parse_duration(value: Any) -> float:
 
     match = _positive_string_number(value, _DURATION_RE, "duration")
     multiplier = {"s": 1.0, "m": 60.0, "h": 3600.0}[match.group(2)]
-    return float(match.group(1)) * multiplier
+    seconds = float(match.group(1)) * multiplier
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("invalid duration: value must be finite and positive")
+    return seconds
 
 
 def parse_distance(value: Any) -> float:
@@ -46,7 +51,10 @@ def parse_distance(value: Any) -> float:
 
     match = _positive_string_number(value, _DISTANCE_RE, "distance")
     multiplier = 1000.0 if match.group(2) == "km" else 1.0
-    return float(match.group(1)) * multiplier
+    metres = float(match.group(1)) * multiplier
+    if not math.isfinite(metres) or metres <= 0:
+        raise ValueError("invalid distance: value must be finite and positive")
+    return metres
 
 
 def parse_pace(value: Any) -> tuple[float, float]:
@@ -67,7 +75,19 @@ def parse_pace(value: Any) -> tuple[float, float]:
         raise ValueError("invalid pace: pace must be positive")
     if first_total > second_total:
         raise ValueError("invalid pace: first pace must be faster or equal to second pace")
-    return (1000.0 / first_total, 1000.0 / second_total)
+    try:
+        first_speed = 1000.0 / first_total
+        second_speed = 1000.0 / second_total
+    except OverflowError as exc:
+        raise ValueError("invalid pace: value is outside the finite range") from exc
+    if (
+        not math.isfinite(first_speed)
+        or not math.isfinite(second_speed)
+        or first_speed <= 0
+        or second_speed <= 0
+    ):
+        raise ValueError("invalid pace: speed must be finite and positive")
+    return (first_speed, second_speed)
 
 
 def _parse_range(value: Any, pattern: re.Pattern[str], field: str, unit: str) -> tuple[float, float]:
@@ -77,8 +97,8 @@ def _parse_range(value: Any, pattern: re.Pattern[str], field: str, unit: str) ->
     if match is None:
         raise ValueError(f"invalid {field}: expected low-high{unit}")
     low, high = float(match.group(1)), float(match.group(2))
-    if low <= 0 or high <= 0:
-        raise ValueError(f"invalid {field}: values must be positive")
+    if not math.isfinite(low) or not math.isfinite(high) or low <= 0 or high <= 0:
+        raise ValueError(f"invalid {field}: values must be finite and positive")
     if low >= high:
         raise ValueError(f"invalid {field}: low must be less than high")
     return low, high
