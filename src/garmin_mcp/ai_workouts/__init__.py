@@ -1,5 +1,6 @@
 """Friendly, normalized workout definitions for AI-facing workout tools."""
 
+from .compiler import TARGET_COMPILERS, compile_workout
 from .parsing import (
     END_CONDITION_PARSERS,
     TARGET_PARSERS,
@@ -32,6 +33,8 @@ __all__ = [
     "Target",
     "WorkoutDefinition",
     "WorkoutStep",
+    "TARGET_COMPILERS",
+    "compile_workout",
     "parse_date",
     "parse_distance",
     "parse_duration",
