@@ -129,6 +129,8 @@ def _validate_action(raw_step: dict[str, Any], action: str, sport: str) -> Actio
     if unknown:
         raise ValueError(f"unknown fields in {action} action: {sorted(unknown)!r}")
     end_condition = _parse_end_condition(config)
+    if end_condition.kind == "reps" and sport != "strength":
+        raise ValueError("reps end condition is supported only for strength workouts")
     target = _parse_target(config, sport)
     exercise, category = _parse_metadata(config, sport)
     return ActionStep(action, end_condition, target, exercise, category)

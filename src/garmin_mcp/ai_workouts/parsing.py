@@ -21,6 +21,9 @@ _PACE_RE = re.compile(r"\A(\d+):(\d{2})-(\d+):(\d{2})/km\Z")
 _HEART_RATE_RE = re.compile(rf"\A({_POSITIVE_NUMBER})-({_POSITIVE_NUMBER})bpm\Z")
 _POWER_RE = re.compile(rf"\A({_POSITIVE_NUMBER})-({_POSITIVE_NUMBER})W\Z")
 _ZONE_RE = re.compile(r"\AZ([0-9]+)\Z", re.IGNORECASE)
+MAX_DURATION_SECONDS = 24 * 60 * 60
+MAX_DISTANCE_METRES = 500 * 1000
+MIN_CUSTOM_HEART_RATE_BPM = 30.0
 
 
 def _positive_string_number(value: Any, pattern: re.Pattern[str], field: str) -> re.Match[str]:
@@ -43,6 +46,8 @@ def parse_duration(value: Any) -> float:
     seconds = float(match.group(1)) * multiplier
     if not math.isfinite(seconds) or seconds <= 0:
         raise ValueError("invalid duration: value must be finite and positive")
+    if seconds > MAX_DURATION_SECONDS:
+        raise ValueError("invalid duration: value must not exceed 24h")
     return seconds
 
 
@@ -54,6 +59,8 @@ def parse_distance(value: Any) -> float:
     metres = float(match.group(1)) * multiplier
     if not math.isfinite(metres) or metres <= 0:
         raise ValueError("invalid distance: value must be finite and positive")
+    if metres > MAX_DISTANCE_METRES:
+        raise ValueError("invalid distance: value must not exceed 500km")
     return metres
 
 
@@ -107,7 +114,10 @@ def _parse_range(value: Any, pattern: re.Pattern[str], field: str, unit: str) ->
 def parse_heart_rate(value: Any) -> tuple[float, float]:
     """Parse a positive, increasing beats-per-minute range."""
 
-    return _parse_range(value, _HEART_RATE_RE, "heart rate", "bpm")
+    low, high = _parse_range(value, _HEART_RATE_RE, "heart rate", "bpm")
+    if low < MIN_CUSTOM_HEART_RATE_BPM:
+        raise ValueError("invalid heart rate: low must be at least 30 bpm")
+    return low, high
 
 
 def parse_power(value: Any) -> tuple[float, float]:

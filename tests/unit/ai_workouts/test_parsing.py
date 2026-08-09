@@ -42,11 +42,25 @@ def test_parse_duration_supports_seconds_minutes_and_hours():
     assert parse_duration("90s") == 90.0
     assert parse_duration("15m") == 900.0
     assert parse_duration("1.5h") == 5400.0
+    assert parse_duration("24h") == 86400.0
 
 
 def test_parse_distance_supports_metres_and_kilometres():
     assert parse_distance("800m") == 800.0
     assert parse_distance("5km") == 5000.0
+    assert parse_distance("500km") == 500000.0
+
+
+@pytest.mark.parametrize(
+    ("parser", "value", "field"),
+    [
+        (parse_duration, "24.1h", "duration"),
+        (parse_distance, "500.1km", "distance"),
+    ],
+)
+def test_parse_end_conditions_reject_values_above_v1_safety_maxima(parser, value, field):
+    with pytest.raises(ValueError, match=field):
+        parser(value)
 
 
 @pytest.mark.parametrize(
@@ -71,6 +85,10 @@ def test_parse_pace_rejects_extreme_values_with_value_error():
 
 def test_parse_pace_returns_faster_then_slower_mps():
     assert parse_pace("4:20-4:30/km") == pytest.approx((1000 / 260, 1000 / 270))
+
+
+def test_parse_pace_allows_equal_bounds():
+    assert parse_pace("4:20-4:20/km") == pytest.approx((1000 / 260, 1000 / 260))
 
 
 def test_parse_ranges_zones_and_date():
@@ -103,6 +121,7 @@ def test_parse_pace_rejects_malformed_or_inverted_values(value):
     (parse_heart_rate, "0-165bpm", "heart rate"),
     (parse_heart_rate, "150-150bpm", "heart rate"),
     (parse_heart_rate, "165-150bpm", "heart rate"),
+    (parse_heart_rate, "2-5bpm", "heart rate"),
     (parse_power, "0-250W", "power"),
     (parse_power, "220-220W", "power"),
     (parse_power, "250-220W", "power"),
@@ -197,7 +216,9 @@ def test_validate_rejects_incompatible_targets_and_metadata():
     with pytest.raises(ValueError, match="pace"):
         validate_workout("Bad", "walking", [{"work": {"duration": "5m", "pace": "8:00-8:30/km"}}])
     with pytest.raises(ValueError, match="exercise"):
-        validate_workout("Bad", "running", [{"run": {"reps": 10, "exercise": "SQUAT"}}])
+        validate_workout("Bad", "running", [{"run": {"duration": "1m", "exercise": "SQUAT"}}])
+    with pytest.raises(ValueError, match="reps"):
+        validate_workout("Bad", "running", [{"run": {"reps": 10}}])
 
 
 def test_validate_strength_keeps_conservative_metadata():

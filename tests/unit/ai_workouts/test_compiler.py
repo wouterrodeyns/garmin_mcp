@@ -13,6 +13,7 @@ from garmin_mcp.ai_workouts import (
     compile_workout,
     validate_workout,
 )
+from garmin_mcp.workouts import prepare_workout_for_upload
 
 
 THRESHOLD_STEPS = [
@@ -122,6 +123,21 @@ def test_compile_heart_rate_named_zone_and_custom_range_never_mix_fields():
     assert custom_target["targetType"] == {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"}
     assert custom_target["targetValueOne"] == 105.0 and custom_target["targetValueTwo"] == 143.0
     assert "zoneNumber" not in custom_target
+
+
+def test_prepare_preserves_plausible_custom_heart_rate_range():
+    compiled = compile_friendly(
+        "Custom HR",
+        "running",
+        [{"run": {"duration": "5m", "heart_rate": "30-143bpm"}}],
+    )
+
+    prepared = prepare_workout_for_upload(compiled)
+    target = prepared["workoutSegments"][0]["workoutSteps"][0]
+
+    assert target["targetValueOne"] == 30.0
+    assert target["targetValueTwo"] == 143.0
+    assert "zoneNumber" not in target
 
 
 def test_compile_cycling_power_zone_and_watts_use_distinct_canonical_ids():

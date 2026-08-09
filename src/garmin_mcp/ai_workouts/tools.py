@@ -32,10 +32,18 @@ def register_tools(app: Any) -> Any:
         Supported sports are running, cycling, walking, and strength. Use
         actions warmup, cooldown, work, run, interval, recovery, or rest;
         repeat groups use ``repeat`` and nested ``steps``. Each action has one
-        end condition: duration, distance, reps, or lap_button. Targets can be
-        pace (running), heart_rate_zone, heart_rate, power_zone (cycling), or
-        power (cycling). A successful upload that cannot be scheduled returns
-        ``partial_success`` with the created workout ID and scheduling error.
+        end condition: duration, distance, reps (strength only), or
+        lap_button.
+
+        Use these exact friendly units: duration ``"15m"`` (minutes),
+        ``"90s"``, or ``"1.5h"``; distance ``"800m"`` (metres) or
+        ``"5km"``; running pace ``"4:20-4:30/km"``; custom heart rate
+        ``"150-165bpm"``; cycling power ``"220-250W"``; and zones such as
+        ``"Z3"``. Targets can be pace (running), heart_rate_zone or
+        heart_rate, power_zone (cycling), or power (cycling). Omit
+        ``schedule_date`` to create without scheduling, or use ``YYYY-MM-DD``.
+        A successful upload that cannot be scheduled returns ``partial_success``
+        with the created workout ID and scheduling error.
         """
         result = create_workout_service(
             garmin_client, name, sport, steps, schedule_date
