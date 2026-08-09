@@ -4,6 +4,7 @@ Workout-related functions for Garmin Connect MCP Server
 import json
 import re
 import datetime
+from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union
 
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
@@ -333,6 +334,15 @@ def _validate_target_type_steps(workout_data: dict) -> None:
             _validate_target_type_step(step, path)
 
 
+def prepare_workout_for_upload(workout_data: dict) -> dict:
+    """Return a normalized, validated upload copy without changing the input."""
+    prepared_workout = deepcopy(workout_data)
+    _normalize_workout_steps(prepared_workout)
+    _validate_end_condition_steps(prepared_workout)
+    _validate_target_type_steps(prepared_workout)
+    return prepared_workout
+
+
 def _curate_workout_summary(workout: dict) -> dict:
     """Extract essential workout metadata for list views"""
     sport_type = workout.get('sportType', {})
@@ -622,6 +632,45 @@ def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
         # path so we don't block a legitimate scheduling attempt.
         return False
     return False
+
+
+def schedule_workout_for_date(workout_id: int, calendar_date: str) -> dict:
+    """Schedule a workout once, returning the existing scheduling result shape."""
+    _validate_date(calendar_date, "calendar_date")
+
+    if _is_already_scheduled(workout_id, calendar_date):
+        return {
+            "status": "success",
+            "workout_id": workout_id,
+            "scheduled_date": calendar_date,
+            "idempotent": True,
+            "message": (
+                f"Workout {workout_id} already scheduled for "
+                f"{calendar_date} — no action taken"
+            ),
+        }
+
+    response = garmin_client.client.post(
+        "connectapi",
+        f"workout-service/schedule/{workout_id}",
+        json={"date": calendar_date},
+    )
+
+    if response.status_code == 200:
+        return {
+            "status": "success",
+            "workout_id": workout_id,
+            "scheduled_date": calendar_date,
+            "message": f"Successfully scheduled workout {workout_id} for {calendar_date}",
+        }
+
+    return {
+        "status": "failed",
+        "workout_id": workout_id,
+        "scheduled_date": calendar_date,
+        "http_status": response.status_code,
+        "message": f"Failed to schedule workout: HTTP {response.status_code}",
+    }
 
 
 def _get_garmin_coach_workouts(calendar_date: str) -> str:
@@ -1175,38 +1224,11 @@ def register_tools(app):
             }, indent=2)
 
         try:
-            if _is_already_scheduled(workout_id, calendar_date):
-                return json.dumps({
-                    "status": "success",
-                    "workout_id": workout_id,
-                    "scheduled_date": calendar_date,
-                    "idempotent": True,
-                    "message": (
-                        f"Workout {workout_id} already scheduled for "
-                        f"{calendar_date} — no action taken"
-                    )
-                }, indent=2)
-
-            url = f"workout-service/schedule/{workout_id}"
-            response = garmin_client.client.post("connectapi", url, json={"date": calendar_date})
-
-            if response.status_code == 200:
-                return json.dumps({
-                    "status": "success",
-                    "workout_id": workout_id,
-                    "scheduled_date": calendar_date,
-                    "message": f"Successfully scheduled workout {workout_id} for {calendar_date}"
-                }, indent=2)
-            else:
-                return json.dumps({
-                    "status": "failed",
-                    "workout_id": workout_id,
-                    "scheduled_date": calendar_date,
-                    "http_status": response.status_code,
-                    "message": f"Failed to schedule workout: HTTP {response.status_code}"
-                }, indent=2)
+            result = schedule_workout_for_date(workout_id, calendar_date)
         except Exception as e:
             return f"Error scheduling workout: {str(e)}"
+
+        return json.dumps(result, indent=2)
 
     @app.tool()
     async def schedule_workouts(schedules: list[dict]) -> str:
