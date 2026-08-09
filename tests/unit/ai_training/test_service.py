@@ -437,6 +437,46 @@ def test_malformed_nonempty_overnight_payload_never_triggers_fallback(
     assert result["availability"][availability_key] is False  # type: ignore[index]
 
 
+@pytest.mark.parametrize(
+    ("provider_name", "empty_today", "valid_yesterday", "availability_key"),
+    [
+        (
+            "sleep",
+            {"dailySleepDTO": {"sleepTimeSeconds": None, "sleepScores": {}}},
+            {"dailySleepDTO": {"sleepTimeSeconds": 25200}},
+            "sleep",
+        ),
+        (
+            "hrv",
+            {"hrvSummary": {"lastNightAvg": None, "baseline": {}}},
+            {"hrvSummary": {"lastNightAvg": 52}},
+            "hrv",
+        ),
+        (
+            "readiness",
+            {"readinessScore": None},
+            {"readinessScore": 71},
+            "training_readiness",
+        ),
+    ],
+)
+def test_present_but_empty_overnight_metrics_fallback_once(
+    provider_name: str,
+    empty_today: dict[str, object],
+    valid_yesterday: dict[str, object],
+    availability_key: str,
+    providers: dict[str, Mock],
+):
+    providers[provider_name].side_effect = [empty_today, valid_yesterday]
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert [call.args[1] for call in providers[provider_name].call_args_list] == [
+        "2026-02-14", "2026-02-13",
+    ]
+    assert result["availability"][availability_key] is True  # type: ignore[index]
+
+
 def test_hrv_normalizes_summary_baseline_and_actual_fallback_date(providers: dict[str, Mock]):
     providers["hrv"].side_effect = [None, {"hrvSummary": {
         "calendarDate": "2026-02-13", "lastNightAvg": 54, "weeklyAvg": 52,

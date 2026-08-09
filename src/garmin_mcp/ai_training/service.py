@@ -322,13 +322,25 @@ def _sleep_metrics(raw: Any) -> tuple[dict[str, Any] | None, bool]:
         return None, True
     if not isinstance(dto, dict):
         return None, False
-    seconds = _finite_number(dto.get("sleepTimeSeconds"))
+    raw_seconds = dto.get("sleepTimeSeconds")
+    seconds = _finite_number(raw_seconds)
+    malformed = raw_seconds is not None and seconds is None
     scores = dto.get("sleepScores")
+    if scores is not None and not isinstance(scores, dict):
+        malformed = True
     overall = scores.get("overall") if isinstance(scores, dict) else None
-    score = _normalized_number(overall.get("value")) if isinstance(overall, dict) else None
-    qualifier = _normalized_text(overall.get("qualifierKey")) if isinstance(overall, dict) else None
+    if overall is not None and not isinstance(overall, dict):
+        malformed = True
+    raw_score = overall.get("value") if isinstance(overall, dict) else None
+    score = _normalized_number(raw_score)
+    if raw_score is not None and score is None:
+        malformed = True
+    raw_qualifier = overall.get("qualifierKey") if isinstance(overall, dict) else None
+    qualifier = _normalized_text(raw_qualifier)
+    if raw_qualifier not in (None, "") and qualifier is None:
+        malformed = True
     if seconds is None and score is None and qualifier is None:
-        return None, not any(key in dto for key in ("sleepTimeSeconds", "sleepScores"))
+        return None, not malformed
     return {
         "date": _iso_day(dto.get("calendarDate")),
         "duration_hours": round(seconds / 3600, 1) if seconds is not None else None,
@@ -348,18 +360,33 @@ def _hrv_metrics(raw: Any) -> tuple[dict[str, Any] | None, bool]:
     if not isinstance(summary, dict):
         return None, False
     baseline = summary.get("baseline")
+    malformed = baseline is not None and not isinstance(baseline, dict)
     baseline = baseline if isinstance(baseline, dict) else {}
+    raw_last_night = summary.get("lastNightAvg")
+    raw_weekly = summary.get("weeklyAvg")
+    raw_status = summary.get("status")
+    raw_low = baseline.get("balancedLow")
+    raw_upper = baseline.get("balancedUpper")
     metrics = {
         "date": _iso_day(summary.get("calendarDate")),
-        "last_night_avg_ms": _normalized_number(summary.get("lastNightAvg")),
-        "weekly_avg_ms": _normalized_number(summary.get("weeklyAvg")),
-        "status": _normalized_text(summary.get("status")),
-        "baseline_balanced_low_ms": _normalized_number(baseline.get("balancedLow")),
-        "baseline_balanced_upper_ms": _normalized_number(baseline.get("balancedUpper")),
+        "last_night_avg_ms": _normalized_number(raw_last_night),
+        "weekly_avg_ms": _normalized_number(raw_weekly),
+        "status": _normalized_text(raw_status),
+        "baseline_balanced_low_ms": _normalized_number(raw_low),
+        "baseline_balanced_upper_ms": _normalized_number(raw_upper),
     }
+    for raw_value, normalized in (
+        (raw_last_night, metrics["last_night_avg_ms"]),
+        (raw_weekly, metrics["weekly_avg_ms"]),
+        (raw_low, metrics["baseline_balanced_low_ms"]),
+        (raw_upper, metrics["baseline_balanced_upper_ms"]),
+    ):
+        if raw_value is not None and normalized is None:
+            malformed = True
+    if raw_status not in (None, "") and metrics["status"] is None:
+        malformed = True
     if not any(value is not None for key, value in metrics.items() if key != "date"):
-        known = {"lastNightAvg", "weeklyAvg", "status", "baseline"}
-        return None, not any(key in summary for key in known)
+        return None, not malformed
     return metrics, False
 
 
@@ -368,23 +395,34 @@ def _readiness_metrics(raw: Any) -> tuple[dict[str, Any] | None, bool]:
         return None, True
     if not isinstance(raw, dict):
         return None, False
+    recognized_keys = {
+        "readinessScore", "score", "trainingReadinessLevel", "readinessLevel",
+        "level", "trainingReadinessLevelKey", "recoveryTime",
+    }
+    recognized_shape = any(key in raw for key in recognized_keys) or set(raw) <= {"calendarDate"}
+    malformed = False
     score = None
     for key in ("readinessScore", "score", "trainingReadinessLevel"):
-        score = _normalized_number(raw.get(key))
+        raw_score = raw.get(key)
+        score = _normalized_number(raw_score)
         if score is not None:
             break
+        if raw_score is not None:
+            malformed = True
     level = None
     for key in ("readinessLevel", "level", "trainingReadinessLevelKey"):
-        level = _normalized_text(raw.get(key))
+        raw_level = raw.get(key)
+        level = _normalized_text(raw_level)
         if level is not None:
             break
-    recovery_minutes = _finite_number(raw.get("recoveryTime"))
+        if raw_level not in (None, ""):
+            malformed = True
+    raw_recovery = raw.get("recoveryTime")
+    recovery_minutes = _finite_number(raw_recovery)
+    if raw_recovery is not None and recovery_minutes is None:
+        malformed = True
     if score is None and level is None and recovery_minutes is None:
-        known = {
-            "readinessScore", "score", "trainingReadinessLevel", "readinessLevel",
-            "level", "trainingReadinessLevelKey", "recoveryTime",
-        }
-        return None, not any(key in raw for key in known)
+        return None, recognized_shape and not malformed
     return {
         "date": _iso_day(raw.get("calendarDate")),
         "score": score,
