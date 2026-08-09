@@ -48,11 +48,12 @@ Targets are optional and deliberately constrained by sport:
 There is at most one target field per action; do not combine pace,
 heart-rate, and power targets on the same action.
 
-- Running supports a pace range such as `"pace": "4:20-4:30/km"`.
+- Running supports a pace range such as `"pace": "4:20-4:30/km"` (running
+  only).
 - Any sport can use a heart-rate zone (`"heart_rate_zone": "Z3"`) or a
   custom range (`"heart_rate": "130-150bpm"`).
 - Cycling supports a power zone (`"power_zone": "Z4"`) or watt range
-  (`"power": "220-260W"`).
+  (`"power": "220-260W"`) (cycling only).
 
 For example, an easy walk can use
 `{"recovery": {"duration": "45m", "heart_rate_zone": "Z2" }}` when
@@ -163,7 +164,7 @@ needs without exposing every upstream endpoint or returning large raw payloads.
 
 ## Upstream compatibility
 
-AI-friendly workouts are a new package and a minimal workouts seam. Existing
-authentication, default registration, and unrelated upstream tools remain
-unchanged; adopting the feature is additive unless `GARMIN_TOOL_PROFILE` is
-set.
+The new `ai_workouts` package is a minimal workouts seam. Existing
+authentication and default registration remain unchanged, as do unrelated
+upstream tools; adopting the feature is additive unless
+`GARMIN_TOOL_PROFILE` is set.

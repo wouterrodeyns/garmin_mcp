@@ -113,7 +113,8 @@ statuses, and API assumptions.
 Set `GARMIN_TOOL_PROFILE=ai-coach` to expose the exact 10-tool AI-coach
 surface. `GARMIN_ENABLED_TOOLS` still takes precedence, and
 `GARMIN_DISABLED_TOOLS` subtracts from the selected profile. With no profile or
-allowlist, the default remains full upstream tool registration (unchanged).
+allowlist, the default remains full upstream tool registration (unchanged):
+when `GARMIN_TOOL_PROFILE` is unset, all tools remain registered by default.
 
 These builder tools let an LLM create and schedule workouts without writing raw Garmin JSON.
 
