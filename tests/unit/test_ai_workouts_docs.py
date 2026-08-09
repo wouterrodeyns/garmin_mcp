@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).parents[2]
@@ -26,8 +27,46 @@ def test_ai_workouts_docs_covers_threshold_schema_and_partial_success():
         '"pace"',
         "partial_success",
         "garminconnect==0.3.2",
+        "strength_training",
     ):
         assert expected in DOCS
+
+
+def test_ai_workouts_docs_protects_schema_cardinality_and_strength_limitations():
+    assert "every action has exactly one end condition" in DOCS.lower()
+    assert "at most one target field per action" in DOCS.lower()
+    assert "strength" in DOCS
+    assert "exercise" in DOCS
+    assert "category" in DOCS
+    assert "pass-through" in DOCS
+    assert "free-form names" in DOCS
+
+
+def test_ai_workouts_docs_protects_safe_create_flow_order():
+    flow = DOCS.lower()
+    terms = (
+        "validate and normalize",
+        "compile the normalized",
+        "prepare_workout_for_upload",
+        "taxuspt normalization",
+        "validation seam",
+        "upload with garmin connect",
+        "optionally schedule",
+    )
+    positions = [flow.index(term) for term in terms]
+    assert positions == sorted(positions)
+
+
+def test_ai_workouts_docs_protects_all_statuses_and_retention_safety():
+    for expected in (
+        '"status": "success"',
+        '"status": "error"',
+        '"status": "partial_success"',
+    ):
+        assert expected in DOCS
+    assert "retains the" in DOCS
+    assert "never auto-deletes" in DOCS
+    assert "scheduling failure" in DOCS
 
 
 def test_ai_workouts_docs_marks_deferred_operations_explicitly():
@@ -40,16 +79,67 @@ def test_ai_workouts_docs_marks_deferred_operations_explicitly():
 
 
 def test_ai_workouts_docs_describes_profile_and_unchanged_default():
+    profile_section = DOCS.split("## The `ai-coach` tool profile", 1)[1].split(
+        "Profile precedence", 1
+    )[0]
+    tools = re.findall(r"^\d+\. `([^`]+)`$", profile_section, re.MULTILINE)
+    expected = {
+        "create_workout",
+        "get_activities",
+        "get_activities_by_date",
+        "get_activity",
+        "get_workouts",
+        "get_workout_by_id",
+        "get_scheduled_workouts",
+        "schedule_workout",
+        "unschedule_workout",
+        "delete_workout",
+    }
+    assert len(tools) == 10
+    assert set(tools) == expected
     assert "full upstream tool registration" in DOCS
-    assert "create_workout" in DOCS
-    assert "get_activities" in DOCS
-    assert "get_activities_by_date" in DOCS
-    assert "get_activity" in DOCS
-    assert "get_workouts" in DOCS
-    assert "get_workout_by_id" in DOCS
-    assert "get_scheduled_workouts" in DOCS
-    assert "schedule_workout" in DOCS
-    assert "unschedule_workout" in DOCS
-    assert "delete_workout" in DOCS
+
+    precedence = DOCS.lower().split("profile precedence", 1)[1]
+    assert precedence.index("explicitly configured") < precedence.index("subtracts")
+    assert precedence.index("subtracts") < precedence.index("profile unset")
     for hidden in ("upload_workout", "upload_workouts"):
         assert hidden in DOCS
+    assert "unrelated" in DOCS
+
+
+def test_ai_workouts_docs_protects_pinned_ids_and_missing_update_api():
+    pinned = DOCS.lower().split("## pinned api assumptions", 1)[1]
+    assert "garminconnect==0.3.2" in pinned
+    assert "no update method" in pinned
+    assert "workout_id" in pinned
+    assert "scheduled_workout_id" in pinned
+    assert "distinct" in pinned
+
+
+def test_ai_workouts_docs_protects_deferred_operation_contracts():
+    update = DOCS.split("## Update (deferred)", 1)[1].split(
+        "## Move (deferred)", 1
+    )[0].lower()
+    assert "whole-document" in update
+    assert "put" in update
+    assert "preserves" in update
+    assert "workout id" in update
+    assert "schedules" in update
+
+    move = DOCS.split("## Move (deferred)", 1)[1].split(
+        "## Training context (deferred)", 1
+    )[0].lower()
+    assert "scheduled_workout_id" in move
+    assert "unschedule" in move
+    assert "schedule" in move
+    assert "same `workout_id`" in move
+    assert "never" in move and "delete" in move and "template" in move
+    assert "partial" in move and "failure" in move
+
+    context = DOCS.split("## Training context (deferred)", 1)[1].split(
+        "## Upstream compatibility", 1
+    )[0].lower()
+    assert "aggregator" in context
+    assert "activities" in context
+    assert "scheduled workouts" in context
+    assert "readiness" in context

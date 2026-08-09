@@ -30,6 +30,8 @@ Pass `name`, `sport`, `steps`, and (optionally) `schedule_date` to
 ```
 
 Supported sports are `running`, `cycling`, `walking`, and `strength`.
+`strength_training` is accepted as a compatibility alias and normalized to
+`strength`.
 Actions are `warmup`, `cooldown`, `work`, `run`, `interval`, `recovery`, and
 `rest`. A repeat group is `{ "repeat": 4, "steps": [...] }`; nested repeat
 groups are allowed.
@@ -42,6 +44,9 @@ Every action has exactly one end condition:
 - `lap_button`: `true` to let the athlete press the lap button to finish.
 
 Targets are optional and deliberately constrained by sport:
+
+There is at most one target field per action; do not combine pace,
+heart-rate, and power targets on the same action.
 
 - Running supports a pace range such as `"pace": "4:20-4:30/km"`.
 - Any sport can use a heart-rate zone (`"heart_rate_zone": "Z3"`) or a
