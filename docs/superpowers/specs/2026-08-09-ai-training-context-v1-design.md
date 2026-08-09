@@ -85,8 +85,8 @@ The providers call the configured pinned client directly:
 
 1. **Period activities** call `client.connectapi(...)` with the client's
    `garmin_connect_activities` URL and `startDate`, `endDate`, `start`, `limit`,
-   explicit `sortBy="startLocal"`, and explicit `sortOrder="desc"`. Pages contain
-   at most 200 records and stop at a calculated total cap. The pinned
+   and explicit `sortOrder="desc"`. Pages contain at most 200 records and stop at
+   a calculated total cap. The pinned
    `get_activities` helper is bounded but does not accept a date range; the only
    date-filtered helper, `get_activities_by_date`, pages in hard-coded batches of
    20 until it exhausts the period. Direct paging therefore preserves the date
@@ -133,11 +133,11 @@ empty collection. Any other non-empty root, or a non-list `activityList`, is an
 latest-run search and is pinned by provider tests.
 
 The pinned SDK documents `sortOrder="asc"` but otherwise relies on Garmin's
-newest-first default; it does not document the explicit `"desc"` value. V1 pins
-`sortBy="startLocal"` and sends `sortOrder="desc"` to make intent explicit, then
-sorts validated results locally by `startTimeLocal` as the correctness guarantee.
-If Garmin rejects the explicit value, normal provider-failure semantics apply
-rather than silently trusting response order.
+newest-first default; it does not document the explicit `"desc"` value. V1 sends
+`sortOrder="desc"` to make intent explicit, then sorts validated results locally
+by `startTimeLocal` as the correctness guarantee. It does not add an unverified
+`sortBy` parameter. If Garmin rejects the explicit descending value, normal
+provider-failure semantics apply rather than silently trusting response order.
 
 ## Date and Request Bounds
 
@@ -238,8 +238,8 @@ data from a numeric zero without learning Garmin DTO shapes.
       "cycling": 4,
       "strength_training": 1
     },
-    "total_training_minutes": 245,
-    "running_distance_km": 0,
+    "total_training_minutes": 245.0,
+    "running_distance_km": 0.0,
     "last_run_date": "2026-06-06",
     "days_since_last_run": 64,
     "activities_truncated": false
@@ -562,10 +562,11 @@ returns `context_unavailable`; its sanitized error message says to re-run
 not parse exception strings or attempt a rate-limit short-circuit. Stopping after
 both core failures bounds repeated calls during a likely outage or rate limit.
 
-`get_stats` separately converts both `privacyProtected: true` and an empty daily
-summary into a `GarminConnectConnectionError`. Because period activities or the
-schedule has already established a usable core before optional providers run,
-this daily-stats exception is always isolated as `provider_unavailable`.
+`get_stats` separately raises `GarminConnectAuthenticationError` for
+`privacyProtected: true` and `GarminConnectConnectionError` for an empty daily
+summary. The provider catches both. Because period activities or the schedule has
+already established a usable core before optional providers run, either daily-
+stats exception is isolated as `provider_unavailable`.
 
 The scheduled-workout provider has its own exception boundary because
 `query_garmin_graphql` bypasses normal `connectapi` translation. Raw request
@@ -683,7 +684,10 @@ The stable error object never contains a raw exception:
 Error codes are limited to `invalid_days`, `client_unavailable`, and
 `context_unavailable` in v1. The `context_unavailable` message is:
 `Core Garmin context is unavailable. Re-run garmin-mcp-auth if your session
-expired; otherwise retry later.`
+expired; otherwise retry later.` The same error result retains one sanitized
+structured warning for each failed core provider so the caller can see that both
+`activities` and `scheduled_workouts` were unavailable without receiving raw
+exception details.
 
 ## MCP and Profile Integration
 
@@ -747,8 +751,9 @@ Provider and service tests cover:
 6. 200-record latest-run paging stopping on the first match, plus a bounded full
    search producing an informational inconclusive warning;
 7. an empty activity period;
-8. explicit `sortBy="startLocal"`/`sortOrder="desc"`, 200-record paging,
-   calculated caps, and newest-first output independent of response order;
+8. explicit `sortOrder="desc"`, absence of unverified `sortBy`, 200-record
+   paging, calculated caps, and newest-first output independent of response
+   order;
 9. list, `activityList`, `None`, and invalid activity response roots for both
    period and last-run providers;
 10. activity field reduction, raw-first aggregation, precision, and the 20-item
