@@ -184,7 +184,7 @@ def get_last_run(client: Any) -> ProviderResult:
         warnings=_warning(
             "last_run",
             "activities_truncated",
-            "Activity history was limited to 1000 records; period totals are lower bounds.",
+            "Latest-run search reached the 1000-record limit and was inconclusive.",
         ),
     )
 

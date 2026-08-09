@@ -223,7 +223,7 @@ def test_last_run_marks_a_full_bounded_search_without_match_as_truncated():
         {
             "provider": "last_run",
             "code": "activities_truncated",
-            "message": "Activity history was limited to 1000 records; period totals are lower bounds.",
+            "message": "Latest-run search reached the 1000-record limit and was inconclusive.",
         },
     )
 
