@@ -56,28 +56,45 @@ def test_activity_cap_rounds_to_bounded_two_hundred_record_pages(days: int, expe
     assert activity_cap(days) == expected
 
 
-@pytest.mark.parametrize("raw", [page(1), {"activityList": page(1)}, None, {}])
+@pytest.mark.parametrize("raw", [page(1), {"activityList": page(1)}, None])
 def test_period_activities_accepts_supported_raw_roots(raw: object):
     garmin = client()
     garmin.connectapi.return_value = raw
 
     result = get_period_activities(garmin, "2026-01-01", "2026-01-14", 14)
 
-    expected = [] if raw is None or raw == {} else page(1)
+    expected = [] if raw is None else page(1)
     assert result == ProviderResult(data=tuple(expected))
 
 
-@pytest.mark.parametrize("raw", [{"activityList": None}, {"activityList": {}}, "sensitive payload", 7, {"items": page(1)}])
-def test_period_activities_rejects_invalid_raw_roots_without_exposing_response(raw: object):
+@pytest.mark.parametrize("reader", [
+    lambda garmin: get_period_activities(garmin, "2026-01-01", "2026-01-14", 14),
+    get_last_run,
+])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {},
+        False,
+        0,
+        "",
+        {"items": page(1)},
+        {"activityList": None},
+        {"activityList": {}},
+        ["sensitive non-dict item"],
+        {"activityList": ["sensitive non-dict item"]},
+    ],
+)
+def test_activity_readers_reject_every_malformed_root_without_exposing_response(reader, raw: object):
     garmin = client()
     garmin.connectapi.return_value = raw
 
-    result = get_period_activities(garmin, "2026-01-01", "2026-01-14", 14)
+    result = reader(garmin)
 
-    assert result.data == ()
+    assert result.data in ((), None)
     assert result.failed is True
     assert result.warnings[0]["code"] == "invalid_provider_response"
-    assert "sensitive payload" not in result.warnings[0]["message"]
+    assert "sensitive non-dict item" not in result.warnings[0]["message"]
 
 
 def test_period_activities_pages_with_exact_string_params_and_no_sort_by():
@@ -204,7 +221,7 @@ def test_last_run_marks_a_full_bounded_search_without_match_as_truncated():
     assert result.truncated is True
     assert result.warnings == (
         {
-            "provider": "activities",
+            "provider": "last_run",
             "code": "activities_truncated",
             "message": "Activity history was limited to 1000 records; period totals are lower bounds.",
         },
@@ -219,6 +236,7 @@ def test_last_run_reports_sanitized_unavailable_error_before_a_match():
 
     assert result.data is None
     assert result.failed is True
+    assert result.warnings[0]["provider"] == "last_run"
     assert result.warnings[0]["code"] == "provider_unavailable"
     assert "credentials leaked" not in result.warnings[0]["message"]
 
@@ -231,8 +249,23 @@ def test_last_run_rejects_invalid_activity_root_without_exposing_its_contents():
 
     assert result.data is None
     assert result.failed is True
+    assert result.warnings[0]["provider"] == "last_run"
     assert result.warnings[0]["code"] == "invalid_provider_response"
     assert "secret malformed payload" not in result.warnings[0]["message"]
+
+
+def test_last_run_discards_prior_nonmatches_when_a_later_page_is_unavailable():
+    garmin = client()
+    garmin.connectapi.side_effect = [page(200), GarminConnectConnectionError("secret later failure")]
+
+    result = get_last_run(garmin)
+
+    assert result.data is None
+    assert result.failed is True
+    assert result.truncated is True
+    assert result.warnings[0]["provider"] == "last_run"
+    assert result.warnings[0]["code"] == "provider_unavailable"
+    assert "secret later failure" not in result.warnings[0]["message"]
 
 
 def test_scheduled_workouts_uses_the_exact_read_only_graphql_query():
@@ -326,9 +359,20 @@ def test_raw_delegates_forward_calls_without_wrapping(provider, method, args, re
     getattr(garmin, method).assert_called_once_with(*args)
 
 
-def test_raw_delegates_do_not_catch_exceptions():
+@pytest.mark.parametrize(
+    ("provider", "method", "args"),
+    [
+        (get_daily_stats, "get_stats", ("2026-01-01",)),
+        (get_sleep, "get_sleep_data", ("2026-01-01",)),
+        (get_hrv, "get_hrv_data", ("2026-01-01",)),
+        (get_training_readiness, "get_morning_training_readiness", ("2026-01-01",)),
+        (get_training_status, "get_training_status", ()),
+    ],
+)
+def test_raw_delegates_do_not_catch_exceptions(provider, method, args):
     garmin = client()
-    garmin.get_hrv_data.side_effect = GarminConnectConnectionError("pass through")
+    getattr(garmin, method).side_effect = GarminConnectConnectionError("pass through")
 
     with pytest.raises(GarminConnectConnectionError, match="pass through"):
-        get_hrv(garmin, "2026-01-01")
+        provider(garmin, *args)
+    getattr(garmin, method).assert_called_once_with(*args)

@@ -86,19 +86,14 @@ def _activity_items(raw: Any) -> tuple[Any, ...]:
     if raw is None:
         return ()
     if isinstance(raw, list):
-        return tuple(raw)
-    if isinstance(raw, dict):
-        if "activityList" in raw:
-            items = raw["activityList"]
-            if isinstance(items, list):
-                return tuple(items)
-            raise ValueError("activityList must be a list")
-        if not raw:
-            return ()
+        items = raw
+    elif isinstance(raw, dict) and isinstance(raw.get("activityList"), list):
+        items = raw["activityList"]
+    else:
         raise ValueError("unexpected activity response")
-    if not raw:
-        return ()
-    raise ValueError("unexpected activity response")
+    if not all(isinstance(item, dict) for item in items):
+        raise ValueError("activity list contains a non-object item")
+    return tuple(items)
 
 
 def _activity_page(client: Any, params: dict[str, str]) -> tuple[Any, ...]:
@@ -160,7 +155,7 @@ def get_last_run(client: Any) -> ProviderResult:
                 failed=True,
                 truncated=start > 0,
                 warnings=_warning(
-                    "activities",
+                    "last_run",
                     "invalid_provider_response",
                     "Activity history response had an unexpected shape.",
                 ),
@@ -171,7 +166,7 @@ def get_last_run(client: Any) -> ProviderResult:
                 failed=True,
                 truncated=start > 0,
                 warnings=_warning(
-                    "activities",
+                    "last_run",
                     "provider_unavailable",
                     "Activity history is currently unavailable.",
                 ),
@@ -187,7 +182,7 @@ def get_last_run(client: Any) -> ProviderResult:
         data=None,
         truncated=True,
         warnings=_warning(
-            "activities",
+            "last_run",
             "activities_truncated",
             "Activity history was limited to 1000 records; period totals are lower bounds.",
         ),
