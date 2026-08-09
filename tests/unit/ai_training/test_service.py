@@ -121,7 +121,7 @@ def test_invalid_days_returns_full_error_envelope_without_reads(bad_days: object
     assert result["period"] == {"days": None, "start_date": None, "end_date": "2026-02-14"}
     assert result["schedule_period"] == {"start_date": "2026-02-14", "end_date": "2026-02-20"}
     assert result["training"] == {
-        "activity_count": 0, "running_sessions": 0, "sessions_by_sport": {},
+        "activity_count": None, "running_sessions": None, "sessions_by_sport": {},
         "total_training_minutes": None, "running_distance_km": None, "last_run_date": None,
         "days_since_last_run": None, "activities_truncated": False,
     }
@@ -200,7 +200,9 @@ def test_unavailable_empty_period_keeps_unknown_aggregates_null(providers: dict[
     result = get_training_context_service(Mock(), today=TODAY)
 
     assert result["availability"]["activities"] is False  # type: ignore[index]
-    assert result["training"]["activity_count"] == 0  # type: ignore[index]
+    assert result["training"]["activity_count"] is None  # type: ignore[index]
+    assert result["training"]["running_sessions"] is None  # type: ignore[index]
+    assert result["training"]["sessions_by_sport"] == {}  # type: ignore[index]
     assert result["training"]["total_training_minutes"] is None  # type: ignore[index]
     assert result["training"]["running_distance_km"] is None  # type: ignore[index]
 
@@ -676,6 +678,10 @@ def test_missing_client_returns_stable_sanitized_error_without_reads(providers: 
         "start_date": "2026-02-14", "end_date": "2026-02-20",
     }
     assert all(value is False for value in result["availability"].values())
+    assert result["training"]["activity_count"] is None
+    assert result["training"]["running_sessions"] is None
+    assert result["training"]["total_training_minutes"] is None
+    assert result["training"]["running_distance_km"] is None
     assert result["warnings"] == []
     assert all(provider.call_count == 0 for provider in providers.values())
 
@@ -713,6 +719,10 @@ def test_both_core_failures_stop_all_enrichment_reads(providers: dict[str, Mock]
     assert result["schedule_period"] == {
         "start_date": "2026-02-14", "end_date": "2026-02-20",
     }
+    assert result["training"]["activity_count"] is None
+    assert result["training"]["running_sessions"] is None
+    assert result["training"]["total_training_minutes"] is None
+    assert result["training"]["running_distance_km"] is None
     for name in ("last_run", "daily_stats", "sleep", "hrv", "readiness", "training_status"):
         providers[name].assert_not_called()
 

@@ -159,8 +159,8 @@ def _base_result(today: date, days: int | None) -> dict[str, Any]:
         "schedule_period": {"start_date": end, "end_date": schedule_end},
         "availability": dict.fromkeys(AVAILABILITY_KEYS, False),
         "training": {
-            "activity_count": 0,
-            "running_sessions": 0,
+            "activity_count": None,
+            "running_sessions": None,
             "sessions_by_sport": {},
             "total_training_minutes": None,
             "running_distance_km": None,
@@ -216,6 +216,8 @@ def _populate_activities(result: dict[str, Any], provider_result: ProviderResult
     raw_items = provider_result.data if isinstance(provider_result.data, (tuple, list)) else ()
     activities = [item for item in raw_items if isinstance(item, dict)]
     result["availability"]["activities"] = not provider_result.failed or bool(activities)
+    if not result["availability"]["activities"]:
+        return
     result["training"]["activity_count"] = len(activities)
 
     sessions_by_sport: dict[str, int] = {}
