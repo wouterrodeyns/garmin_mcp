@@ -727,6 +727,66 @@ def test_both_core_failures_stop_all_enrichment_reads(providers: dict[str, Mock]
         providers[name].assert_not_called()
 
 
+def test_both_core_failures_are_fatal_even_with_retained_activity_pages(
+    providers: dict[str, Mock],
+):
+    providers["activities"].return_value = ProviderResult(
+        data=(activity(),), failed=True, truncated=True, warnings=({
+            "provider": "activities", "code": "provider_unavailable",
+            "message": "Activity history is incomplete because a later page was unavailable.",
+        },),
+    )
+    providers["scheduled"].return_value = ProviderResult(
+        data=(), failed=True, warnings=({
+            "provider": "scheduled_workouts", "code": "provider_unavailable",
+            "message": "Scheduled workouts are unavailable.",
+        },),
+    )
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "context_unavailable"
+    assert result["availability"]["activities"] is True
+    assert result["training"]["activity_count"] == 1
+    assert [warning["provider"] for warning in result["warnings"]] == [
+        "activities", "scheduled_workouts",
+    ]
+    for name in ("last_run", "daily_stats", "sleep", "hrv", "readiness", "training_status"):
+        providers[name].assert_not_called()
+
+
+def test_all_malformed_schedule_entries_are_an_unavailable_core(
+    providers: dict[str, Mock],
+):
+    providers["activities"].return_value = ProviderResult(
+        data=(), failed=True, warnings=({
+            "provider": "activities", "code": "provider_unavailable",
+            "message": "Activities are unavailable.",
+        },),
+    )
+    providers["scheduled"].return_value = ProviderResult(data=("secret raw payload",))
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "context_unavailable"
+    assert result["availability"]["scheduled_workouts"] is False
+    assert result["scheduled_workouts"] == []
+    assert result["warnings"] == [
+        {
+            "provider": "activities", "code": "provider_unavailable",
+            "message": "Activities are unavailable.",
+        },
+        {
+            "provider": "scheduled_workouts", "code": "invalid_provider_response",
+            "message": "Scheduled workout response had an unexpected item.",
+        },
+    ]
+    for name in ("last_run", "daily_stats", "sleep", "hrv", "readiness", "training_status"):
+        providers[name].assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("failed_core", "successful_core"),
     [("activities", "scheduled"), ("scheduled", "activities")],

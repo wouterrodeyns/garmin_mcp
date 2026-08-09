@@ -306,11 +306,13 @@ def _scheduled_item(item: Any) -> tuple[dict[str, Any], bool] | None:
     return reduced, invalid
 
 
-def _populate_scheduled_workouts(result: dict[str, Any], provider_result: ProviderResult) -> bool:
+def _populate_scheduled_workouts(
+    result: dict[str, Any], provider_result: ProviderResult
+) -> tuple[bool, bool]:
     _append_warnings(result, provider_result)
-    result["availability"]["scheduled_workouts"] = not provider_result.failed
     raw_items = provider_result.data if isinstance(provider_result.data, (tuple, list)) else ()
     invalid_item = False
+    valid_item = False
     scheduled: list[dict[str, Any]] = []
     for item in raw_items:
         scheduled_item = _scheduled_item(item)
@@ -319,7 +321,12 @@ def _populate_scheduled_workouts(result: dict[str, Any], provider_result: Provid
         else:
             reduced, item_invalid = scheduled_item
             invalid_item = invalid_item or item_invalid
+            valid_item = valid_item or not item_invalid
             scheduled.append(reduced)
+    all_items_malformed = bool(raw_items) and not valid_item
+    result["availability"]["scheduled_workouts"] = (
+        not provider_result.failed and not all_items_malformed
+    )
     result["scheduled_workouts"] = scheduled
     if invalid_item:
         result["warnings"].append(
@@ -329,7 +336,7 @@ def _populate_scheduled_workouts(result: dict[str, Any], provider_result: Provid
                 "message": "Scheduled workout response had an unexpected item.",
             }
         )
-    return invalid_item
+    return invalid_item, all_items_malformed
 
 
 def _populate_daily_stats(result: dict[str, Any], raw: Any) -> None:
@@ -732,10 +739,12 @@ def get_training_context_service(client: Any, days: int = 14, today: date | None
         "scheduled_workouts", get_scheduled_workouts, client, end, schedule_end
     )
     _populate_activities(result, period_result)
-    schedule_invalid = _populate_scheduled_workouts(result, schedule_result)
+    schedule_invalid, schedule_effectively_failed = _populate_scheduled_workouts(
+        result, schedule_result
+    )
     isolated_failure = period_result.failed or schedule_result.failed or schedule_invalid
 
-    if not result["availability"]["activities"] and not result["availability"]["scheduled_workouts"]:
+    if period_result.failed and (schedule_result.failed or schedule_effectively_failed):
         if period_result.failed and not period_result.warnings:
             _append_failure_warning(result, "activities", "provider_unavailable")
         if schedule_result.failed and not schedule_result.warnings:
