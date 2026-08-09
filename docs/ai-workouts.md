@@ -138,7 +138,7 @@ distinct from the workout ID: unscheduling needs the
 
 The primary references are the [python-garminconnect 0.3.2 package on
 PyPI](https://pypi.org/project/garminconnect/0.3.2/) and its [upstream source on
-GitHub](https://github.com/cyberjunky/python-garminconnect/tree/v0.3.2).
+GitHub](https://github.com/cyberjunky/python-garminconnect/tree/0.3.2).
 
 ## Update (deferred)
 

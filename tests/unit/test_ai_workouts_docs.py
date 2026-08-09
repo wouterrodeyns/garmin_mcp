@@ -8,6 +8,30 @@ DOCS_PATH = ROOT / "docs/ai-workouts.md"
 DOCS = DOCS_PATH.read_text() if DOCS_PATH.exists() else ""
 
 
+def _normalize_heading(value: str) -> str:
+    value = re.sub(r"[`*_]", "", value).lower()
+    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+
+def _markdown_sections(markdown: str) -> dict[str, str]:
+    headings = list(re.finditer(r"^#{1,6}\s+(.+?)\s*$", markdown, re.MULTILINE))
+    sections: dict[str, str] = {}
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(markdown)
+        sections[_normalize_heading(heading.group(1))] = markdown[heading.end() : end]
+    return sections
+
+
+def _numbered_items(section: str) -> list[str]:
+    items = re.findall(
+        r"^\d+\.\s+(.+?)(?=^\d+\.\s+|\Z)", section, re.MULTILINE | re.DOTALL
+    )
+    return [re.sub(r"\s+", " ", item).strip().lower() for item in items]
+
+
+SECTIONS = _markdown_sections(DOCS)
+
+
 def test_readme_points_ai_coaches_to_the_workout_docs_and_profile():
     for expected in (
         "GARMIN_TOOL_PROFILE",
@@ -27,31 +51,32 @@ def test_readme_guarantees_unset_profile_keeps_full_default_registration():
 
 
 def test_ai_workouts_docs_covers_threshold_schema_and_partial_success():
+    create = SECTIONS["create one workout"]
     for expected in (
         '"name"',
         '"sport"',
         '"schedule_date"',
         '"repeat"',
         '"pace"',
-        "partial_success",
-        "garminconnect==0.3.2",
         "strength_training",
     ):
-        assert expected in DOCS
+        assert expected in create
+    assert "partial_success" in SECTIONS["what the call does"]
+    assert "garminconnect==0.3.2" in SECTIONS["pinned api assumptions"]
 
 
 def test_ai_workouts_docs_protects_schema_cardinality_and_strength_limitations():
-    assert "every action has exactly one end condition" in DOCS.lower()
-    assert "at most one target field per action" in DOCS.lower()
-    assert "strength" in DOCS
-    assert "exercise" in DOCS
-    assert "category" in DOCS
-    assert "pass-through" in DOCS
-    assert "free-form names" in DOCS
+    create = SECTIONS["create one workout"]
+    create_lower = create.lower()
+    assert "every action has exactly one end condition" in create_lower
+    assert "at most one target field per action" in create_lower
+    for expected in ("strength", "exercise", "category", "pass-through", "free-form names"):
+        assert expected in create_lower
 
 
 def test_ai_workouts_docs_protects_complete_friendly_vocabularies_and_constraints():
-    sports = re.search(r"Supported sports are (.+?)\.", DOCS, re.DOTALL)
+    create = SECTIONS["create one workout"]
+    sports = re.search(r"Supported sports are (.+?)\.", create, re.DOTALL)
     assert sports is not None
     assert set(re.findall(r"`([^`]+)`", sports.group(1))) == {
         "running",
@@ -59,9 +84,9 @@ def test_ai_workouts_docs_protects_complete_friendly_vocabularies_and_constraint
         "walking",
         "strength",
     }
-    assert "`strength_training` is accepted as a compatibility alias" in DOCS
+    assert re.search(r"`strength_training`\s+is accepted as a compatibility alias", create)
 
-    actions = re.search(r"Actions are (.+?)\. A repeat group", DOCS, re.DOTALL)
+    actions = re.search(r"Actions are (.+?)\. A repeat group", create, re.DOTALL)
     assert actions is not None
     assert set(re.findall(r"`([^`]+)`", actions.group(1))) == {
         "warmup",
@@ -73,83 +98,83 @@ def test_ai_workouts_docs_protects_complete_friendly_vocabularies_and_constraint
         "rest",
     }
 
-    end_section = DOCS.split("Every action has exactly one end condition:", 1)[1].split(
-        "Targets are optional", 1
-    )[0]
-    assert set(re.findall(r"^- `([^`]+)`:", end_section, re.MULTILINE)) == {
+    assert set(re.findall(r"^- `([^`]+)`:", create, re.MULTILINE)) == {
         "duration",
         "distance",
         "reps",
         "lap_button",
     }
 
-    target_section = DOCS.split("Targets are optional", 1)[1].split(
-        "For example", 1
-    )[0]
-    target_fields = set(re.findall(r'`"([^"`]+)":', target_section))
-    assert target_fields == {
+    target_vocab = {
         "pace",
         "heart_rate_zone",
         "heart_rate",
         "power_zone",
         "power",
     }
-    target_lower = target_section.lower()
-    assert "pace" in target_section and re.search(r"running\s+only", target_lower)
-    assert "heart-rate" in target_section and "any sport" in target_lower
-    assert "power" in target_section and re.search(r"cycling\s+only", target_lower)
+    target_fields = set(re.findall(r'`"([^"`]+)":', create)) & target_vocab
+    assert target_fields == target_vocab
+    target_lower = create.lower()
+    assert "pace" in create and re.search(r"running\s+only", target_lower)
+    assert "heart-rate" in create and "any sport" in target_lower
+    assert "power" in create and re.search(r"cycling\s+only", target_lower)
 
 
 def test_ai_workouts_docs_names_package_seam_and_unchanged_compatibility():
-    compatibility = DOCS.split("## Upstream compatibility", 1)[1]
-    assert "ai_workouts" in compatibility
-    assert "minimal workouts seam" in compatibility
-    assert "authentication" in compatibility
-    assert "default registration" in compatibility
-    assert "unchanged" in compatibility
+    compatibility = SECTIONS["upstream compatibility"].lower()
+    for expected in (
+        "ai_workouts",
+        "minimal workouts seam",
+        "authentication",
+        "default registration",
+        "unchanged",
+    ):
+        assert expected in compatibility
 
 
 def test_ai_workouts_docs_protects_safe_create_flow_order():
-    flow = DOCS.lower()
-    terms = (
-        "validate and normalize",
-        "compile the normalized",
-        "prepare_workout_for_upload",
-        "taxuspt normalization",
-        "validation seam",
-        "upload with garmin connect",
-        "optionally schedule",
+    steps = _numbered_items(SECTIONS["what the call does"])
+    assert len(steps) == 5
+    assert "validate" in steps[0] and "normalize" in steps[0]
+    assert "compile" in steps[1]
+    assert all(
+        expected in steps[2]
+        for expected in (
+            "prepare_workout_for_upload",
+            "taxuspt",
+            "normalization",
+            "validation",
+        )
     )
-    positions = [flow.index(term) for term in terms]
-    assert positions == sorted(positions)
+    assert "upload" in steps[3]
+    assert "schedule" in steps[4]
 
 
 def test_ai_workouts_docs_protects_all_statuses_and_retention_safety():
+    call = SECTIONS["what the call does"]
     for expected in (
         '"status": "success"',
         '"status": "error"',
         '"status": "partial_success"',
     ):
-        assert expected in DOCS
-    assert "retains the" in DOCS
-    assert "never auto-deletes" in DOCS
-    assert "scheduling failure" in DOCS
+        assert expected in call
+    call_lower = call.lower()
+    assert "retains the" in call_lower
+    assert "never auto-deletes" in call_lower
+    assert "scheduling failure" in call_lower
 
 
 def test_ai_workouts_docs_marks_deferred_operations_explicitly():
-    for expected in (
-        "## Update (deferred)",
-        "## Move (deferred)",
-        "## Training context (deferred)",
-    ):
-        assert expected in DOCS
+    assert {
+        "update deferred",
+        "move deferred",
+        "training context deferred",
+    } <= SECTIONS.keys()
 
 
 def test_ai_workouts_docs_describes_profile_and_unchanged_default():
-    profile_section = DOCS.split("## The `ai-coach` tool profile", 1)[1].split(
-        "Profile precedence", 1
-    )[0]
-    tools = re.findall(r"^\d+\. `([^`]+)`$", profile_section, re.MULTILINE)
+    profile = SECTIONS["the ai coach tool profile"]
+    tools = re.findall(r"^\d+\. `([^`]+)`$", profile, re.MULTILINE)
     expected = {
         "create_workout",
         "get_activities",
@@ -164,49 +189,45 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
     }
     assert len(tools) == 10
     assert set(tools) == expected
-    assert "full upstream tool registration" in DOCS
+    assert "full upstream tool registration" in profile
 
-    precedence = DOCS.lower().split("profile precedence", 1)[1]
+    precedence = profile.lower()
     assert precedence.index("explicitly configured") < precedence.index("subtracts")
     assert precedence.index("subtracts") < precedence.index("profile unset")
     for hidden in ("upload_workout", "upload_workouts"):
-        assert hidden in DOCS
-    assert "unrelated" in DOCS
+        assert hidden in precedence
+    assert "unrelated" in precedence
 
 
 def test_ai_workouts_docs_protects_pinned_ids_and_missing_update_api():
-    pinned = DOCS.lower().split("## pinned api assumptions", 1)[1]
-    assert "garminconnect==0.3.2" in pinned
-    assert "no update method" in pinned
-    assert "workout_id" in pinned
-    assert "scheduled_workout_id" in pinned
-    assert "distinct" in pinned
+    pinned = SECTIONS["pinned api assumptions"].lower()
+    for expected in (
+        "garminconnect==0.3.2",
+        "no update method",
+        "workout_id",
+        "scheduled_workout_id",
+        "distinct",
+    ):
+        assert expected in pinned
 
 
 def test_ai_workouts_docs_protects_deferred_operation_contracts():
-    update = DOCS.split("## Update (deferred)", 1)[1].split(
-        "## Move (deferred)", 1
-    )[0].lower()
-    assert "whole-document" in update
-    assert "put" in update
-    assert "preserves" in update
-    assert "workout id" in update
-    assert "schedules" in update
+    update = SECTIONS["update deferred"].lower()
+    for expected in ("whole-document", "put", "preserves", "workout id", "schedules"):
+        assert expected in update
 
-    move = DOCS.split("## Move (deferred)", 1)[1].split(
-        "## Training context (deferred)", 1
-    )[0].lower()
-    assert "scheduled_workout_id" in move
-    assert "unschedule" in move
-    assert "schedule" in move
-    assert "same `workout_id`" in move
+    move = SECTIONS["move deferred"].lower()
+    for expected in (
+        "scheduled_workout_id",
+        "unschedule",
+        "schedule",
+        "same `workout_id`",
+        "partial",
+        "failure",
+    ):
+        assert expected in move
     assert "never" in move and "delete" in move and "template" in move
-    assert "partial" in move and "failure" in move
 
-    context = DOCS.split("## Training context (deferred)", 1)[1].split(
-        "## Upstream compatibility", 1
-    )[0].lower()
-    assert "aggregator" in context
-    assert "activities" in context
-    assert "scheduled workouts" in context
-    assert "readiness" in context
+    context = SECTIONS["training context deferred"].lower()
+    for expected in ("aggregator", "activities", "scheduled workouts", "readiness"):
+        assert expected in context
