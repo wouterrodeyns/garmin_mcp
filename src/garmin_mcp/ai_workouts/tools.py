@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from garmin_mcp import workouts
-
 from .service import create_workout_service
 
 
@@ -17,7 +15,6 @@ def configure(client: Any) -> None:
     """Configure the Garmin client used by this package's MCP tool."""
     global garmin_client
     garmin_client = client
-    workouts.configure(client)
 
 
 def register_tools(app: Any) -> Any:

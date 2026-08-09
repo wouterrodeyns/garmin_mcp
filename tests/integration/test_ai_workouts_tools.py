@@ -202,7 +202,7 @@ def test_schedule_failure_preserves_uploaded_id_and_never_deletes(
         "status": "partial_success",
         "workout_id": 103,
         "name": "Schedule failure",
-        "scheduled_date": "2026-09-01",
+        "requested_date": "2026-09-01",
         "scheduling_error": "calendar rejected",
     }
     mock_garmin_client.delete_workout.assert_not_called()
@@ -230,10 +230,39 @@ def test_schedule_exception_preserves_uploaded_id_and_never_deletes(
         "status": "partial_success",
         "workout_id": 104,
         "name": "Schedule exception",
-        "scheduled_date": "2026-09-01",
+        "requested_date": "2026-09-01",
         "scheduling_error": "schedule offline",
     }
     mock_garmin_client.delete_workout.assert_not_called()
+
+
+def test_internal_compiler_exception_is_not_reported_as_user_error(
+    mock_garmin_client, monkeypatch
+):
+    def raise_internal_error(*_args, **_kwargs):
+        raise RuntimeError("compiler invariant broken")
+
+    monkeypatch.setattr(service, "compile_workout", raise_internal_error)
+
+    with pytest.raises(RuntimeError, match="compiler invariant broken"):
+        create_workout_service(
+            mock_garmin_client,
+            "Compiler failure",
+            "running",
+            [{"run": {"duration": "5m"}}],
+        )
+
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+def test_ai_workouts_configure_does_not_rebind_upstream_workout_client():
+    upstream_client = MagicMock(name="upstream_client")
+    ai_client = MagicMock(name="ai_client")
+    workouts.configure(upstream_client)
+
+    configure(ai_client)
+
+    assert workouts.garmin_client is upstream_client
 
 
 def test_idempotent_schedule_marks_success_without_extra_details(

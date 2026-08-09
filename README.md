@@ -288,16 +288,17 @@ per second:
     "workoutTargetTypeId": 6,
     "workoutTargetTypeKey": "pace.zone"
   },
-  "targetValueOne": 1.9607843,
-  "targetValueTwo": 2.0833333
+  "targetValueOne": 2.0833333,
+  "targetValueTwo": 1.9607843
 }
 ```
 
-That example represents `8:00–8:30 min/km`. The lower numeric bound is listed
-first for consistency with the heart-rate example; Garmin normalizes either
-bound order. Garmin silently discards values nested inside `targetType`, leaving
-a pace target with no active range. The upload tools repair that unambiguous
-nesting mistake, but reject the request if nested and step-level values conflict.
+That example represents `8:00–8:30 min/km`. Garmin pace bounds use the faster
+speed first (`targetValueOne`) and the slower speed second (`targetValueTwo`),
+so the numeric order is the reverse of the human minutes-per-kilometre order.
+Garmin silently discards values nested inside `targetType`, leaving a pace
+target with no active range. The upload tools repair that unambiguous nesting
+mistake, but reject the request if nested and step-level values conflict.
 
 For a named Garmin HR zone, use the same target type with `zoneNumber` instead:
 

@@ -31,6 +31,10 @@ def create_workout_service(
         definition = validate_workout(name, sport, steps, schedule_date)
         compiled = compile_workout(definition)
         prepared = prepare_workout_for_upload(compiled)
+    except ValueError as exc:
+        return _error(name, str(exc))
+
+    try:
         uploaded = client.upload_workout(prepared)
     except Exception as exc:
         return _error(name, str(exc))
@@ -55,7 +59,7 @@ def create_workout_service(
         result.update(
             {
                 "status": "partial_success",
-                "scheduled_date": definition.schedule_date,
+                "requested_date": definition.schedule_date,
                 "scheduling_error": str(exc),
             }
         )
@@ -70,7 +74,7 @@ def create_workout_service(
         result.update(
             {
                 "status": "partial_success",
-                "scheduled_date": definition.schedule_date,
+                "requested_date": definition.schedule_date,
                 "scheduling_error": scheduling_error,
             }
         )

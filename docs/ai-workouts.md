@@ -79,7 +79,8 @@ The service follows this sequence:
 Creation is intentionally non-transactional. A scheduling failure retains the
 uploaded workout and never auto-deletes it; the response is
 `partial_success` with the workout ID and scheduling error so an AI coach can
-retry or explain what happened.
+retry or explain what happened. Partial results use `requested_date` to avoid
+claiming that Garmin scheduled the workout when the calendar operation failed.
 
 Typical concise responses are:
 
@@ -100,7 +101,7 @@ Typical concise responses are:
   "status": "partial_success",
   "workout_id": 103,
   "name": "Calendar Retry",
-  "scheduled_date": "2026-09-01",
+  "requested_date": "2026-09-01",
   "scheduling_error": "calendar rejected"
 }
 ```

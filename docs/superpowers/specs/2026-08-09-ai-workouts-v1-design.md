@@ -186,7 +186,8 @@ Successful upload and scheduling returns:
 If validation, compilation, preparation, or upload fails, the tool returns
 `status: "error"` and does not schedule. If upload succeeds but scheduling
 fails, it returns `status: "partial_success"`, preserves and reports the new
-workout ID, and includes the requested date plus a concise scheduling error.
+workout ID, and includes `requested_date` plus a concise scheduling error. It
+does not return `scheduled_date` unless Garmin confirmed the calendar operation.
 The service never deletes an uploaded workout as an attempted rollback because
 the two Garmin calls are not transactional and cleanup can also fail.
 
