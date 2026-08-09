@@ -101,6 +101,20 @@ Example — expose only sleep, stress, and recent activities:
 
 ## High-level workout tools
 
+### AI-friendly workout creation
+
+For a single, readable workout request, call `create_workout` with the friendly
+schema and optionally `schedule_date`. It supports running, cycling, walking,
+and strength workouts with repeats, duration/distance/reps/lap-button endings,
+and sport-appropriate pace, heart-rate, or power targets. See the complete
+[AI-friendly workout guide](docs/ai-workouts.md) for the schema, response
+statuses, and API assumptions.
+
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose the exact 10-tool AI-coach
+surface. `GARMIN_ENABLED_TOOLS` still takes precedence, and
+`GARMIN_DISABLED_TOOLS` subtracts from the selected profile. With no profile or
+allowlist, the default remains full upstream tool registration (unchanged).
+
 These builder tools let an LLM create and schedule workouts without writing raw Garmin JSON.
 
 ### `create_walk_run_workout`

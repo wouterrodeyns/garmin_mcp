@@ -23,6 +23,7 @@ docs/*
 docs/superpowers/*
 !docs/superpowers/specs/
 !docs/superpowers/plans/
+!docs/ai-workouts.md
 .gitignore
 playground/*
 scratch/*
