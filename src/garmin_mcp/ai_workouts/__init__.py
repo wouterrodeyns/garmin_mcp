@@ -23,6 +23,22 @@ from .schema import (
     WorkoutStep,
     validate_workout,
 )
+from .service import create_workout_service
+
+
+def configure(client):
+    """Configure the AI workout MCP tool without importing it eagerly."""
+    from .tools import configure as configure_tools
+
+    configure_tools(client)
+
+
+def register_tools(app):
+    """Register AI workout tools without creating package import cycles."""
+    from .tools import register_tools as register_ai_workout_tools
+
+    return register_ai_workout_tools(app)
+
 
 __all__ = [
     "ActionStep",
@@ -36,6 +52,8 @@ __all__ = [
     "WorkoutStep",
     "TARGET_COMPILERS",
     "compile_workout",
+    "configure",
+    "create_workout_service",
     "parse_date",
     "parse_distance",
     "parse_duration",
@@ -45,5 +63,6 @@ __all__ = [
     "parse_power",
     "parse_reps",
     "parse_zone",
+    "register_tools",
     "validate_workout",
 ]
