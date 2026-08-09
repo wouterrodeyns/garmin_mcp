@@ -55,7 +55,8 @@ def test_docs_pin_availability_null_and_overnight_date_semantics():
         "availability",
         "null, not zero",
         "previous local calendar day",
-        "actual garmin date",
+        "garmin's `calendardate` when supplied",
+        "requested query date",
         "date provenance",
         "athlete's local timezone",
     ):

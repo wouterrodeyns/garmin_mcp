@@ -54,8 +54,9 @@ training readiness and recovery time.
 
 Sleep, HRV, and readiness first query today. When today's response is
 legitimately empty, each may fall back once to the previous local calendar day.
-The section's date field reports the actual Garmin date used; this date provenance
-prevents yesterday's overnight data from being presented as today's.
+For these sections, date provenance uses Garmin's `calendarDate` when supplied;
+otherwise it records the requested query date (today or the fallback date).
+This prevents yesterday's overnight data from being presented as today's.
 A failed or non-empty malformed response does not trigger fallback.
 
 The service never derives ACWR from acute and chronic load. Garmin-supplied
