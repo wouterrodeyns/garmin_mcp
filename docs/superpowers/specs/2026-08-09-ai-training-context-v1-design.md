@@ -71,10 +71,13 @@ Provider calls are sequential in v1. This keeps client/session behavior simple,
 avoids unverified thread-safety assumptions, and makes partial failure ordering
 deterministic. Each source has an explicit request bound. Sleep, HRV, and
 readiness may each make one additional previous-day request only when today's
-response is legitimately empty. The worst case is 15 sequential reads: five
-period-activity pages, one latest-run search, schedule, daily stats, two each for
-sleep/HRV/readiness, and training status. A normal 14-day call without overnight
-fallbacks uses eight reads.
+response is legitimately empty. The worst successful/partial context is 19
+sequential reads: five period-activity pages, the schedule query, five latest-run
+pages, daily stats, two each for sleep/HRV/readiness, and training status. A
+normal 14-day call with a first-page run match and no overnight fallbacks uses
+eight reads. When both core providers fail, the service stops after the schedule
+query instead of performing optional reads whose result cannot make the context
+usable.
 
 ## Provider Contracts
 
@@ -82,24 +85,24 @@ The providers call the configured pinned client directly:
 
 1. **Period activities** call `client.connectapi(...)` with the client's
    `garmin_connect_activities` URL and `startDate`, `endDate`, `start`, `limit`,
-   and explicit `sortOrder="desc"`. Pages contain at most 200 records and stop at
-   a calculated total cap. The pinned
+   explicit `sortBy="startLocal"`, and explicit `sortOrder="desc"`. Pages contain
+   at most 200 records and stop at a calculated total cap. The pinned
    `get_activities` helper is bounded but does not accept a date range; the only
    date-filtered helper, `get_activities_by_date`, pages in hard-coded batches of
    20 until it exhausts the period. Direct paging therefore preserves the date
    filter while keeping total work bounded and ordering explicit.
-2. **Latest run** makes one unfiltered, explicitly newest-first direct activity
-   request capped at 1,000 records, then matches the shared running type-key set
-   locally. It does not use `activityType="running"`, because the pinned SDK only
-   forwards that filter and cannot prove that Garmin includes running subtypes.
-   The separate bounded read keeps `last_run_date` useful when no run appears in
-   the retrospective period.
-3. **Scheduled workouts** use the existing Garmin GraphQL
+2. **Scheduled workouts** use the existing Garmin GraphQL
    `workoutScheduleSummariesScalar(startDate, endDate)` query through
    `query_garmin_graphql`. This is a read-only GraphQL query even though the
    pinned client transports GraphQL queries over HTTP POST. The provider never
    calls a GraphQL mutation or Garmin schedule, unschedule, delete, upload,
    update, or PUT/DELETE operation.
+3. **Latest run** pages unfiltered activities newest-first in 200-record pages,
+   stopping immediately at the first local match from the shared running type-
+   key set and stopping after at most 1,000 records. It does not use
+   `activityType="running"`, because the pinned SDK only forwards that filter and
+   cannot prove that Garmin includes running subtypes. The separate bounded read
+   keeps `last_run_date` useful when no run appears in the retrospective period.
 4. **Daily statistics** use `get_stats(today)` for resting heart rate, seven-day
    average resting heart rate, and the most recent Body Battery value.
 5. **Sleep** uses `get_sleep_data(today)`, then the previous date only when
@@ -110,9 +113,9 @@ The providers call the configured pinned client directly:
 8. **Training status** uses `get_training_status(today)` for Garmin's status,
    acute/chronic load, load focus, and running/cycling VO2 max when present.
 
-The service executes providers in this numbered order. Period activities is
-always first because its authentication exception is the only runtime provider
-result treated as a confirmed global session failure. Each fallback completes
+The service executes providers in this numbered order. It evaluates the two core
+providers first and stops immediately with `context_unavailable` when both fail.
+Otherwise it continues through the optional providers. Each fallback completes
 inside its provider before the service advances to the next provider.
 
 These methods and fields are based on current Taxuspt code, fixtures, and the
@@ -128,6 +131,13 @@ a top-level list or an object containing an `activityList` list. `None` is an
 empty collection. Any other non-empty root, or a non-list `activityList`, is an
 `invalid_provider_response`. This applies to both period paging and the bounded
 latest-run search and is pinned by provider tests.
+
+The pinned SDK documents `sortOrder="asc"` but otherwise relies on Garmin's
+newest-first default; it does not document the explicit `"desc"` value. V1 pins
+`sortBy="startLocal"` and sends `sortOrder="desc"` to make intent explicit, then
+sorts validated results locally by `startTimeLocal` as the correctness guarantee.
+If Garmin rejects the explicit value, normal provider-failure semantics apply
+rather than silently trusting response order.
 
 ## Date and Request Bounds
 
@@ -160,12 +170,24 @@ most the newest 20 reduced activities. If retrieval reaches the calculated cap,
 included, and period aggregates are lower bounds. Long lookbacks therefore
 receive a proportionally larger but still bounded budget.
 
-The latest-run search is also bounded at 1,000 newest activities. If it finds a
-matching activity, that date is authoritative even when the search page is full.
-If it finds no match in a full 1,000-record response, `last_run` is unavailable
-and a sanitized `provider_unavailable` warning explains that the bounded search
-was inconclusive. A shorter successful response with no match means no known run
-and leaves `last_run_date`/`days_since_last_run` as `null` without a warning.
+If a later period-activity page fails after one or more valid pages, the service
+keeps the validated earlier pages, sets `activities: true` and
+`activities_truncated: true`, emits exactly one `provider_unavailable` warning,
+and treats the provider as an isolated failure for status purposes. If the first
+page fails, `activities` is unavailable and no period activities are retained.
+Cap exhaustion instead emits one `activities_truncated` warning and is
+informational rather than a provider failure.
+
+The latest-run search is also bounded at 1,000 newest activities, fetched in up
+to five 200-record pages. If it finds a matching activity, that date is
+authoritative and no later page is requested. If it reaches 1,000 without a
+match, `last_run` is unavailable and one `activities_truncated` warning explains
+that the bounded search was inconclusive. This warning is informational and does
+not by itself cause `partial_success`. A shorter successful response with no
+match means no known run and leaves `last_run_date`/`days_since_last_run` as
+`null` without a warning. A page exception before a match is an isolated
+`provider_unavailable` failure; already-inspected pages need not be returned
+because they contain no matching run.
 
 For sleep, HRV, and readiness, a legitimately empty response means `None`, an
 empty object/list, or a known response root with no metric values. That condition
@@ -226,7 +248,7 @@ data from a numeric zero without learning Garmin DTO shapes.
     {
       "date": "2026-08-07",
       "sport": "cycling",
-      "duration_minutes": 58,
+      "duration_minutes": 58.0,
       "distance_km": 27.4,
       "average_hr": 132,
       "max_hr": 158,
@@ -277,7 +299,16 @@ data from a numeric zero without learning Garmin DTO shapes.
       "feedback": null
     }
   },
-  "scheduled_workouts": [],
+  "scheduled_workouts": [
+    {
+      "date": "2026-08-10",
+      "scheduled_workout_id": 987654321,
+      "workout_id": 123456789,
+      "name": "Easy Run 40",
+      "sport": "running",
+      "completed": false
+    }
+  ],
   "warnings": []
 }
 ```
@@ -477,9 +508,14 @@ A capped period read reports, for example:
 {
   "provider": "activities",
   "code": "activities_truncated",
-  "message": "Activity history reached the 1000-record limit; period totals are lower bounds."
+  "message": "Activity history reached the 200-record limit; period totals are lower bounds."
 }
 ```
+
+The message interpolates the computed cap: 200 in the default example, 400 for
+30 days, and 1,000 for 90 days. The same code with provider `last_run` reports an
+inconclusive capped latest-run search and does not claim period totals are lower
+bounds.
 
 The pinned client's normal API reads collapse 401, 429, 5xx, and timeout failures
 into exception surfaces that do not retain reliable structured status/cause data.
@@ -503,27 +539,33 @@ table:
 |---|---|---|---|
 | `days` invalid | `error` | `invalid_days` | no Garmin calls |
 | configured client missing/globally unusable before reads | `error` | `client_unavailable` | no |
-| period-activities call raises confirmed `GarminConnectAuthenticationError` | `error` | `authentication_required` | no; this first core read is the session check |
 | at least one core provider succeeds; no provider failures | `success` | `null` | complete |
 | at least one core provider succeeds; one or more isolated provider failures | `partial_success` | `null` | complete remaining reads |
-| neither core provider succeeds | `error` | `context_unavailable` | complete bounded reads unless already fatal |
+| both core providers fail | `error` | `context_unavailable` | stop immediately after the second core result |
 | only legitimate optional-data absence occurs | `success` | `null` | complete |
 | only `activities_truncated` warning occurs | `success` | `null` | complete |
 
 An isolated failure means an exception, JSON-decode failure, or non-empty invalid
 shape from any provider after the fatal conditions above have been excluded. A
 warning alone does not imply `partial_success`: `activities_truncated` is an
-informational completeness warning, and legitimate missing optional data emits
+informational completeness warning for either period activities or an
+inconclusive capped last-run search, and legitimate missing optional data emits
 no warning.
 
-Authentication classification is provider-specific. `get_stats` may raise
-`GarminConnectAuthenticationError` for `privacyProtected: true` or an empty daily
-summary even when the session is healthy. Any `daily_stats` authentication error
-is therefore isolated as `provider_unavailable`, never fatal. After the first
-period-activities call succeeds, authentication-shaped errors from optional
-providers are also isolated because v1 cannot prove they are global session
-failures. Only the first core activities call's authentication exception is
-treated as confirmed client-level session failure.
+Runtime authentication failure cannot be identified reliably on pinned
+`garminconnect==0.3.2`. Read-path `connectapi` wraps inner authentication, 429,
+5xx, and timeout failures into `GarminConnectConnectionError` without structured
+status/cause data. The unreachable `authentication_required` result is therefore
+not part of v1. A dead session normally causes both core providers to fail and
+returns `context_unavailable`; its sanitized error message says to re-run
+`garmin-mcp-auth` if the session expired, otherwise retry later. The service does
+not parse exception strings or attempt a rate-limit short-circuit. Stopping after
+both core failures bounds repeated calls during a likely outage or rate limit.
+
+`get_stats` separately converts both `privacyProtected: true` and an empty daily
+summary into a `GarminConnectConnectionError`. Because period activities or the
+schedule has already established a usable core before optional providers run,
+this daily-stats exception is always isolated as `provider_unavailable`.
 
 The scheduled-workout provider has its own exception boundary because
 `query_garmin_graphql` bypasses normal `connectapi` translation. Raw request
@@ -638,8 +680,10 @@ The stable error object never contains a raw exception:
 }
 ```
 
-Error codes are limited to `invalid_days`, `authentication_required`,
-`client_unavailable`, and `context_unavailable` in v1.
+Error codes are limited to `invalid_days`, `client_unavailable`, and
+`context_unavailable` in v1. The `context_unavailable` message is:
+`Core Garmin context is unavailable. Re-run garmin-mcp-auth if your session
+expired; otherwise retry later.`
 
 ## MCP and Profile Integration
 
@@ -700,15 +744,17 @@ Provider and service tests cover:
 3. latest run outside the period and days-since-last-run calculation;
 4. the shared running vocabulary applied to normal, trail, and treadmill runs;
 5. same-day last run producing `days_since_last_run: 0`;
-6. a bounded full last-run search producing an inconclusive warning;
+6. 200-record latest-run paging stopping on the first match, plus a bounded full
+   search producing an informational inconclusive warning;
 7. an empty activity period;
-8. explicit `sortOrder="desc"`, 200-record paging, calculated caps, and newest-
-   first output independent of provider response order;
+8. explicit `sortBy="startLocal"`/`sortOrder="desc"`, 200-record paging,
+   calculated caps, and newest-first output independent of response order;
 9. list, `activityList`, `None`, and invalid activity response roots for both
    period and last-run providers;
 10. activity field reduction, raw-first aggregation, precision, and the 20-item
    output bound;
-11. calculated-cap truncation, warning, and lower-bound semantics;
+11. calculated-cap truncation plus mid-paging failure retention, warning, and
+    lower-bound semantics;
 12. scheduled workouts in exactly today through today plus six days;
 13. GraphQL request exceptions, JSON decoding, GraphQL `errors`, invalid shapes,
     and `None` collection normalization using production exception types;
@@ -724,11 +770,14 @@ Provider and service tests cover:
 20. Garmin-supplied ACWR retained and absent ACWR never derived from loads;
 21. a legitimately missing optional metric without a warning;
 22. each provider-to-availability-key mapping;
-23. fixed execution order with period activities as the first session check;
+23. fixed execution order with both core providers first and immediate stop when
+    both fail;
 24. the complete status decision table, including both core-provider
     combinations and warnings that do not imply `partial_success`;
-25. confirmed first-core authentication and missing/global client failures;
-26. all core providers unavailable, producing total `error` without leaks;
+25. read-path authentication collapsing to core `context_unavailable`, plus
+    missing/global client failures;
+26. both core providers unavailable, producing total `error`, stopping optional
+    calls, and not leaking exception details;
 27. invalid values and types for `days`, with no provider calls and a stable
     response envelope;
 28. accepted boundary values `days=1` and `days=90`;
