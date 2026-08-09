@@ -93,8 +93,8 @@ def test_compile_threshold_repeat_converts_pace_and_emits_repeat_metadata():
     nested = repeat["workoutSteps"]
     assert [step["stepOrder"] for step in nested] == [1, 2]
     assert nested[0]["targetType"] == {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
-    assert nested[0]["targetValueOne"] == pytest.approx(1000 / 260)
-    assert nested[0]["targetValueTwo"] == pytest.approx(1000 / 270)
+    assert nested[0]["targetValueOne"] == pytest.approx(1000 / 270)
+    assert nested[0]["targetValueTwo"] == pytest.approx(1000 / 260)
 
 
 def test_compile_time_and_distance_repeats_use_canonical_end_conditions():

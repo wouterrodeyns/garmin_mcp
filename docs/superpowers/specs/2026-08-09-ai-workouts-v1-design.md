@@ -138,9 +138,10 @@ types, end-condition IDs/keys, and target IDs/keys. It emits:
 - target values at the executable-step level, never inside `targetType`;
 - no-target ID/key 1/`no.target` when a friendly target is absent.
 
-Pace is converted from minutes per kilometre to metres per second. Garmin's pace
-range uses the faster speed in `targetValueOne` and slower speed in
-`targetValueTwo`, so `4:20-4:30/km` becomes approximately 3.8462 and 3.7037 m/s.
+Pace is converted from minutes per kilometre to metres per second. Garmin's
+live-verified safe pace range order is ascending speed: the slower speed in
+`targetValueOne` and faster speed in `targetValueTwo`, so `4:20-4:30/km` becomes
+approximately 3.7037 and 3.8462 m/s.
 Named HR and power zones use `zoneNumber`; custom HR and watt ranges use
 `targetValueOne` and `targetValueTwo`. The compiler never mixes the two forms.
 

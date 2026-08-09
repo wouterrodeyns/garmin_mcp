@@ -45,7 +45,12 @@ def _bounds_target(target: Target, target_id: int, target_key: str) -> dict[str,
 
 
 def _pace_target(target: Target) -> dict[str, Any]:
-    return _bounds_target(target, 6, "pace.zone")
+    compiled = _bounds_target(target, 6, "pace.zone")
+    compiled["targetValueOne"], compiled["targetValueTwo"] = (
+        compiled["targetValueTwo"],
+        compiled["targetValueOne"],
+    )
+    return compiled
 
 
 def _heart_rate_zone_target(target: Target) -> dict[str, Any]:

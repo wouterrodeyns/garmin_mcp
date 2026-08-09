@@ -84,6 +84,9 @@ def test_create_threshold_uploads_prepared_repeat_and_schedules_once(
     }
     uploaded = mock_garmin_client.upload_workout.call_args.args[0]
     assert uploaded["workoutSegments"][0]["workoutSteps"][1]["type"] == "RepeatGroupDTO"
+    pace_step = uploaded["workoutSegments"][0]["workoutSteps"][1]["workoutSteps"][0]
+    assert pace_step["targetValueOne"] == pytest.approx(1000 / 270)
+    assert pace_step["targetValueTwo"] == pytest.approx(1000 / 260)
     mock_garmin_client.client.post.assert_called_once()
 
 
