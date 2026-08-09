@@ -26,7 +26,8 @@ def register_tools(app: Any) -> Any:
 
         days is an inclusive retrospective lookback from 1 through 90.
         Scheduled workouts always cover today through the following six days.
-        Optional metrics may be null; isolated failures return warnings.
+        Garmin metric availability varies by device and account; optional
+        metrics may be unavailable or null. Isolated failures return warnings.
         """
         result = get_training_context_service(garmin_client, days)
         return json.dumps(result, indent=2)

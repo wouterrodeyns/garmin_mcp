@@ -117,3 +117,15 @@ async def test_get_training_context_accepts_explicit_days(monkeypatch):
     assert set(payload) == COMPACT_KEYS
     for write in writes.values():
         write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_training_context_documents_device_dependent_availability():
+    app = FastMCP("test")
+    ai_training.register_tools(app)
+
+    tools = {tool.name: tool for tool in await app.list_tools()}
+    description = tools["get_training_context"].description.lower()
+
+    assert "varies by device and account" in description
+    assert "metrics may be unavailable" in description
