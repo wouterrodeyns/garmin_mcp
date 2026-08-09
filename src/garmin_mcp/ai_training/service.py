@@ -10,14 +10,9 @@ from typing import Any
 from garmin_mcp.ai_training.providers import (
     RUNNING_TYPE_KEYS,
     ProviderResult,
-    get_daily_stats,
-    get_hrv,
     get_last_run,
     get_period_activities,
     get_scheduled_workouts,
-    get_sleep,
-    get_training_readiness,
-    get_training_status,
 )
 
 AVAILABILITY_KEYS = (
@@ -280,15 +275,6 @@ def _populate_scheduled_workouts(result: dict[str, Any], provider_result: Provid
         )
 
 
-def _read_optional_sections(client: Any, day: str) -> None:
-    """Keep the future optional-section reads bounded while their schema lands."""
-    get_daily_stats(client, day)
-    get_sleep(client, day)
-    get_hrv(client, day)
-    get_training_readiness(client, day)
-    get_training_status(client, day)
-
-
 def get_training_context_service(client: Any, days: int = 14, today: date | None = None) -> dict[str, Any]:
     """Return a compact training-context envelope with stable null sections."""
     effective_today = today or date.today()
@@ -308,5 +294,4 @@ def get_training_context_service(client: Any, days: int = 14, today: date | None
     _populate_activities(result, period_result)
     _populate_scheduled_workouts(result, schedule_result)
     _populate_last_run(result, last_run_result, effective_today)
-    _read_optional_sections(client, end)
     return result

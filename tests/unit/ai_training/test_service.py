@@ -66,11 +66,11 @@ def providers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     monkeypatch.setattr(service, "get_period_activities", mocks["activities"])
     monkeypatch.setattr(service, "get_scheduled_workouts", mocks["scheduled"])
     monkeypatch.setattr(service, "get_last_run", mocks["last_run"])
-    monkeypatch.setattr(service, "get_daily_stats", mocks["daily_stats"])
-    monkeypatch.setattr(service, "get_sleep", mocks["sleep"])
-    monkeypatch.setattr(service, "get_hrv", mocks["hrv"])
-    monkeypatch.setattr(service, "get_training_readiness", mocks["readiness"])
-    monkeypatch.setattr(service, "get_training_status", mocks["training_status"])
+    monkeypatch.setattr(service, "get_daily_stats", mocks["daily_stats"], raising=False)
+    monkeypatch.setattr(service, "get_sleep", mocks["sleep"], raising=False)
+    monkeypatch.setattr(service, "get_hrv", mocks["hrv"], raising=False)
+    monkeypatch.setattr(service, "get_training_readiness", mocks["readiness"], raising=False)
+    monkeypatch.setattr(service, "get_training_status", mocks["training_status"], raising=False)
     return mocks
 
 
@@ -157,6 +157,13 @@ def test_successful_empty_period_is_available_with_zero_aggregates(providers: di
         "days_since_last_run": None, "activities_truncated": False,
     }
     assert result["recent_activities"] == []
+
+
+def test_task_two_does_not_read_unpopulated_optional_sections(providers: dict[str, Mock]):
+    get_training_context_service(Mock(), today=TODAY)
+
+    for name in ("daily_stats", "sleep", "hrv", "readiness", "training_status"):
+        assert providers[name].call_count == 0
 
 
 def test_unavailable_empty_period_keeps_unknown_aggregates_null(providers: dict[str, Mock]):
