@@ -111,6 +111,18 @@ def _end_condition(action: ActionStep) -> dict[str, Any]:
     return compiler(action.end_condition)
 
 
+def _compile_target(action: ActionStep) -> dict[str, Any]:
+    if action.target is None:
+        return _no_target()
+    compiler = TARGET_COMPILERS.get(action.target.kind)
+    if compiler is None:
+        raise ValueError(
+            f"unknown target kind {action.target.kind!r} "
+            f"for action {action.action!r}"
+        )
+    return compiler(action.target)
+
+
 def _compile_action(action: ActionStep, order: int) -> dict[str, Any]:
     compiled: dict[str, Any] = {
         "type": "ExecutableStepDTO",
@@ -118,11 +130,7 @@ def _compile_action(action: ActionStep, order: int) -> dict[str, Any]:
         "stepType": _step_type(action.action),
         "endCondition": _end_condition(action),
     }
-    compiled.update(
-        _no_target()
-        if action.target is None
-        else TARGET_COMPILERS[action.target.kind](action.target)
-    )
+    compiled.update(_compile_target(action))
     if action.end_condition.value is not None:
         compiled["endConditionValue"] = action.end_condition.value
     if action.exercise is not None:

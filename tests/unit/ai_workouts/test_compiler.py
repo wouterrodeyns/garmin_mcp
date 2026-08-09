@@ -5,6 +5,8 @@ import pytest
 from garmin_mcp.ai_workouts import (
     END_CONDITION_COMPILERS,
     END_CONDITION_PARSERS,
+    TARGET_COMPILERS,
+    TARGET_PARSERS,
     ActionStep,
     EndCondition,
     WorkoutDefinition,
@@ -219,3 +221,23 @@ def test_compile_sport_type_dicts_are_independent_between_locations_and_calls():
     first["workoutSegments"][0]["sportType"]["sportTypeKey"] = "changed"
     assert second["sportType"] == {"sportTypeId": 1, "sportTypeKey": "running"}
     assert second["workoutSegments"][0]["sportType"] == {"sportTypeId": 1, "sportTypeKey": "running"}
+
+
+def test_compile_reports_parser_only_target_extension_contextually():
+    original_parser = TARGET_PARSERS.get("cadence")
+    original_compiler = TARGET_COMPILERS.get("cadence")
+    TARGET_PARSERS["cadence"] = lambda value: (float(value), float(value) + 1)
+    TARGET_COMPILERS.pop("cadence", None)
+    try:
+        definition = validate_workout("Unsupported Target", "running", [{"run": {"duration": "1m", "cadence": 90}}])
+        with pytest.raises(ValueError, match="unknown target kind 'cadence'.*action 'run'"):
+            compile_workout(definition)
+    finally:
+        if original_parser is None:
+            TARGET_PARSERS.pop("cadence", None)
+        else:
+            TARGET_PARSERS["cadence"] = original_parser
+        if original_compiler is None:
+            TARGET_COMPILERS.pop("cadence", None)
+        else:
+            TARGET_COMPILERS["cadence"] = original_compiler
