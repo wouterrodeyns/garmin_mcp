@@ -48,7 +48,9 @@ def create_workout_service(
         return result
 
     try:
-        scheduling = schedule_workout_for_date(workout_id, definition.schedule_date)
+        scheduling = schedule_workout_for_date(
+            workout_id, definition.schedule_date, client=client
+        )
     except Exception as exc:
         result.update(
             {

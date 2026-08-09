@@ -602,13 +602,16 @@ def _curate_scheduled_workout(scheduled: dict) -> dict:
     return {k: v for k, v in summary.items() if v is not None}
 
 
-def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
+def _is_already_scheduled(
+    workout_id: int, calendar_date: str, client: Any = None
+) -> bool:
     """Return True if workout_id is already scheduled on calendar_date.
 
     Used to make schedule_workout / schedule_workouts idempotent. The Garmin
     schedule endpoint is not idempotent: a second POST creates a second
     calendar entry on the same day. Querying first avoids the duplicate.
     """
+    active_client = client if client is not None else garmin_client
     try:
         _validate_date(calendar_date, "calendar_date")
         query = {
@@ -617,7 +620,7 @@ def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
                 f'startDate:"{calendar_date}", endDate:"{calendar_date}")}}'
             )
         }
-        result = garmin_client.query_garmin_graphql(query) or {}
+        result = active_client.query_garmin_graphql(query) or {}
         existing = (
             result.get("data", {}).get("workoutScheduleSummariesScalar", []) or []
         )
@@ -634,11 +637,14 @@ def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
     return False
 
 
-def schedule_workout_for_date(workout_id: int, calendar_date: str) -> dict:
-    """Schedule a workout once, returning the existing scheduling result shape."""
+def schedule_workout_for_date(
+    workout_id: int, calendar_date: str, client: Any = None
+) -> dict:
+    """Schedule a workout once with an optional explicitly bound client."""
     _validate_date(calendar_date, "calendar_date")
+    active_client = client if client is not None else garmin_client
 
-    if _is_already_scheduled(workout_id, calendar_date):
+    if _is_already_scheduled(workout_id, calendar_date, client=active_client):
         return {
             "status": "success",
             "workout_id": workout_id,
@@ -650,7 +656,7 @@ def schedule_workout_for_date(workout_id: int, calendar_date: str) -> dict:
             ),
         }
 
-    response = garmin_client.client.post(
+    response = active_client.client.post(
         "connectapi",
         f"workout-service/schedule/{workout_id}",
         json={"date": calendar_date},

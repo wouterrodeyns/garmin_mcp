@@ -87,6 +87,36 @@ def test_create_threshold_uploads_prepared_repeat_and_schedules_once(
     mock_garmin_client.client.post.assert_called_once()
 
 
+def test_scheduled_creation_uses_injected_client_for_upload_and_schedule():
+    client_a = MagicMock()
+    client_a.upload_workout.return_value = {"workoutId": 107}
+    client_a.query_garmin_graphql.return_value = {
+        "data": {"workoutScheduleSummariesScalar": []}
+    }
+    client_a.client.post.return_value = MagicMock(status_code=200)
+    client_b = MagicMock()
+    client_b.query_garmin_graphql.return_value = {
+        "data": {"workoutScheduleSummariesScalar": []}
+    }
+    client_b.client.post.return_value = MagicMock(status_code=200)
+    workouts.configure(client_b)
+
+    result = create_workout_service(
+        client_a,
+        "Client Affinity",
+        "running",
+        [{"run": {"duration": "5m"}}],
+        "2026-09-01",
+    )
+
+    assert result["status"] == "success"
+    client_a.upload_workout.assert_called_once()
+    client_a.query_garmin_graphql.assert_called_once()
+    client_a.client.post.assert_called_once()
+    client_b.query_garmin_graphql.assert_not_called()
+    client_b.client.post.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("schedule_date", "steps", "message"),
     [
@@ -157,7 +187,7 @@ def test_schedule_failure_preserves_uploaded_id_and_never_deletes(
     monkeypatch.setattr(
         service,
         "schedule_workout_for_date",
-        lambda *_args: {"status": "failed", "message": "calendar rejected"},
+        lambda *_args, **_kwargs: {"status": "failed", "message": "calendar rejected"},
     )
 
     result = create_workout_service(
@@ -183,7 +213,7 @@ def test_schedule_exception_preserves_uploaded_id_and_never_deletes(
 ):
     mock_garmin_client.upload_workout.return_value = {"workoutId": 104}
 
-    def raise_schedule(*_args):
+    def raise_schedule(*_args, **_kwargs):
         raise RuntimeError("schedule offline")
 
     monkeypatch.setattr(service, "schedule_workout_for_date", raise_schedule)
@@ -213,7 +243,7 @@ def test_idempotent_schedule_marks_success_without_extra_details(
     monkeypatch.setattr(
         service,
         "schedule_workout_for_date",
-        lambda *_args: {"status": "success", "idempotent": True},
+        lambda *_args, **_kwargs: {"status": "success", "idempotent": True},
     )
 
     result = create_workout_service(
