@@ -1,6 +1,8 @@
 """Unit tests for the env-var tool filter (_ToolFilter)."""
 
-from garmin_mcp import _ToolFilter
+import pytest
+
+from garmin_mcp import TOOL_PROFILES, _ToolFilter, _resolve_tool_filters
 
 
 class FakeApp:
@@ -93,3 +95,47 @@ def test_passthrough_to_wrapped_app():
     app = FakeApp()
     filt = _ToolFilter(app, set(), set())
     assert filt.run() == "ran"
+
+
+def test_ai_coach_profile_registers_selected_workout_tools_only():
+    enabled, disabled = _resolve_tool_filters(" ai-Coach ", None, None)
+
+    assert enabled == TOOL_PROFILES["ai-coach"]
+    assert disabled == set()
+    assert {"create_workout", "get_activities", "get_workout_by_id"} <= enabled
+    assert not {
+        "upload_workout",
+        "upload_workouts",
+        "delete_workouts",
+        "create_manual_activity",
+    } & enabled
+
+
+def test_explicit_enabled_tools_override_profile_and_disabled_tools():
+    enabled, disabled = _resolve_tool_filters(
+        "ai-coach", " GET_DEVICES, get_workouts ", "get_workouts"
+    )
+
+    assert enabled == {"get_devices", "get_workouts"}
+    assert disabled == set()
+
+
+def test_ai_coach_profile_subtracts_disabled_tools():
+    enabled, disabled = _resolve_tool_filters(
+        "AI-COACH", None, " GET_WORKOUTS, create_workout "
+    )
+
+    assert enabled == TOOL_PROFILES["ai-coach"] - {"get_workouts", "create_workout"}
+    assert disabled == set()
+
+
+def test_empty_profile_preserves_denylist_behavior():
+    enabled, disabled = _resolve_tool_filters(None, None, " GET_DEVICES, get_devices ")
+
+    assert enabled == set()
+    assert disabled == {"get_devices"}
+
+
+def test_unknown_profile_names_are_rejected():
+    with pytest.raises(ValueError, match=r"Unknown GARMIN_TOOL_PROFILE.*ai-coach"):
+        _resolve_tool_filters("unknown", None, None)

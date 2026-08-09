@@ -22,6 +22,7 @@ from garmin_mcp import weight_management
 from garmin_mcp import challenges
 from garmin_mcp import training
 from garmin_mcp import workouts
+from garmin_mcp import ai_workouts
 from garmin_mcp import workout_templates
 from garmin_mcp import data_management
 from garmin_mcp import womens_health
@@ -106,8 +107,47 @@ def _parse_tool_set(value):
     return {name.strip().lower() for name in value.split(",") if name.strip()}
 
 
-enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
-disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+TOOL_PROFILES = {
+    "ai-coach": {
+        "create_workout",
+        "get_activities",
+        "get_activities_by_date",
+        "get_activity",
+        "get_workouts",
+        "get_workout_by_id",
+        "get_scheduled_workouts",
+        "schedule_workout",
+        "unschedule_workout",
+        "delete_workout",
+    },
+}
+
+
+def _resolve_tool_filters(profile_value, enabled_value, disabled_value):
+    """Resolve profile, allowlist, and denylist settings into tool filters."""
+    explicit_enabled = _parse_tool_set(enabled_value)
+    if explicit_enabled:
+        return explicit_enabled, set()
+
+    disabled = _parse_tool_set(disabled_value)
+    profile_name = profile_value.strip().lower() if profile_value else ""
+    if profile_name:
+        if profile_name not in TOOL_PROFILES:
+            valid_profiles = ", ".join(sorted(TOOL_PROFILES))
+            raise ValueError(
+                f"Unknown GARMIN_TOOL_PROFILE {profile_value!r}; "
+                f"valid profile(s): {valid_profiles}"
+            )
+        return TOOL_PROFILES[profile_name] - disabled, set()
+
+    return set(), disabled
+
+
+enabled_tools, disabled_tools = _resolve_tool_filters(
+    os.getenv("GARMIN_TOOL_PROFILE"),
+    os.getenv("GARMIN_ENABLED_TOOLS"),
+    os.getenv("GARMIN_DISABLED_TOOLS"),
+)
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
@@ -408,6 +448,7 @@ def main():
     challenges.configure(garmin_client)
     training.configure(garmin_client)
     workouts.configure(garmin_client)
+    ai_workouts.configure(garmin_client)
     data_management.configure(garmin_client)
     womens_health.configure(garmin_client)
     nutrition.configure(garmin_client)
@@ -434,6 +475,7 @@ def main():
     app = challenges.register_tools(app)
     app = training.register_tools(app)
     app = workouts.register_tools(app)
+    app = ai_workouts.register_tools(app)
     app = data_management.register_tools(app)
     app = womens_health.register_tools(app)
     app = nutrition.register_tools(app)
