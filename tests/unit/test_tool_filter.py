@@ -129,6 +129,36 @@ def test_ai_coach_profile_subtracts_disabled_tools():
     assert disabled == set()
 
 
+def test_ai_coach_profile_with_all_members_disabled_stays_restrictive():
+    enabled, disabled = _resolve_tool_filters(
+        "ai-coach",
+        None,
+        ",".join(TOOL_PROFILES["ai-coach"]),
+    )
+    app = FakeApp()
+    filt = _ToolFilter(app, enabled, disabled, allowlist_active=True)
+    _register(filt, ["get_workouts", "create_workout", "upload_workout"])
+
+    assert app.registered == []
+
+
+def test_profile_filter_warns_for_typo_in_disabled_tools_only():
+    enabled, disabled = _resolve_tool_filters(
+        "ai-coach", None, "get_workouts, create_workuout"
+    )
+    app = FakeApp()
+    filt = _ToolFilter(
+        app,
+        enabled,
+        disabled,
+        allowlist_active=True,
+        configured_names={"get_workouts", "create_workuout"},
+    )
+    _register(filt, ["get_workouts", "create_workout", "upload_workout"])
+
+    assert filt.unknown_filter_names() == ["create_workuout"]
+
+
 def test_empty_profile_preserves_denylist_behavior():
     enabled, disabled = _resolve_tool_filters(None, None, " GET_DEVICES, get_devices ")
 

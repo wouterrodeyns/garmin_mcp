@@ -143,11 +143,23 @@ def _resolve_tool_filters(profile_value, enabled_value, disabled_value):
     return set(), disabled
 
 
+_profile_value = os.getenv("GARMIN_TOOL_PROFILE")
+_enabled_value = os.getenv("GARMIN_ENABLED_TOOLS")
+_disabled_value = os.getenv("GARMIN_DISABLED_TOOLS")
 enabled_tools, disabled_tools = _resolve_tool_filters(
-    os.getenv("GARMIN_TOOL_PROFILE"),
-    os.getenv("GARMIN_ENABLED_TOOLS"),
-    os.getenv("GARMIN_DISABLED_TOOLS"),
+    _profile_value,
+    _enabled_value,
+    _disabled_value,
 )
+_parsed_enabled_value = _parse_tool_set(_enabled_value)
+_profile_name = _profile_value.strip().lower() if _profile_value else ""
+_tool_filter_active = bool(_parsed_enabled_value) or _profile_name in TOOL_PROFILES
+if _profile_name in TOOL_PROFILES and not _parsed_enabled_value:
+    _configured_filter_names = _parse_tool_set(_enabled_value) | _parse_tool_set(
+        _disabled_value
+    )
+else:
+    _configured_filter_names = None
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
@@ -221,15 +233,26 @@ class _ToolFilter:
     attribute access (``run``, ``resource``, ...) passes through to the app.
     """
 
-    def __init__(self, app, enabled, disabled):
+    def __init__(
+        self,
+        app,
+        enabled,
+        disabled,
+        allowlist_active=None,
+        configured_names=None,
+    ):
         self._app = app
         self._enabled = enabled
         self._disabled = disabled
+        self._allowlist_active = (
+            bool(enabled) if allowlist_active is None else allowlist_active
+        )
+        self._configured_names = configured_names
         self._seen = set()  # tool names encountered, for typo detection
 
     def _allowed(self, name):
         name = name.lower()
-        if self._enabled:
+        if self._allowlist_active:
             return name in self._enabled
         return name not in self._disabled
 
@@ -252,7 +275,11 @@ class _ToolFilter:
 
     def unknown_filter_names(self):
         """Configured names that never matched a real tool (likely typos)."""
-        configured = self._enabled or self._disabled
+        configured = (
+            self._configured_names
+            if self._configured_names is not None
+            else self._enabled or self._disabled
+        )
         return sorted(configured - self._seen)
 
     def __getattr__(self, item):
@@ -459,7 +486,13 @@ def main():
     # Create the MCP app, wrapped so the env-var filter can drop tools.
     # host/port only matter for the HTTP transports; stdio ignores them.
     fastmcp = FastMCP("Garmin Connect v1.0", host=http_host, port=http_port)
-    app = _ToolFilter(fastmcp, enabled_tools, disabled_tools)
+    app = _ToolFilter(
+        fastmcp,
+        enabled_tools,
+        disabled_tools,
+        allowlist_active=_tool_filter_active,
+        configured_names=_configured_filter_names,
+    )
     if enabled_tools:
         print(f"Tool filter: allowlist of {len(enabled_tools)} tool(s).", file=sys.stderr)
     elif disabled_tools:
