@@ -257,5 +257,5 @@ def get_training_readiness(client: Any, date: str) -> Any:
     return client.get_morning_training_readiness(date)
 
 
-def get_training_status(client: Any) -> Any:
-    return client.get_training_status()
+def get_training_status(client: Any, date: str) -> Any:
+    return client.get_training_status(date)

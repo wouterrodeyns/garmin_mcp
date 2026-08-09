@@ -348,7 +348,7 @@ def test_scheduled_workouts_maps_other_exceptions_to_sanitized_unavailable():
         (get_sleep, "get_sleep_data", ("2026-01-01",), {"sleep": 1}),
         (get_hrv, "get_hrv_data", ("2026-01-01",), {"hrv": 1}),
         (get_training_readiness, "get_morning_training_readiness", ("2026-01-01",), {"readiness": 1}),
-        (get_training_status, "get_training_status", (), {"status": 1}),
+        (get_training_status, "get_training_status", ("2026-01-01",), {"status": 1}),
     ],
 )
 def test_raw_delegates_forward_calls_without_wrapping(provider, method, args, returned):
@@ -366,7 +366,7 @@ def test_raw_delegates_forward_calls_without_wrapping(provider, method, args, re
         (get_sleep, "get_sleep_data", ("2026-01-01",)),
         (get_hrv, "get_hrv_data", ("2026-01-01",)),
         (get_training_readiness, "get_morning_training_readiness", ("2026-01-01",)),
-        (get_training_status, "get_training_status", ()),
+        (get_training_status, "get_training_status", ("2026-01-01",)),
     ],
 )
 def test_raw_delegates_do_not_catch_exceptions(provider, method, args):
