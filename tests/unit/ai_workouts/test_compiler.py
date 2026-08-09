@@ -2,7 +2,15 @@ from copy import deepcopy
 
 import pytest
 
-from garmin_mcp.ai_workouts import compile_workout, validate_workout
+from garmin_mcp.ai_workouts import (
+    END_CONDITION_COMPILERS,
+    END_CONDITION_PARSERS,
+    ActionStep,
+    EndCondition,
+    WorkoutDefinition,
+    compile_workout,
+    validate_workout,
+)
 
 
 THRESHOLD_STEPS = [
@@ -164,3 +172,50 @@ def test_compile_does_not_mutate_normalized_input():
     result["workoutSegments"][0]["workoutSteps"][0]["stepOrder"] = 99
     assert definition == before
 
+
+def test_compile_uses_extensible_end_condition_parser_and_compiler_registries():
+    original_parser = END_CONDITION_PARSERS.get("calories")
+    original_compiler = END_CONDITION_COMPILERS.get("calories")
+    END_CONDITION_PARSERS["calories"] = lambda value: float(value)
+    END_CONDITION_COMPILERS["calories"] = lambda condition: {
+        "conditionTypeId": 4,
+        "conditionTypeKey": "calories",
+    }
+    try:
+        result = compile_friendly("Calorie Run", "running", [{"run": {"calories": 250}}])
+    finally:
+        if original_parser is None:
+            END_CONDITION_PARSERS.pop("calories", None)
+        else:
+            END_CONDITION_PARSERS["calories"] = original_parser
+        if original_compiler is None:
+            END_CONDITION_COMPILERS.pop("calories", None)
+        else:
+            END_CONDITION_COMPILERS["calories"] = original_compiler
+
+    step = result["workoutSegments"][0]["workoutSteps"][0]
+    assert step["endCondition"] == {"conditionTypeId": 4, "conditionTypeKey": "calories"}
+    assert step["endConditionValue"] == 250.0
+
+
+def test_compile_reports_unknown_end_condition_kind_contextually():
+    definition = WorkoutDefinition(
+        "Unsupported",
+        "running",
+        (ActionStep("run", EndCondition("unknown", 60.0)),),
+    )
+    with pytest.raises(ValueError, match="unknown end condition kind 'unknown'"):
+        compile_workout(definition)
+
+
+def test_compile_sport_type_dicts_are_independent_between_locations_and_calls():
+    definition = validate_workout("Alias Safety", "running", [{"run": {"duration": "1m"}}])
+    first = compile_workout(definition)
+    second = compile_workout(definition)
+
+    assert first["sportType"] is not first["workoutSegments"][0]["sportType"]
+    assert first["sportType"] is not second["sportType"]
+    first["sportType"]["sportTypeId"] = 99
+    first["workoutSegments"][0]["sportType"]["sportTypeKey"] = "changed"
+    assert second["sportType"] == {"sportTypeId": 1, "sportTypeKey": "running"}
+    assert second["workoutSegments"][0]["sportType"] == {"sportTypeId": 1, "sportTypeKey": "running"}

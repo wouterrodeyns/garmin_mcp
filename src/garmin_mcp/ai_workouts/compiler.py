@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from .schema import ActionStep, Target, WorkoutDefinition, WorkoutStep
+from .schema import ActionStep, EndCondition, Target, WorkoutDefinition, WorkoutStep
 
 
 SPORT_TYPES: Mapping[str, tuple[int, str]] = {
@@ -24,14 +24,6 @@ STEP_TYPES: Mapping[str, tuple[int, str]] = {
     "recovery": (4, "recovery"),
     "rest": (5, "rest"),
 }
-
-END_CONDITIONS: Mapping[str, tuple[int, str]] = {
-    "lap_button": (1, "lap.button"),
-    "duration": (2, "time"),
-    "distance": (3, "distance"),
-    "reps": (10, "reps"),
-}
-
 
 def _target_type(target_id: int, target_key: str) -> dict[str, Any]:
     return {"workoutTargetTypeId": target_id, "workoutTargetTypeKey": target_key}
@@ -86,14 +78,37 @@ TARGET_COMPILERS: dict[str, TargetCompiler] = {
 }
 
 
+EndConditionCompiler = Callable[[EndCondition], dict[str, Any]]
+
+
+def _condition_compiler(condition_id: int, condition_key: str) -> EndConditionCompiler:
+    def compile_condition(_condition: EndCondition) -> dict[str, Any]:
+        return {"conditionTypeId": condition_id, "conditionTypeKey": condition_key}
+
+    return compile_condition
+
+
+END_CONDITION_COMPILERS: dict[str, EndConditionCompiler] = {
+    "lap_button": _condition_compiler(1, "lap.button"),
+    "duration": _condition_compiler(2, "time"),
+    "distance": _condition_compiler(3, "distance"),
+    "reps": _condition_compiler(10, "reps"),
+}
+
+
 def _step_type(action: str) -> dict[str, Any]:
     step_id, step_key = STEP_TYPES[action]
     return {"stepTypeId": step_id, "stepTypeKey": step_key}
 
 
 def _end_condition(action: ActionStep) -> dict[str, Any]:
-    condition_id, condition_key = END_CONDITIONS[action.end_condition.kind]
-    return {"conditionTypeId": condition_id, "conditionTypeKey": condition_key}
+    compiler = END_CONDITION_COMPILERS.get(action.end_condition.kind)
+    if compiler is None:
+        raise ValueError(
+            f"unknown end condition kind {action.end_condition.kind!r} "
+            f"for action {action.action!r}"
+        )
+    return compiler(action.end_condition)
 
 
 def _compile_action(action: ActionStep, order: int) -> dict[str, Any]:

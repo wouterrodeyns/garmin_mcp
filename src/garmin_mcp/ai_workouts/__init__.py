@@ -1,6 +1,6 @@
 """Friendly, normalized workout definitions for AI-facing workout tools."""
 
-from .compiler import TARGET_COMPILERS, compile_workout
+from .compiler import END_CONDITION_COMPILERS, TARGET_COMPILERS, compile_workout
 from .parsing import (
     END_CONDITION_PARSERS,
     TARGET_PARSERS,
@@ -26,6 +26,7 @@ from .schema import (
 
 __all__ = [
     "ActionStep",
+    "END_CONDITION_COMPILERS",
     "END_CONDITION_PARSERS",
     "EndCondition",
     "RepeatStep",
