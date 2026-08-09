@@ -8,10 +8,18 @@ from unittest.mock import Mock
 import pytest
 
 from garmin_mcp.ai_training.providers import ProviderResult
-from garmin_mcp.ai_training.service import get_training_context_service
+from garmin_mcp.ai_training.service import AVAILABILITY_KEYS, get_training_context_service
 
 
 TODAY = date(2026, 2, 14)
+
+
+def test_availability_keys_are_the_stable_public_contract():
+    assert AVAILABILITY_KEYS == (
+        "activities", "last_run", "scheduled_workouts", "sleep", "hrv",
+        "resting_heart_rate", "body_battery", "training_readiness", "recovery_time",
+        "training_status", "training_load", "load_focus", "vo2max",
+    )
 
 
 def activity(**overrides: object) -> dict[str, object]:
@@ -179,7 +187,7 @@ def test_reduces_activities_from_raw_values_and_rounds_only_final_totals(provide
     reduced = result["recent_activities"][0]  # type: ignore[index]
     assert reduced == {
         "sport": "running", "date": "2026-02-13", "duration_minutes": 30.6,
-        "distance_km": 1.25, "average_hr": 146, "max_hr": 172, "average_speed_kmh": 12.0,
+        "distance_km": 1.25, "average_hr": 146, "max_hr": 172, "average_speed_kph": 12.0,
     }
     assert "activityId" not in reduced and "name" not in reduced
 
@@ -299,12 +307,41 @@ def test_provider_warnings_and_activity_truncation_are_propagated(providers: dic
     assert result["warnings"] == [warning, {"provider": "scheduled_workouts", "code": "notice", "message": "x"}, {"provider": "last_run", "code": "notice", "message": "y"}]
 
 
+def test_retained_activities_remain_available_after_a_later_page_failure(providers: dict[str, Mock]):
+    providers["activities"].return_value = ProviderResult(data=(activity(),), failed=True, truncated=True)
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["availability"]["activities"] is True  # type: ignore[index]
+    assert result["training"]["activity_count"] == 1  # type: ignore[index]
+    assert result["training"]["activities_truncated"] is True  # type: ignore[index]
+
+
 def test_invalid_scheduled_entries_are_redacted_and_reported(providers: dict[str, Mock]):
     providers["scheduled"].return_value = ProviderResult(data=(schedule(), "secret raw payload"))
 
     result = get_training_context_service(Mock(), today=TODAY)
 
     assert result["scheduled_workouts"] == [{"date": "2026-02-15", "scheduled_workout_id": 22, "workout_id": 33, "workout_uuid": "uuid-44", "name": "Intervals", "sport": "RUNNING", "completed": False}]
+    assert result["warnings"] == [{
+        "provider": "scheduled_workouts", "code": "invalid_provider_response",
+        "message": "Scheduled workout response had an unexpected item.",
+    }]
+
+
+def test_scheduled_workouts_redact_structured_field_values(providers: dict[str, Mock]):
+    providers["scheduled"].return_value = ProviderResult(data=(schedule(
+        scheduledWorkoutId={"secret": "scheduled"},
+        workoutId=33,
+        workoutUuid=["private"],
+        workoutName={"secret": "name"},
+        workoutType=17,
+        associatedActivityId={"secret": "activity"},
+    ),))
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["scheduled_workouts"] == [{"date": "2026-02-15", "workout_id": 33, "completed": False}]
     assert result["warnings"] == [{
         "provider": "scheduled_workouts", "code": "invalid_provider_response",
         "message": "Scheduled workout response had an unexpected item.",

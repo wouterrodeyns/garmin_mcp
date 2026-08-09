@@ -20,6 +20,22 @@ from garmin_mcp.ai_training.providers import (
     get_training_status,
 )
 
+AVAILABILITY_KEYS = (
+    "activities",
+    "last_run",
+    "scheduled_workouts",
+    "sleep",
+    "hrv",
+    "resting_heart_rate",
+    "body_battery",
+    "training_readiness",
+    "recovery_time",
+    "training_status",
+    "training_load",
+    "load_focus",
+    "vo2max",
+)
+
 
 def _iso_day(value: Any) -> str | None:
     """Return a canonical ISO date from a local Garmin timestamp."""
@@ -79,7 +95,7 @@ def _reduced_activity(activity: dict[str, Any]) -> tuple[dict[str, Any], float |
         item["max_hr"] = max_hr if max_hr % 1 else int(max_hr)
     speed = _finite_number(activity.get("averageSpeed"))
     if speed is not None:
-        item["average_speed_kmh"] = round(speed * 3.6, 1)
+        item["average_speed_kph"] = round(speed * 3.6, 1)
     return item, _local_timestamp(activity.get("startTimeLocal"))
 
 
@@ -92,21 +108,7 @@ def _base_result(today: date, days: int | None) -> dict[str, Any]:
         "error": None,
         "period": {"days": days, "start_date": start, "end_date": end},
         "schedule_period": {"start_date": end, "end_date": schedule_end},
-        "availability": {
-            "activities": False,
-            "last_run": False,
-            "scheduled_workouts": False,
-            "sleep": False,
-            "hrv": False,
-            "resting_heart_rate": False,
-            "body_battery": False,
-            "training_readiness": False,
-            "recovery_time": False,
-            "training_status": False,
-            "training_load": False,
-            "load_focus": False,
-            "vo2max": False,
-        },
+        "availability": dict.fromkeys(AVAILABILITY_KEYS, False),
         "training": {
             "activity_count": 0,
             "running_sessions": 0,
@@ -160,11 +162,11 @@ def _append_warnings(result: dict[str, Any], provider_result: ProviderResult) ->
 def _populate_activities(result: dict[str, Any], provider_result: ProviderResult) -> None:
     """Populate aggregates and a bounded local activity summary."""
     _append_warnings(result, provider_result)
-    result["availability"]["activities"] = not provider_result.failed
     result["training"]["activities_truncated"] = provider_result.truncated
 
     raw_items = provider_result.data if isinstance(provider_result.data, (tuple, list)) else ()
     activities = [item for item in raw_items if isinstance(item, dict)]
+    result["availability"]["activities"] = not provider_result.failed or bool(activities)
     result["training"]["activity_count"] = len(activities)
 
     sessions_by_sport: dict[str, int] = {}
@@ -222,26 +224,35 @@ def _populate_last_run(result: dict[str, Any], provider_result: ProviderResult, 
     result["training"]["days_since_last_run"] = (today - parsed_day).days
 
 
-def _scheduled_item(item: Any) -> dict[str, Any] | None:
+def _scheduled_item(item: Any) -> tuple[dict[str, Any], bool] | None:
     if not isinstance(item, dict):
         return None
     reduced: dict[str, Any] = {}
+    invalid = False
     fields = (
-        ("scheduleDate", "date"),
-        ("scheduledWorkoutId", "scheduled_workout_id"),
-        ("workoutId", "workout_id"),
-        ("workoutUuid", "workout_uuid"),
-        ("workoutName", "name"),
-        ("workoutType", "sport"),
+        ("scheduleDate", "date", str),
+        ("scheduledWorkoutId", "scheduled_workout_id", int),
+        ("workoutId", "workout_id", int),
+        ("workoutUuid", "workout_uuid", str),
+        ("workoutName", "name", str),
+        ("workoutType", "sport", str),
     )
-    for raw_key, public_key in fields:
-        if item.get(raw_key) is not None:
-            reduced[public_key] = item[raw_key]
-    completed = item.get("associatedActivityId") is not None
+    for raw_key, public_key, expected_type in fields:
+        value = item.get(raw_key)
+        if value is None:
+            continue
+        if isinstance(value, expected_type) and not isinstance(value, bool):
+            reduced[public_key] = value
+        else:
+            invalid = True
+    activity_id = item.get("associatedActivityId")
+    completed = isinstance(activity_id, int) and not isinstance(activity_id, bool)
+    if activity_id is not None and not completed:
+        invalid = True
     reduced["completed"] = completed
     if completed:
-        reduced["activity_id"] = item["associatedActivityId"]
-    return reduced
+        reduced["activity_id"] = activity_id
+    return reduced, invalid
 
 
 def _populate_scheduled_workouts(result: dict[str, Any], provider_result: ProviderResult) -> None:
@@ -251,10 +262,12 @@ def _populate_scheduled_workouts(result: dict[str, Any], provider_result: Provid
     invalid_item = False
     scheduled: list[dict[str, Any]] = []
     for item in raw_items:
-        reduced = _scheduled_item(item)
-        if reduced is None:
+        scheduled_item = _scheduled_item(item)
+        if scheduled_item is None:
             invalid_item = True
         else:
+            reduced, item_invalid = scheduled_item
+            invalid_item = invalid_item or item_invalid
             scheduled.append(reduced)
     result["scheduled_workouts"] = scheduled
     if invalid_item:
