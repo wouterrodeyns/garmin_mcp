@@ -478,16 +478,41 @@ def _populate_readiness(result: dict[str, Any], client: Any, today: date) -> Non
     result["availability"]["recovery_time"] = metrics["recovery_hours"] is not None
 
 
-def _primary_device(device_map: Any, preferred_id: Any = None) -> dict[str, Any]:
+def _status_device_usable(candidate: dict[str, Any]) -> bool:
+    if any(
+        _normalized_text(candidate.get(key)) is not None
+        for key in ("trainingStatus", "trainingStatusFeedbackPhrase", "fitnessTrend")
+    ):
+        return True
+    load = candidate.get("acuteTrainingLoadDTO")
+    if not isinstance(load, dict):
+        return False
+    return any(
+        _normalized_number(load.get(key)) is not None
+        for key in (
+            "dailyTrainingLoadAcute", "dailyTrainingLoadChronic",
+            "dailyAcuteChronicWorkloadRatio",
+        )
+    ) or _normalized_text(load.get("acwrStatus")) is not None
+
+
+def _load_focus_device_usable(candidate: dict[str, Any]) -> bool:
+    return any(
+        _normalized_number(candidate.get(key)) is not None
+        for key in ("monthlyLoadAerobicLow", "monthlyLoadAerobicHigh", "monthlyLoadAnaerobic")
+    ) or _normalized_text(candidate.get("trainingBalanceFeedbackPhrase")) is not None
+
+
+def _primary_device(device_map: Any, preferred_id: Any, usable: Any) -> dict[str, Any]:
     if not isinstance(device_map, dict):
         return {}
     if isinstance(preferred_id, str):
         preferred = device_map.get(preferred_id)
-        if isinstance(preferred, dict):
+        if isinstance(preferred, dict) and usable(preferred):
             return preferred
     first: dict[str, Any] = {}
     for candidate in device_map.values():
-        if not isinstance(candidate, dict):
+        if not isinstance(candidate, dict) or not usable(candidate):
             continue
         if not first:
             first = candidate
@@ -502,7 +527,7 @@ def _populate_training_status(result: dict[str, Any], raw: Any) -> None:
     recent = raw.get("mostRecentTrainingStatus")
     latest = recent.get("latestTrainingStatusData") if isinstance(recent, dict) else None
     primary_device_id = raw.get("primaryTrainingDevice")
-    status = _primary_device(latest, primary_device_id)
+    status = _primary_device(latest, primary_device_id, _status_device_usable)
     load = status.get("acuteTrainingLoadDTO")
     load = load if isinstance(load, dict) else {}
 
@@ -524,7 +549,7 @@ def _populate_training_status(result: dict[str, Any], raw: Any) -> None:
 
     balance = raw.get("mostRecentTrainingLoadBalance")
     load_map = balance.get("metricsTrainingLoadBalanceDTOMap") if isinstance(balance, dict) else None
-    focus = _primary_device(load_map, primary_device_id)
+    focus = _primary_device(load_map, primary_device_id, _load_focus_device_usable)
     focus_values = {
         "aerobic_low": _normalized_number(focus.get("monthlyLoadAerobicLow")),
         "aerobic_high": _normalized_number(focus.get("monthlyLoadAerobicHigh")),

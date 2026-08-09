@@ -603,3 +603,29 @@ def test_training_status_never_derives_acwr_from_acute_and_chronic_load(provider
     assert result["fitness"]["acute_chronic_ratio"] is None  # type: ignore[index]
     assert result["fitness"]["acwr_status"] is None  # type: ignore[index]
     assert result["availability"]["training_load"] is True  # type: ignore[index]
+
+
+@pytest.mark.parametrize("empty_preferred", [{}, {"primaryTrainingDevice": True}, {"calendarDate": "2026-02-14"}])
+def test_training_status_skips_empty_preferred_and_fallback_device_entries(
+    empty_preferred: dict[str, object], providers: dict[str, Mock]
+):
+    providers["training_status"].return_value = {
+        "primaryTrainingDevice": "empty",
+        "mostRecentTrainingStatus": {"latestTrainingStatusData": {
+            "empty": empty_preferred,
+            "also-empty": {},
+            "usable": {"trainingStatus": "PRODUCTIVE"},
+        }},
+        "mostRecentTrainingLoadBalance": {"metricsTrainingLoadBalanceDTOMap": {
+            "empty": empty_preferred,
+            "also-empty": {},
+            "usable": {"monthlyLoadAerobicLow": 321},
+        }},
+    }
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["fitness"]["training_status"] == "PRODUCTIVE"  # type: ignore[index]
+    assert result["fitness"]["load_focus"]["aerobic_low"] == 321  # type: ignore[index]
+    assert result["availability"]["training_status"] is True  # type: ignore[index]
+    assert result["availability"]["load_focus"] is True  # type: ignore[index]
