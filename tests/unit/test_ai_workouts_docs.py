@@ -202,14 +202,15 @@ def test_ai_workouts_docs_marks_deferred_operations_explicitly():
     assert {
         "update deferred",
         "move deferred",
-        "training context deferred",
     } <= SECTIONS.keys()
+    assert "training context deferred" not in SECTIONS
 
 
 def test_ai_workouts_docs_describes_profile_and_unchanged_default():
     profile = SECTIONS["the ai coach tool profile"]
     tools = re.findall(r"^\d+\. `([^`]+)`$", profile, re.MULTILINE)
     expected = {
+        "get_training_context",
         "create_workout",
         "get_activities",
         "get_activities_by_date",
@@ -221,7 +222,7 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
         "unschedule_workout",
         "delete_workout",
     }
-    assert len(tools) == 10
+    assert len(tools) == 11
     assert set(tools) == expected
     assert "full upstream tool registration" in profile
 
@@ -261,7 +262,3 @@ def test_ai_workouts_docs_protects_deferred_operation_contracts():
     ):
         assert expected in move
     assert "never" in move and "delete" in move and "template" in move
-
-    context = SECTIONS["training context deferred"].lower()
-    for expected in ("aggregator", "activities", "scheduled workouts", "readiness"):
-        assert expected in context
