@@ -82,6 +82,37 @@ def test_main_configures_and_registers_ai_workouts(monkeypatch):
     assert registered[0] is not None
 
 
+def test_main_configures_and_registers_ai_training(monkeypatch):
+    configured = []
+    registered = []
+    original_configure = garmin_mcp.ai_training.configure
+    original_register_tools = garmin_mcp.ai_training.register_tools
+
+    monkeypatch.delenv("GARMIN_MCP_TRANSPORT", raising=False)
+    monkeypatch.delenv("GARMIN_MCP_HOST", raising=False)
+    monkeypatch.delenv("GARMIN_MCP_PORT", raising=False)
+    _clear_tool_filter_environment(monkeypatch)
+    monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
+    monkeypatch.setattr(
+        garmin_mcp.ai_training,
+        "configure",
+        lambda client: (configured.append(client), original_configure(client))[1],
+    )
+    monkeypatch.setattr(
+        garmin_mcp.ai_training,
+        "register_tools",
+        lambda app: (registered.append(app), original_register_tools(app))[1],
+    )
+    monkeypatch.setattr(FastMCP, "run", lambda self, **_kwargs: None)
+
+    garmin_mcp.main()
+
+    assert len(configured) == 1
+    assert len(registered) == 1
+    assert configured[0]._client is not None
+    assert registered[0] is not None
+
+
 def test_main_rejects_unknown_profile_before_authentication(monkeypatch, capsys):
     authentication = Mock()
     monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai_coach")
