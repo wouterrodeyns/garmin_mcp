@@ -130,6 +130,33 @@ async def test_analyze_activity_accepts_a_trimmed_decimal_string_with_no_writes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("activity_id", [True, 1.0, [], {}])
+async def test_analyze_activity_rejects_coercible_or_non_scalar_ids_without_reads(
+    activity_id: object,
+):
+    client = ReadOnlyActivityClient()
+    app = registered_app(client)
+
+    with pytest.raises(ToolError, match="activity_id"):
+        await app.call_tool("analyze_activity", {"activity_id": activity_id})
+
+    assert client.activity_ids == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_activity_leaves_negative_integers_to_the_service_envelope():
+    client = ReadOnlyActivityClient()
+    app = registered_app(client)
+
+    payload = json.loads(
+        response_text(await app.call_tool("analyze_activity", {"activity_id": -42}))
+    )
+
+    assert payload["error"]["code"] == "invalid_activity_id"
+    assert client.activity_ids == []
+
+
+@pytest.mark.asyncio
 async def test_analyze_activity_missing_id_is_rejected_by_fastmcp_validation():
     app = registered_app(ReadOnlyActivityClient())
 

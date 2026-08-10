@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pydantic import StrictInt, StrictStr
+
 from .service import analyze_activity_service
 
 
@@ -21,7 +23,7 @@ def register_tools(app: Any) -> Any:
     """Register the bounded, read-only AI activity-analysis tool."""
 
     @app.tool()
-    async def analyze_activity(activity_id: int | str) -> str:
+    async def analyze_activity(activity_id: StrictInt | StrictStr) -> str:
         """Return factual, bounded, sport-aware evidence for one completed Garmin activity.
 
         This read-only tool reports mechanical facts, not coaching advice: AI
