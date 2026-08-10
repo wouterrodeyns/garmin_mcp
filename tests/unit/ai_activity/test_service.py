@@ -1130,17 +1130,17 @@ def test_failed_optional_provider_results_are_sanitized_once_and_do_not_stop_lat
 
 
 class ForbiddenNestedClient:
-    @staticmethod
-    def post(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("raw request client API accessed")
+    def __init__(self, record_forbidden: object):
+        self._record_forbidden = record_forbidden
 
-    @staticmethod
-    def put(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("raw request client API accessed")
+    def post(self, *_args: object, **_kwargs: object) -> None:
+        self._record_forbidden("client.post")  # type: ignore[operator]
 
-    @staticmethod
-    def delete(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("raw request client API accessed")
+    def put(self, *_args: object, **_kwargs: object) -> None:
+        self._record_forbidden("client.put")  # type: ignore[operator]
+
+    def delete(self, *_args: object, **_kwargs: object) -> None:
+        self._record_forbidden("client.delete")  # type: ignore[operator]
 
 
 class RecordingReadOnlyClient:
@@ -1148,10 +1148,10 @@ class RecordingReadOnlyClient:
 
     def __init__(self, payload: dict[str, object], *, failures: set[str] | None = None):
         self.calls: list[str] = []
+        self.forbidden_calls: list[str] = []
         self.payload = payload
         self.failures = failures or set()
-        self.post = self.put = self.delete = self._forbidden
-        self.client = ForbiddenNestedClient()
+        self.client = ForbiddenNestedClient(self._forbidden)
 
     def _read(self, name: str, value: object) -> object:
         self.calls.append(name)
@@ -1180,32 +1180,72 @@ class RecordingReadOnlyClient:
         return self._read("get_activity_exercise_sets", {"exercises": []})
 
     def upload_workout(self, *_args: object, **_kwargs: object) -> None:
-        self._forbidden()
+        self._forbidden("upload_workout")
 
     def schedule_workout(self, *_args: object, **_kwargs: object) -> None:
-        self._forbidden()
+        self._forbidden("schedule_workout")
 
     def unschedule_workout(self, *_args: object, **_kwargs: object) -> None:
-        self._forbidden()
+        self._forbidden("unschedule_workout")
 
     def delete_workout(self, *_args: object, **_kwargs: object) -> None:
-        self._forbidden()
+        self._forbidden("delete_workout")
 
     def set_activity_name(self, *_args: object, **_kwargs: object) -> None:
-        self._forbidden()
+        self._forbidden("set_activity_name")
 
     def set_activity_description(self, *_args: object, **_kwargs: object) -> None:
-        self._forbidden()
+        self._forbidden("set_activity_description")
 
     def set_activity_type(self, *_args: object, **_kwargs: object) -> None:
-        self._forbidden()
+        self._forbidden("set_activity_type")
 
-    @staticmethod
-    def _forbidden(*_args: object, **_kwargs: object) -> None:
+    def post(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden("post")
+
+    def put(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden("put")
+
+    def delete(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden("delete")
+
+    def _forbidden(self, name: str) -> None:
+        self.forbidden_calls.append(name)
         raise AssertionError("mutating or raw request client API accessed")
 
     def __getattr__(self, name: str) -> object:
+        self.forbidden_calls.append(name)
         raise AssertionError(f"unexpected client attribute accessed: {name}")
+
+
+@pytest.mark.parametrize(
+    "attempt, expected",
+    [
+        (lambda client: client.upload_workout(), "upload_workout"),
+        (lambda client: client.schedule_workout(), "schedule_workout"),
+        (lambda client: client.unschedule_workout(), "unschedule_workout"),
+        (lambda client: client.delete_workout(), "delete_workout"),
+        (lambda client: client.set_activity_name(), "set_activity_name"),
+        (lambda client: client.set_activity_description(), "set_activity_description"),
+        (lambda client: client.set_activity_type(), "set_activity_type"),
+        (lambda client: client.post(), "post"),
+        (lambda client: client.put(), "put"),
+        (lambda client: client.delete(), "delete"),
+        (lambda client: client.client.post(), "client.post"),
+        (lambda client: client.client.put(), "client.put"),
+        (lambda client: client.client.delete(), "client.delete"),
+        (lambda client: client.unknown_client_api, "unknown_client_api"),
+    ],
+)
+def test_recording_read_only_client_records_each_forbidden_attempt_before_raising(
+    attempt: object, expected: str,
+):
+    client = RecordingReadOnlyClient(raw_activity())
+
+    with pytest.raises(AssertionError):
+        attempt(client)  # type: ignore[operator]
+
+    assert client.forbidden_calls == [expected]
 
 
 @pytest.mark.parametrize(
@@ -1229,6 +1269,7 @@ def test_real_provider_seams_use_only_documented_reads_in_exact_order(
 
     assert result["status"] == "success"
     assert client.calls == expected_reads
+    assert client.forbidden_calls == []
     json.dumps(result, allow_nan=False)
 
 
@@ -1244,4 +1285,35 @@ def test_real_provider_seams_remain_read_only_after_a_partial_failure():
     assert client.calls == [
         "get_activity", "get_activity_splits", "get_activity_hr_in_timezones", "get_activity_power_in_timezones",
     ]
+    assert client.forbidden_calls == []
+    assert "private" not in json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    ("type_key", "summary", "failure", "expected_reads"),
+    [
+        ("cycling", {"averageHR": 1, "averagePower": 1}, "get_activity_splits", [
+            "get_activity", "get_activity_splits", "get_activity_hr_in_timezones", "get_activity_power_in_timezones",
+        ]),
+        ("cycling", {"averageHR": 1, "averagePower": 1}, "get_activity_hr_in_timezones", [
+            "get_activity", "get_activity_splits", "get_activity_hr_in_timezones", "get_activity_power_in_timezones",
+        ]),
+        ("cycling", {"averageHR": 1, "averagePower": 1}, "get_activity_power_in_timezones", [
+            "get_activity", "get_activity_splits", "get_activity_hr_in_timezones", "get_activity_power_in_timezones",
+        ]),
+        ("strength_training", {}, "get_activity_exercise_sets", ["get_activity", "get_activity_exercise_sets"]),
+    ],
+)
+def test_real_provider_seam_optional_failures_continue_later_reads_without_forbidden_calls(
+    type_key: str, summary: dict[str, object], failure: str, expected_reads: list[str],
+):
+    client = RecordingReadOnlyClient(
+        raw_activity(activityTypeDTO={"typeKey": type_key}, summaryDTO=summary), failures={failure},
+    )
+
+    result = analyze_activity_service(client, 123)
+
+    assert result["status"] == "partial_success"
+    assert client.calls == expected_reads
+    assert client.forbidden_calls == []
     assert "private" not in json.dumps(result, allow_nan=False)
