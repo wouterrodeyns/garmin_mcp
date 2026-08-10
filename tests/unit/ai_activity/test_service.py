@@ -1481,3 +1481,24 @@ def test_optional_exploding_dict_payloads_are_bounded_and_later_reads_continue(
         "provider": provider, "code": "invalid_provider_response", "message": message,
     }]
     assert "private" not in json.dumps(result, allow_nan=False)
+
+
+def test_internal_base_normalizer_errors_propagate_instead_of_becoming_client_errors(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity()))
+    monkeypatch.setattr(service, "_activity_summary", Mock(side_effect=RuntimeError("internal failure")))
+
+    with pytest.raises(RuntimeError, match="internal failure"):
+        analyze_activity_service(Mock(), 123)
+
+
+def test_internal_split_normalizer_errors_propagate_instead_of_becoming_provider_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity()))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": [split()]}))
+    monkeypatch.setattr(service, "_split_item", Mock(side_effect=RuntimeError("internal split failure")))
+
+    with pytest.raises(RuntimeError, match="internal split failure"):
+        analyze_activity_service(Mock(), 123)
