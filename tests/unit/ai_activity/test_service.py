@@ -383,6 +383,23 @@ def test_only_literal_false_suppresses_an_eligible_split_fetch(
     splits.assert_called_once()
 
 
+@pytest.mark.parametrize("metadata", [None, {"hasSplits": None}], ids=["absent", "null_signal"])
+def test_absent_or_null_split_metadata_does_not_suppress_an_eligible_split_fetch(
+    reader: Mock, monkeypatch: pytest.MonkeyPatch, metadata: object
+):
+    data = raw_activity()
+    if metadata is None:
+        data.pop("metadataDTO")
+    else:
+        data["metadataDTO"] = metadata
+    reader.return_value = ProviderResult(data)
+    splits = split_reader(monkeypatch, {"lapDTOs": []})
+
+    analyze_activity_service(Mock(), 123)
+
+    splits.assert_called_once()
+
+
 def test_literal_false_suppresses_an_eligible_split_fetch(reader: Mock, monkeypatch: pytest.MonkeyPatch):
     reader.return_value = ProviderResult(raw_activity(metadataDTO={"hasSplits": False}))
     splits = split_reader(monkeypatch, {"lapDTOs": []})
@@ -493,6 +510,24 @@ def test_split_pace_ties_keep_first_source_entry_and_lap_number_falls_back_to_po
         "scope": "all_returned_splits", "fastest_split_number": 1,
         "fastest_pace": "6:00/km", "slowest_split_number": 1,
         "slowest_pace": "6:00/km", "pace_range_seconds_per_km": 0,
+    }
+
+
+def test_split_extrema_and_range_use_raw_pace_when_displayed_paces_match(
+    reader: Mock, monkeypatch: pytest.MonkeyPatch
+):
+    split_reader(monkeypatch, {"lapDTOs": [
+        split(lapIndex=1, duration=359.6, distance=1000),
+        split(lapIndex=2, duration=360.4, distance=1000),
+    ]})
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert [item["pace"] for item in result["splits"]["items"]] == ["6:00/km", "6:00/km"]  # type: ignore[index]
+    assert result["derived"] == {
+        "scope": "all_returned_splits", "fastest_split_number": 1,
+        "fastest_pace": "6:00/km", "slowest_split_number": 2,
+        "slowest_pace": "6:00/km", "pace_range_seconds_per_km": 1,
     }
 
 
