@@ -383,12 +383,16 @@ def test_only_literal_false_suppresses_an_eligible_split_fetch(
     splits.assert_called_once()
 
 
-@pytest.mark.parametrize("metadata", [None, {"hasSplits": None}], ids=["absent", "null_signal"])
+@pytest.mark.parametrize(
+    ("metadata", "metadata_is_absent"),
+    [(None, True), (None, False), ({"hasSplits": None}, False)],
+    ids=["absent", "null_metadata", "null_signal"],
+)
 def test_absent_or_null_split_metadata_does_not_suppress_an_eligible_split_fetch(
-    reader: Mock, monkeypatch: pytest.MonkeyPatch, metadata: object
+    reader: Mock, monkeypatch: pytest.MonkeyPatch, metadata: object, metadata_is_absent: bool
 ):
     data = raw_activity()
-    if metadata is None:
+    if metadata_is_absent:
         data.pop("metadataDTO")
     else:
         data["metadataDTO"] = metadata
