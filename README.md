@@ -101,6 +101,15 @@ Example — expose only sleep, stress, and recent activities:
 
 ## High-level workout tools
 
+### AI training context
+
+For coaching decisions, `get_training_context(days=14)` returns a compact,
+read-only snapshot of recent training, scheduled workouts, and available Garmin
+recovery/fitness metrics. It is designed to be the AI coach's main read tool;
+`create_workout` remains its main write tool. See the [AI training context
+guide](docs/ai-training.md) for the bounded date windows, optional metric and
+failure semantics, and the two-tool coaching workflow.
+
 ### AI-friendly workout creation
 
 For a single, readable workout request, call `create_workout` with the friendly
@@ -110,7 +119,7 @@ and sport-appropriate pace, heart-rate, or power targets. See the complete
 [AI-friendly workout guide](docs/ai-workouts.md) for the schema, response
 statuses, and API assumptions.
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose the exact 10-tool AI-coach
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose the exact 11-tool AI-coach
 surface. `GARMIN_ENABLED_TOOLS` still takes precedence, and
 `GARMIN_DISABLED_TOOLS` subtracts from the selected profile. With no profile or
 allowlist, the default remains full upstream tool registration (unchanged):

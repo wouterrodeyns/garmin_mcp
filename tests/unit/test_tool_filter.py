@@ -102,7 +102,19 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
 
     assert enabled == TOOL_PROFILES["ai-coach"]
     assert disabled == set()
-    assert {"create_workout", "get_activities", "get_workout_by_id"} <= enabled
+    assert enabled == {
+        "get_training_context",
+        "create_workout",
+        "get_activities",
+        "get_activities_by_date",
+        "get_activity",
+        "get_workouts",
+        "get_workout_by_id",
+        "get_scheduled_workouts",
+        "schedule_workout",
+        "unschedule_workout",
+        "delete_workout",
+    }
     assert not {
         "upload_workout",
         "upload_workouts",

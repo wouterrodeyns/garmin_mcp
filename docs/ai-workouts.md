@@ -118,18 +118,19 @@ Typical concise responses are:
 
 ## The `ai-coach` tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 10 tools:
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 11 tools:
 
-1. `create_workout`
-2. `get_activities`
-3. `get_activities_by_date`
-4. `get_activity`
-5. `get_workouts`
-6. `get_workout_by_id`
-7. `get_scheduled_workouts`
-8. `schedule_workout`
-9. `unschedule_workout`
-10. `delete_workout`
+1. `get_training_context`
+2. `create_workout`
+3. `get_activities`
+4. `get_activities_by_date`
+5. `get_activity`
+6. `get_workouts`
+7. `get_workout_by_id`
+8. `get_scheduled_workouts`
+9. `schedule_workout`
+10. `unschedule_workout`
+11. `delete_workout`
 
 Profile precedence is explicit: an explicitly configured
 `GARMIN_ENABLED_TOOLS` allowlist overrides the profile; otherwise a profile
@@ -167,11 +168,14 @@ delete the workout template while moving it. Unschedule-then-schedule is not
 transactional, so a second-call failure needs a partial-failure response and
 manual recovery guidance.
 
-## Training context (deferred)
+## Training context
 
-A compact training-context aggregator is future work. It should combine the
-small set of activities, scheduled workouts, and readiness signals an AI coach
-needs without exposing every upstream endpoint or returning large raw payloads.
+`get_training_context` now combines a bounded set of activities, scheduled
+workouts, and available recovery signals without exposing every upstream
+endpoint or returning large raw payloads. It is strictly read-only. See the
+[AI training context guide](ai-training.md) for its stable response, date
+windows, availability semantics, and conversational workflow with
+`create_workout`.
 
 ## Upstream compatibility
 
