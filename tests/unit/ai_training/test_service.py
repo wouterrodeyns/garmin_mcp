@@ -385,6 +385,23 @@ def test_scheduled_workouts_redact_structured_field_values(providers: dict[str, 
     }]
 
 
+def test_empty_schedule_object_is_unavailable_not_a_phantom_uncompleted_workout(
+    providers: dict[str, Mock],
+):
+    providers["scheduled"].return_value = ProviderResult(data=({},))
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "partial_success"
+    assert result["availability"]["scheduled_workouts"] is False  # type: ignore[index]
+    assert result["scheduled_workouts"] == []
+    assert {
+        "provider": "scheduled_workouts",
+        "code": "invalid_provider_response",
+        "message": "Scheduled workout response had an unexpected item.",
+    } in result["warnings"]
+
+
 def test_daily_stats_populates_metric_granular_heart_rate_and_body_battery(providers: dict[str, Mock]):
     providers["daily_stats"].return_value = {
         "calendarDate": "2026-02-14",
@@ -727,7 +744,7 @@ def test_both_core_failures_stop_all_enrichment_reads(providers: dict[str, Mock]
         providers[name].assert_not_called()
 
 
-def test_both_core_failures_are_fatal_even_with_retained_activity_pages(
+def test_retained_activity_pages_keep_context_available_when_schedule_core_fails(
     providers: dict[str, Mock],
 ):
     providers["activities"].return_value = ProviderResult(
@@ -745,15 +762,15 @@ def test_both_core_failures_are_fatal_even_with_retained_activity_pages(
 
     result = get_training_context_service(Mock(), today=TODAY)
 
-    assert result["status"] == "error"
-    assert result["error"]["code"] == "context_unavailable"
+    assert result["status"] == "partial_success"
+    assert result["error"] is None
     assert result["availability"]["activities"] is True
     assert result["training"]["activity_count"] == 1
     assert [warning["provider"] for warning in result["warnings"]] == [
         "activities", "scheduled_workouts",
     ]
     for name in ("last_run", "daily_stats", "sleep", "hrv", "readiness", "training_status"):
-        providers[name].assert_not_called()
+        assert providers[name].call_count >= 1
 
 
 def test_all_malformed_schedule_entries_are_an_unavailable_core(
@@ -810,6 +827,33 @@ def test_one_core_failure_continues_enrichment_and_returns_partial_success(
     assert result["availability"]["scheduled_workouts"] is (successful_core == "scheduled")
     for name in ("last_run", "daily_stats", "sleep", "hrv", "readiness", "training_status"):
         assert providers[name].call_count >= 1
+
+
+@pytest.mark.parametrize(
+    ("failed_core", "successful_core", "message"),
+    [
+        ("activities", "scheduled", "Activities are unavailable."),
+        ("scheduled", "activities", "Scheduled workouts are unavailable."),
+    ],
+)
+def test_core_authentication_errors_are_isolated_when_the_other_core_succeeds(
+    failed_core: str, successful_core: str, message: str, providers: dict[str, Mock]
+):
+    provider_name = "activities" if failed_core == "activities" else "scheduled_workouts"
+    providers[failed_core].side_effect = GarminConnectAuthenticationError("token=private")
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "partial_success"
+    assert result["error"] is None
+    assert result["availability"]["activities"] is (successful_core == "activities")
+    assert result["availability"]["scheduled_workouts"] is (successful_core == "scheduled")
+    assert {
+        "provider": provider_name,
+        "code": "provider_unavailable",
+        "message": message,
+    } in result["warnings"]
+    assert "token=private" not in str(result)
 
 
 def test_retained_activity_page_failure_is_partial_but_keeps_core_available(providers: dict[str, Mock]):

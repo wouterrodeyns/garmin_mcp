@@ -57,6 +57,7 @@ def forbid_writes(client):
     for name in (
         "upload_workout",
         "schedule_workout",
+        "unschedule_workout",
         "delete_workout",
         "post",
         "put",

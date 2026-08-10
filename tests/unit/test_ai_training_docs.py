@@ -92,6 +92,7 @@ def test_docs_pin_status_boundary_error_codes_and_warning_vocabulary():
     ):
         assert text in lower
     assert "exactly three warning codes" in lower
+    assert "malformed scheduled-workout entries" in lower
 
 
 def test_docs_pin_profile_and_sport_translation():
@@ -124,6 +125,9 @@ def test_docs_example_is_compact_and_distinguishes_schedule_and_workout_ids():
     example = _example_json()
     assert example["training"]["total_training_minutes"] == 245.0  # type: ignore[index]
     assert example["training"]["running_distance_km"] == 0.0  # type: ignore[index]
+    assert example["fitness"]["acute_load"] == 247  # type: ignore[index]
+    assert example["fitness"]["chronic_load"] == 193  # type: ignore[index]
+    assert example["fitness"]["acute_chronic_ratio"] == 1.14  # type: ignore[index]
     assert len(example["recent_activities"]) <= 20  # type: ignore[arg-type]
     scheduled = example["scheduled_workouts"][0]  # type: ignore[index]
     assert scheduled["scheduled_workout_id"] != scheduled["workout_id"]

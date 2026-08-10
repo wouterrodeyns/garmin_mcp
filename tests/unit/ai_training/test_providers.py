@@ -56,14 +56,14 @@ def test_activity_cap_rounds_to_bounded_two_hundred_record_pages(days: int, expe
     assert activity_cap(days) == expected
 
 
-@pytest.mark.parametrize("raw", [page(1), {"activityList": page(1)}, None])
+@pytest.mark.parametrize("raw", [page(1), {"activityList": page(1)}, None, {}])
 def test_period_activities_accepts_supported_raw_roots(raw: object):
     garmin = client()
     garmin.connectapi.return_value = raw
 
     result = get_period_activities(garmin, "2026-01-01", "2026-01-14", 14)
 
-    expected = [] if raw is None else page(1)
+    expected = [] if raw is None or raw == {} else page(1)
     assert result == ProviderResult(data=tuple(expected))
 
 
@@ -74,7 +74,6 @@ def test_period_activities_accepts_supported_raw_roots(raw: object):
 @pytest.mark.parametrize(
     "raw",
     [
-        {},
         False,
         0,
         "",
@@ -201,6 +200,25 @@ def test_last_run_is_unfiltered_and_stops_when_a_local_running_type_matches():
         call(ACTIVITIES_ENDPOINT, params={"start": "0", "limit": "200", "sortOrder": "desc"}),
         call(ACTIVITIES_ENDPOINT, params={"start": "200", "limit": "200", "sortOrder": "desc"}),
     ]
+
+
+def test_last_run_selects_the_newest_running_match_within_a_page():
+    garmin = client()
+    older = {
+        "activityId": 201,
+        "activityType": {"typeKey": "running"},
+        "startTimeLocal": "not-a-garmin-timestamp",
+    }
+    newer = {
+        "activityId": 202,
+        "activityType": {"typeKey": "trail_running"},
+        "startTimeLocal": "2026-01-04 08:00:00",
+    }
+    garmin.connectapi.return_value = [older, newer]
+
+    result = get_last_run(garmin)
+
+    assert result == ProviderResult(data=newer)
 
 
 def test_last_run_returns_empty_without_warning_after_a_short_nonmatching_page():

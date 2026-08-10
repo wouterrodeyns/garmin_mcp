@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import json
 from math import ceil
 from typing import Any
@@ -85,6 +86,8 @@ def _activity_items(raw: Any) -> tuple[Any, ...]:
     """Normalize the documented activity response roots without coercion."""
     if raw is None:
         return ()
+    if raw == {}:
+        return ()
     if isinstance(raw, list):
         items = raw
     elif isinstance(raw, dict) and isinstance(raw.get("activityList"), list):
@@ -144,6 +147,32 @@ def _is_running_activity(activity: Any) -> bool:
     return isinstance(activity_type, dict) and activity_type.get("typeKey") in RUNNING_TYPE_KEYS
 
 
+def _local_start_timestamp(activity: dict[str, Any]) -> float | None:
+    """Return a sortable local start timestamp when Garmin supplied one."""
+    value = activity.get("startTimeLocal")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return None
+
+
+def _newest_running_activity(page: tuple[Any, ...]) -> dict[str, Any] | None:
+    """Pick the newest parseable running item, with stable page-order fallback."""
+    matches = [item for item in page if _is_running_activity(item)]
+    if not matches:
+        return None
+    return max(
+        enumerate(matches),
+        key=lambda indexed: (
+            _local_start_timestamp(indexed[1]) is not None,
+            _local_start_timestamp(indexed[1]) or float("-inf"),
+            -indexed[0],
+        ),
+    )[1]
+
+
 def get_last_run(client: Any) -> ProviderResult:
     """Find the most recent running activity without server-side type filtering."""
     for start in range(0, MAX_ACTIVITY_RECORDS, PAGE_SIZE):
@@ -172,9 +201,9 @@ def get_last_run(client: Any) -> ProviderResult:
                 ),
             )
 
-        for activity in page:
-            if _is_running_activity(activity):
-                return ProviderResult(data=activity)
+        newest_running = _newest_running_activity(page)
+        if newest_running is not None:
+            return ProviderResult(data=newest_running)
         if len(page) < PAGE_SIZE:
             return ProviderResult(data=None)
 

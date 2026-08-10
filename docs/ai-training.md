@@ -149,8 +149,8 @@ values before final rounding.
     "training_status_feedback": null,
     "fitness_trend": null,
     "acute_load": 247,
-    "chronic_load": 213,
-    "acute_chronic_ratio": 1.16,
+    "chronic_load": 193,
+    "acute_chronic_ratio": 1.14,
     "acwr_status": "OPTIMAL",
     "vo2max_running": 51,
     "vo2max_cycling": null,
@@ -198,6 +198,10 @@ Period activities and scheduled workouts are the two core providers:
 - `error` is used for `invalid_days`, `client_unavailable`, or
   `context_unavailable`. The last case means both core providers failed; the
   service stops after those two reads and includes both failures as warnings.
+
+Malformed scheduled-workout entries are unavailable rather than being reduced
+to a phantom `completed: false` item. A valid empty scheduled-workout collection
+remains available.
 
 Warnings alone do not imply `partial_success`. V1 has exactly three warning codes:
 `provider_unavailable`, `invalid_provider_response`, and
