@@ -347,7 +347,10 @@ def _provider_unavailable(result: dict[str, Any], provider: str, message: str) -
 
 
 def _signal_present(summary: Mapping[str, Any], *keys: str) -> bool:
-    return any(_number(summary.get(key), minimum=1) is not None for key in keys)
+    return any(
+        (numeric := _number(summary.get(key))) is not None and numeric > 0
+        for key in keys
+    )
 
 
 def _zone_list(data: Any) -> list[Any] | None | bool:

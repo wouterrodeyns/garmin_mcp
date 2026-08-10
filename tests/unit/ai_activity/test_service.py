@@ -786,6 +786,37 @@ def test_invalid_or_nonpositive_summary_signals_skip_optional_zone_providers(
     assert result["warnings"] == []
 
 
+@pytest.mark.parametrize(
+    ("type_key", "summary", "expected_calls"),
+    [
+        ("running", {"averageHR": 0.5}, ["activity", "splits", "heart_rate_zones"]),
+        ("cycling", {"averageHR": 0.5, "averagePower": 0.5}, [
+            "activity", "splits", "heart_rate_zones", "power_zones",
+        ]),
+    ],
+)
+def test_subunit_positive_summary_signals_fetch_eligible_zone_providers(
+    monkeypatch: pytest.MonkeyPatch, type_key: str, summary: dict[str, object], expected_calls: list[str],
+):
+    calls: list[str] = []
+
+    def base(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("activity")
+        return ProviderResult(raw_activity(activityTypeDTO={"typeKey": type_key}, summaryDTO=summary))
+
+    def splits(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("splits")
+        return ProviderResult({"lapDTOs": []})
+
+    monkeypatch.setattr(service, "get_activity", base)
+    monkeypatch.setattr(service, "get_splits", splits)
+    optional_readers(monkeypatch, calls)
+
+    analyze_activity_service(Mock(), 123)
+
+    assert calls == expected_calls
+
+
 @pytest.mark.parametrize("root", [[], {"zones": []}])
 def test_zone_empty_roots_are_available_empty_sections(monkeypatch: pytest.MonkeyPatch, root: object):
     calls: list[str] = []
