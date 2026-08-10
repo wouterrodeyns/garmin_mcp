@@ -10,9 +10,11 @@ from .providers import (
     CYCLING_TYPE_KEYS,
     RUNNING_TYPE_KEYS,
     STRENGTH_TYPE_KEYS,
+    MAX_RETURNED_SPLITS,
     WALKING_TYPE_KEYS,
     ProviderResult,
     get_activity,
+    get_splits,
 )
 
 
@@ -202,6 +204,133 @@ def _pace(sport_family: str, duration: Any, distance: Any) -> str | None:
     return f"{seconds_per_km // 60}:{seconds_per_km % 60:02d}/km"
 
 
+def _warning(provider: str, code: str, message: str) -> dict[str, str]:
+    return {"provider": provider, "code": code, "message": message}
+
+
+def _split_item(lap: Mapping[str, Any], sport_family: str) -> tuple[dict[str, Any], float | None]:
+    """Normalize a Garmin lap and retain its raw pace for split comparisons."""
+    duration = _number(lap.get("duration"), minimum=0)
+    distance = _number(lap.get("distance"), minimum=0)
+    item = {
+        "lap_number": _integer_equivalent(lap.get("lapIndex"), positive=True),
+        "start_time": _text(lap.get("startTimeGMT"), 100),
+        "duration_minutes": _minutes(duration),
+        "moving_duration_minutes": _minutes(lap.get("movingDuration")),
+        "elapsed_duration_minutes": _minutes(lap.get("elapsedDuration")),
+        "distance_km": _kilometers(distance),
+        "average_speed_kph": _speed_kph(lap.get("averageSpeed")),
+        "max_speed_kph": _speed_kph(lap.get("maxSpeed")),
+        "pace": _pace(sport_family, duration, distance),
+        "average_hr_bpm": _number(lap.get("averageHR"), minimum=1),
+        "max_hr_bpm": _number(lap.get("maxHR"), minimum=1),
+        "average_cadence_spm": _number(lap.get("averageRunCadence"), minimum=1),
+        "average_power_watts": _number(lap.get("averagePower"), minimum=1),
+        "calories": _number(lap.get("calories"), minimum=0),
+        "elevation_gain_meters": _elevation(lap.get("elevationGain")),
+        "elevation_loss_meters": _elevation(lap.get("elevationLoss")),
+        "intensity_type": _text(lap.get("intensityType"), 100),
+    }
+    raw_pace: float | None = None
+    if sport_family in {"running", "walking"} and duration and distance:
+        try:
+            kilometers = distance / 1000
+            candidate = duration / kilometers
+            if kilometers > 0 and math.isfinite(kilometers) and math.isfinite(candidate):
+                raw_pace = float(candidate)
+        except (OverflowError, ValueError, ZeroDivisionError):
+            pass
+    return item, raw_pace
+
+
+def _split_derived(
+    items_with_pace: list[tuple[dict[str, Any], float | None]], truncated: bool, sport_family: str
+) -> dict[str, Any]:
+    derived = _empty_envelope()["derived"]
+    if truncated or sport_family not in {"running", "walking"}:
+        return derived
+    comparisons = [(index, item, pace) for index, (item, pace) in enumerate(items_with_pace) if pace is not None]
+    if not comparisons:
+        return derived
+    fastest = min(comparisons, key=lambda value: value[2])
+    slowest = max(comparisons, key=lambda value: value[2])
+    try:
+        pace_range = int(round(slowest[2] - fastest[2]))
+    except (OverflowError, ValueError):
+        return derived
+
+    def split_number(comparison: tuple[int, dict[str, Any], float]) -> int:
+        return comparison[1]["lap_number"] or comparison[0] + 1
+
+    return {
+        "scope": "all_returned_splits",
+        "fastest_split_number": split_number(fastest),
+        "fastest_pace": _pace(sport_family, fastest[2], 1000),
+        "slowest_split_number": split_number(slowest),
+        "slowest_pace": _pace(sport_family, slowest[2], 1000),
+        "pace_range_seconds_per_km": pace_range,
+    }
+
+
+def _apply_splits(result: dict[str, Any], client: Any, activity_id: int, payload: Mapping[str, Any]) -> None:
+    """Fetch and normalize eligible split data without exposing provider details."""
+    family = result["activity"]["sport_family"]
+    metadata = _mapping_value(payload, "metadataDTO")
+    if family not in {"running", "walking", "cycling"} or metadata.get("hasSplits") is False:
+        return
+    try:
+        provider_result = get_splits(client, activity_id)
+    except Exception:
+        provider_result = ProviderResult(None, failed=True)
+    if not isinstance(provider_result, ProviderResult) or provider_result.failed:
+        result["status"] = "partial_success"
+        result["warnings"].append(_warning("splits", "provider_unavailable", "Activity splits are unavailable."))
+        return
+    split_data = provider_result.data
+    if split_data is None or split_data == {}:
+        return
+    if not isinstance(split_data, Mapping) or not isinstance(split_data.get("lapDTOs"), list):
+        result["status"] = "partial_success"
+        result["warnings"].append(_warning(
+            "splits", "invalid_provider_response", "Activity splits response had an unexpected shape."
+        ))
+        return
+
+    laps = split_data["lapDTOs"]
+    truncated = len(laps) > MAX_RETURNED_SPLITS
+    if truncated:
+        result["warnings"].append(_warning(
+            "splits", "splits_truncated",
+            "Activity splits were limited to 100 laps; split comparisons are unavailable.",
+        ))
+    items_with_pace: list[tuple[dict[str, Any], float | None]] = []
+    malformed = False
+    for lap in laps[:MAX_RETURNED_SPLITS]:
+        if not isinstance(lap, Mapping):
+            malformed = True
+            continue
+        item, raw_pace = _split_item(lap, family)
+        if not any(value is not None for value in item.values()):
+            malformed = True
+            continue
+        items_with_pace.append((item, raw_pace))
+    if malformed:
+        result["status"] = "partial_success"
+        result["warnings"].append(_warning(
+            "splits", "invalid_provider_response", "Activity splits response had an unexpected shape."
+        ))
+    if not items_with_pace and laps:
+        return
+    result["availability"]["splits"] = True
+    result["splits"] = {
+        "total_count": len(laps),
+        "returned_count": len(items_with_pace),
+        "truncated": truncated,
+        "items": [item for item, _pace_value in items_with_pace],
+    }
+    result["derived"] = _split_derived(items_with_pace, truncated, family)
+
+
 def _activity_summary(payload: Mapping[str, Any], activity_id: int) -> dict[str, Any]:
     summary = _mapping_value(payload, "summaryDTO")
     metadata = _mapping_value(payload, "metadataDTO")
@@ -300,6 +429,7 @@ def analyze_activity_service(client: Any, activity_id: Any) -> dict[str, Any]:
     result["status"] = "success"
     result["activity"] = _activity_summary(provider_result.data, normalized_id)
     result["availability"]["activity"] = True
+    _apply_splits(result, client, normalized_id, provider_result.data)
     return result
 
 
