@@ -67,12 +67,15 @@ def test_docs_pin_snapshot_scoped_missing_metric_interpretation_and_query_window
     lower = " ".join(DOCS.lower().split())
     for text in (
         "| activities | `days` retrospective activity lookback |",
+        "latest run is searched independently across up to 1,000 activity records "
+        "and may be older than the requested period",
         "| scheduled workouts | today through the following six days |",
         "| daily recovery and fitness metrics | today |",
         "| sleep, hrv, and readiness | today, then yesterday only for a legitimately empty response |",
         "null optional metric with no warning means the metric was not available in this snapshot",
         "does not prove the account or device does not support it",
         "provider failures are reported in structured warnings",
+        "old recovery or fitness metric dates must not be used to infer today's recovery state",
     ):
         assert text in lower
 

@@ -25,6 +25,8 @@ def register_tools(app: Any) -> Any:
         """Return a compact read-only Garmin coaching snapshot.
 
         days applies only to the retrospective activity lookback (1 through 90).
+        Latest run is searched independently across up to 1,000 activity records
+        and may be older than the requested period.
         Scheduled workouts always cover today through the following six days.
         Daily recovery and fitness metrics query today. Sleep, HRV, and readiness
         query today and then yesterday only for a legitimately empty response.

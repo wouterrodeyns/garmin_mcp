@@ -141,6 +141,10 @@ async def test_get_training_context_documents_snapshot_scoped_missing_metrics():
     description = " ".join(tools["get_training_context"].description.lower().split())
 
     assert "days applies only to the retrospective activity lookback" in description
+    assert (
+        "latest run is searched independently across up to 1,000 activity records "
+        "and may be older than the requested period"
+    ) in description
     assert "daily recovery and fitness metrics query today" in description
     assert "sleep, hrv, and readiness query today and then yesterday only for a legitimately empty response" in description
     assert "null optional metric with no warning means it was not available in this snapshot" in description
