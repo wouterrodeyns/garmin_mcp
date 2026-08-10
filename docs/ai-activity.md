@@ -8,17 +8,13 @@ uploads, edits, schedules, unschedules, or deletes Garmin data.
 
 ## Argument, source, and call budget
 
-The only tool argument is `activity_id`: a positive integer or an ASCII decimal
-string representing one. Detail is not an argument. Optional detail may be
+The only tool argument is `activity_id`: a positive integer or decimal string
+(ASCII digits) representing one. Detail is not an argument. Optional detail may be
 absent because it was unavailable in this snapshot, device, account, or sync
 state; that does not mean the device or account is unsupported. The low-level
-`get_activity` tool remains a compatibility and targeted read.
-
-In other words, an unavailable snapshot or sync is not the same as an
-unsupported device or account. The low-level get_activity remains a
-compatibility and targeted read.
-
-The accepted identifier is a positive integer or decimal string.
+get_activity remains a compatibility and targeted read.
+An unavailable snapshot or sync is not the same as an unsupported device or
+account.
 
 After a valid activity_id and configured client, the service makes one base
 activity read. Invalid activity_id input and an unavailable client make zero
@@ -166,21 +162,23 @@ signal and detail.
 
 ## Read-only and bounded by design
 
-This read-only guarantee is intentional. Provider seams call only the pinned Garmin reads for the base activity, splits,
-heart-rate zones, power zones, and exercise sets. The service never performs
-writes or raw requests. A name is bounded to 200 characters, a description is
-bounded to 500, and other text fields are bounded to 100;
-warnings never expose tokens, credentials,
-URLs, headers, request identifiers, raw responses, or exception messages. It
-never includes raw responses, tokens, credentials, URLs, or headers.
+This read-only guarantee is intentional. Provider seams call only the pinned
+Garmin reads for the base activity, splits, heart-rate zones, power zones, and
+exercise sets. The service never performs writes or raw requests. Fixed error
+and warning objects never include exception text, raw provider responses,
+tokens, credentials, URLs, headers, or request IDs; discarded malformed
+payloads are not echoed. Successful responses return bounded user-authored
+names, descriptions, and exercise names verbatim-ish after trimming and
+bounding; those fields may contain arbitrary text. A name is bounded to 200
+characters, a description is bounded to 500, and other text fields are bounded
+to 100.
 
-Garmin raw activity type keys are retained in `sport`. `create_workout.sport` instead
-uses the normalized sport vocabulary `running`, `cycling`, `walking`, or
-`strength`; for example, `trail_running` can be translated to `running` only
-when the AI and user intentionally choose the next workout.
-This is the create_workout normalized sport vocabulary, distinct from Garmin's
-raw activity type keys.
-The exact normalized vocabulary is running, cycling, walking, or strength.
+Garmin raw activity type keys are retained in `sport`, while
+`create_workout.sport` uses the distinct normalized vocabulary `running`,
+`cycling`, `walking`, or `strength`; for example, `trail_running` can be
+translated to `running` only when the AI and user intentionally choose the next
+workout. This is the create_workout normalized sport vocabulary: running,
+cycling, walking, or strength.
 
 The intended feedback loop is: identify the completed activity → analyze it →
 the AI interprets the evidence → the user confirms → create the next workout.

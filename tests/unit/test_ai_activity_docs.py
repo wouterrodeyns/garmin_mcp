@@ -139,12 +139,16 @@ def test_activity_docs_pin_warning_security_and_bounded_field_contracts():
         "splits_truncated",
         "read-only guarantee",
         "never performs writes",
-        "never includes raw responses, tokens, credentials, urls, or headers",
+        "fixed error and warning objects never include exception text, raw provider responses, tokens, credentials, urls, headers, or request ids",
+        "discarded malformed payloads are not echoed",
+        "successful responses return bounded user-authored names, descriptions, and exercise names",
+        "those fields may contain arbitrary text",
         "name is bounded to 200",
         "description is bounded to 500",
         "other text fields are bounded to 100",
     ):
         assert phrase in lower
+    assert "never includes raw responses, tokens, credentials, urls, or headers" not in lower
 
 
 def test_activity_docs_pin_argument_availability_and_sport_vocabularies():
@@ -205,16 +209,47 @@ def test_activity_docs_example_is_compact_current_and_explicitly_raw_backed():
     assert example["error"] is None
     activity = example["activity"]
     assert isinstance(activity, dict)
-    assert set(activity) >= {
+    assert set(activity) == {
         "id",
+        "name",
+        "description",
         "sport",
         "sport_family",
+        "event_type",
+        "start_time_local",
         "duration_minutes",
+        "moving_duration_minutes",
+        "elapsed_duration_minutes",
         "distance_km",
+        "average_speed_kph",
+        "max_speed_kph",
         "average_pace",
         "heart_rate",
+        "power",
+        "cadence",
+        "elevation",
+        "calories",
+        "training_effect",
+        "workout_feedback",
+        "recovery",
+        "reported_lap_count",
     }
-    assert isinstance(example["availability"], dict)
+    assert set(activity["heart_rate"]) == {"average_bpm", "max_bpm", "min_bpm"}
+    assert set(activity["power"]) == {"average_watts", "max_watts", "normalized_watts"}
+    assert set(activity["cadence"]) == {"average_spm", "max_spm"}
+    assert set(activity["elevation"]) == {
+        "gain_meters", "loss_meters", "minimum_meters", "maximum_meters"
+    }
+    assert set(activity["training_effect"]) == {"aerobic", "anaerobic", "label", "load"}
+    assert set(activity["workout_feedback"]) == {"rpe", "feel"}
+    assert set(activity["recovery"]) == {"heart_rate_bpm", "body_battery_impact"}
+    assert set(example["availability"]) == {
+        "activity", "splits", "heart_rate_zones", "power_zones", "strength"
+    }
+    assert set(example["derived"]) == {
+        "scope", "fastest_split_number", "fastest_pace",
+        "slowest_split_number", "slowest_pace", "pace_range_seconds_per_km"
+    }
     assert example["splits"] is None
     assert example["power_zones"] is None
     assert example["strength"] is None
