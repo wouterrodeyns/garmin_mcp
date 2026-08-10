@@ -143,9 +143,13 @@ def test_activity_docs_pin_warning_security_and_bounded_field_contracts():
         "discarded malformed payloads are not echoed",
         "successful responses return bounded user-authored names, descriptions, and exercise names",
         "those fields may contain arbitrary text",
-        "name is bounded to 200",
+        "workout_feedback.rpe is a human 0-10 value",
+        "normalized from garmin directworkoutrpe x10 storage",
+        "raw source semantics",
+        "activity name is bounded to 200",
         "description is bounded to 500",
-        "other text fields are bounded to 100",
+        "strength exercise names are bounded to 120",
+        "other returned strings are bounded to 100",
     ):
         assert phrase in lower
     assert "never includes raw responses, tokens, credentials, urls, or headers" not in lower
@@ -156,6 +160,7 @@ def test_activity_docs_pin_argument_availability_and_sport_vocabularies():
     for phrase in (
         "activity_id",
         "positive integer or decimal string",
+        "fastmcp rejects booleans and floats before any garmin read",
         "detail is not an argument",
         "optional detail may be absent",
         "unavailable snapshot or sync",
@@ -276,6 +281,7 @@ def test_current_docs_publish_the_exact_profile_without_stale_eleven_claims():
     assert "ai-activity.md" in setup
     assert "ai-activity.md" in training
     assert "ai-activity.md" in workouts
+    assert "ai_training, ai_workouts, and ai_activity packages" in readme.lower()
 
 
 def test_current_docs_describe_three_high_level_coaching_roles():

@@ -152,8 +152,9 @@ reference.
 
 ## Compatibility, contributing, and license
 
-Fork-specific AI abstractions live in separate `ai_training` and `ai_workouts`
-packages. They wrap Taxuspt's backend instead of replacing authentication,
+Fork-specific AI abstractions live in separate `ai_training`, `ai_workouts`, and
+`ai_activity` packages. The ai_training, ai_workouts, and ai_activity packages
+wrap Taxuspt's backend instead of replacing authentication,
 Garmin API handling, or workout normalization, keeping future upstream sync
 practical.
 

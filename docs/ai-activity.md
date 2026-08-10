@@ -15,6 +15,7 @@ state; that does not mean the device or account is unsupported. The low-level
 get_activity remains a compatibility and targeted read.
 An unavailable snapshot or sync is not the same as an unsupported device or
 account.
+FastMCP rejects booleans and floats before any Garmin read.
 
 After a valid activity_id and configured client, the service makes one base
 activity read. Invalid activity_id input and an unavailable client make zero
@@ -93,6 +94,10 @@ seconds as `M:SS/km`. Zone durations retain raw seconds and also expose
 one-decimal minutes; zone percentages are bounded to 0–100 and displayed to
 one decimal.
 
+workout_feedback.rpe is a human 0-10 value, normalized from Garmin
+directWorkoutRpe x10 storage. These raw source semantics mean Garmin's stored
+value is divided by 10; the example rpe 7 remains correct.
+
 The split response keeps source order and reports `total_count`,
 `returned_count`, `truncated`, and `items`. At most 100 source laps are
 returned. If the source has more than 100 laps, `truncated` is true,
@@ -169,9 +174,9 @@ and warning objects never include exception text, raw provider responses,
 tokens, credentials, URLs, headers, or request IDs; discarded malformed
 payloads are not echoed. Successful responses return bounded user-authored
 names, descriptions, and exercise names verbatim-ish after trimming and
-bounding; those fields may contain arbitrary text. A name is bounded to 200
-characters, a description is bounded to 500, and other text fields are bounded
-to 100.
+bounding; those fields may contain arbitrary text. The activity name is bounded
+to 200 characters, the description is bounded to 500, strength exercise names
+are bounded to 120, and other returned strings are bounded to 100.
 
 Garmin raw activity type keys are retained in `sport`, while
 `create_workout.sport` uses the distinct normalized vocabulary `running`,
