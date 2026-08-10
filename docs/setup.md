@@ -127,8 +127,12 @@ precedence:
 4. With no profile or explicit allowlist, broad upstream-compatible tool
    registration remains available.
 
-See [training context](ai-training.md) and [AI-friendly workouts](ai-workouts.md)
-for the two high-level coaching tools.
+See [training context](ai-training.md), [activity analysis](ai-activity.md), and
+[AI-friendly workouts](ai-workouts.md) for the high-level coaching tools. The
+training context is the coach's eyes/current context, activity analysis is the
+completed-session feedback read, and workout creation is the coach's hands/write
+operation. Activity analysis is read-only and does not replace the low-level
+`get_activity` compatibility/targeted read.
 
 Other runtime variables include:
 

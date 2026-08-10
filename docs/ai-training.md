@@ -229,7 +229,7 @@ Warnings never include raw Garmin responses, tokens, or credentials.
 
 ## AI-coach profile and workflow
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 11 tools. The high-level
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 12 tools. The high-level
 coaching flow normally needs only the two flagship tools:
 
 ```text
@@ -240,6 +240,10 @@ Claude: get_training_context(days=30)
         -> reviews training and recovery facts
         -> recommends a conservative return-to-running session
 
+After a completed session, `analyze_activity(activity_id)` is the bounded,
+read-only feedback read for the AI to interpret. It is not another context
+aggregate; see the [activity analysis guide](ai-activity.md).
+
 User: "Put that workout on Garmin for tomorrow."
 
 Claude: create_workout(..., schedule_date="2026-08-10")
@@ -247,4 +251,5 @@ Claude: create_workout(..., schedule_date="2026-08-10")
 
 The remaining profile tools preserve compatibility for focused activity and
 workout reads and explicit calendar operations. `get_training_context` itself
-remains strictly read-only.
+remains strictly read-only. `create_workout` is the coach's hands/write
+operation after the user confirms the proposed workout.

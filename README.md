@@ -18,6 +18,7 @@ The recommended experience centers on two high-level tools:
 | Tool | Role |
 |---|---|
 | [`get_training_context(days=14)`](docs/ai-training.md) | The coach's eyes: a compact, read-only factual snapshot before making a recommendation. |
+| [`analyze_activity(activity_id)`](docs/ai-activity.md) | Completed-session feedback read: bounded facts for the AI to interpret. |
 | [`create_workout(...)`](docs/ai-workouts.md) | The coach's hands: validate a readable workout, upload it, and optionally schedule it as one intentional write. |
 
 ```text
@@ -79,10 +80,11 @@ Garmin Connect China, and token recovery, see the
 
 ## AI-coach tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 11-tool surface:
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 12-tool surface:
 
 ```text
 `get_training_context`
+`analyze_activity`
 `create_workout`
 `get_activities`
 `get_activities_by_date`
@@ -94,6 +96,10 @@ Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 11-tool surface:
 `unschedule_workout`
 `delete_workout`
 ```
+
+This profile narrows registration for the AI-facing surface; no existing
+upstream tool is removed, and broad upstream-compatible registration remains
+available when no profile is selected.
 
 The activity and coaching-context operations are reads. Workout creation,
 scheduling, unscheduling, and deletion are deliberate writes.
@@ -115,6 +121,8 @@ AI-facing default.
 
 - [Training context](docs/ai-training.md) documents aggregation windows,
   normalized fields, optional metrics, and structured warning/status behavior.
+- [Activity analysis](docs/ai-activity.md) documents the completed-session
+  feedback read, sport-gated detail, stable envelope, and v1 boundaries.
 - [AI-friendly workouts](docs/ai-workouts.md) documents the readable workout
   schema, compiler, supported sports, targets, and scheduling result.
 - [Setup and operations](docs/setup.md) covers clients, authentication, local
