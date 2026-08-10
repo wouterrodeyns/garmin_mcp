@@ -19,6 +19,7 @@ build/
 .mcp.json
 .worktrees/
 docs/*
+!docs/setup.md
 !docs/superpowers/
 docs/superpowers/*
 !docs/superpowers/specs/
