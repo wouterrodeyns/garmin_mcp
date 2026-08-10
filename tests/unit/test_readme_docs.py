@@ -126,11 +126,15 @@ def test_readme_is_ai_coach_first_and_credits_upstream_once():
 def test_readme_profile_and_filter_contract():
     profile = _section(_readme(), "AI-coach tool profile")
     assert set(re.findall(r"^`([^`]+)`$", profile, re.MULTILINE)) == PROFILE_TOOLS
-    lower = _readme().lower()
+    lower = " ".join(_readme().lower().split())
     assert "garmin_tool_profile=ai-coach" in lower
     assert lower.index("garmin_enabled_tools") < lower.index("garmin_disabled_tools")
     assert lower.index("garmin_disabled_tools") < lower.index("profile is unset")
+    assert "denylist is ignored while the explicit allowlist is active" in lower
     assert "broad upstream-compatible registration remains available" in lower
+
+    setup = " ".join(_setup().lower().split())
+    assert "denylist is ignored while the explicit allowlist is active" in setup
 
 
 def test_readme_quick_start_uses_fork_preauth_and_secret_free_config():

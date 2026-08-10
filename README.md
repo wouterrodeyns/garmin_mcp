@@ -100,8 +100,10 @@ scheduling, unscheduling, and deletion are deliberate writes.
 
 Tool filtering follows this precedence:
 
-1. A non-empty `GARMIN_ENABLED_TOOLS` explicit allowlist takes precedence.
-2. `GARMIN_DISABLED_TOOLS` subtracts tools from the selected set.
+1. A non-empty `GARMIN_ENABLED_TOOLS` explicit allowlist takes precedence; the
+   denylist is ignored while the explicit allowlist is active.
+2. Without an explicit allowlist, `GARMIN_DISABLED_TOOLS` subtracts tools from
+   the selected profile or broad default.
 3. Otherwise, the selected profile controls registration.
 
 When the explicit allowlist is absent and the profile is unset, broad upstream-compatible registration remains available.

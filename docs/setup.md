@@ -119,8 +119,10 @@ npx @modelcontextprotocol/inspector uv run garmin-mcp
 For AI coaching, set `GARMIN_TOOL_PROFILE=ai-coach`. Filtering follows this
 precedence:
 
-1. A non-empty `GARMIN_ENABLED_TOOLS` explicit allowlist wins.
-2. `GARMIN_DISABLED_TOOLS` subtracts tools from the selected set.
+1. A non-empty `GARMIN_ENABLED_TOOLS` explicit allowlist wins; the denylist is
+   ignored while the explicit allowlist is active.
+2. Without an explicit allowlist, `GARMIN_DISABLED_TOOLS` subtracts tools from
+   the selected profile or broad default.
 3. Otherwise, `GARMIN_TOOL_PROFILE` selects a named profile.
 4. With no profile or explicit allowlist, broad upstream-compatible tool
    registration remains available.
