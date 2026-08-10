@@ -50,11 +50,11 @@ docs/superpowers/*
 Run each command separately:
 
 ```bash
-git check-ignore -v docs/setup.md
+git check-ignore -q docs/setup.md
 git check-ignore -q docs/temporary-note.md
 ```
 
-Expected: the first exits `1` with no output; the second exits `0`. Do not create `docs/temporary-note.md`.
+Expected: the first exits `1`; the second exits `0`. Do not create `docs/temporary-note.md`.
 
 - [ ] **Step 3: Commit the green ignore-only change**
 
