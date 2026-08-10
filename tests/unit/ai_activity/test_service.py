@@ -275,3 +275,39 @@ def test_huge_numeric_facts_are_treated_as_missing_without_raising(reader: Mock)
 
     assert result["status"] == "success"
     assert result["activity"]["heart_rate"]["average_bpm"] is None  # type: ignore[index]
+
+
+def test_overflowed_derived_speed_and_pace_are_null_in_a_stable_success_response(reader: Mock):
+    reader.return_value = ProviderResult(raw_activity(summaryDTO={
+        "duration": 1e308,
+        "movingDuration": 1e308,
+        "elapsedDuration": 1e308,
+        "distance": 1.0,
+        "averageSpeed": 1e308,
+        "maxSpeed": 1e308,
+    }))
+
+    result = analyze_activity_service(Mock(), 123)
+    activity = result["activity"]
+
+    assert result["status"] == "success"
+    assert activity["duration_minutes"] == 1.6666666666666666e306  # type: ignore[index]
+    assert activity["moving_duration_minutes"] == 1.6666666666666666e306  # type: ignore[index]
+    assert activity["elapsed_duration_minutes"] == 1.6666666666666666e306  # type: ignore[index]
+    assert activity["average_speed_kph"] is None  # type: ignore[index]
+    assert activity["max_speed_kph"] is None  # type: ignore[index]
+    assert activity["average_pace"] is None  # type: ignore[index]
+
+
+def test_underflowed_pace_divisor_and_large_kilometers_remain_finite(reader: Mock):
+    reader.return_value = ProviderResult(raw_activity(summaryDTO={
+        "duration": 1.0,
+        "distance": 5e-324,
+    }))
+
+    result = analyze_activity_service(Mock(), 123)
+    activity = result["activity"]
+
+    assert result["status"] == "success"
+    assert activity["distance_km"] == 0.0  # type: ignore[index]
+    assert activity["average_pace"] is None  # type: ignore[index]

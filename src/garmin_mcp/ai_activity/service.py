@@ -141,24 +141,50 @@ def _sport_family(sport: str | None) -> str:
     return "generic"
 
 
+def _rounded_finite(value: int | float, digits: int) -> float | None:
+    try:
+        rounded = round(value, digits)
+    except (OverflowError, ValueError):
+        return None
+    try:
+        return float(rounded) if math.isfinite(rounded) else None
+    except OverflowError:
+        return None
+
+
 def _minutes(value: Any) -> float | None:
     seconds = _number(value, minimum=0)
-    return round(seconds / 60, 1) if seconds is not None else None
+    if seconds is None:
+        return None
+    try:
+        return _rounded_finite(seconds / 60, 1)
+    except OverflowError:
+        return None
 
 
 def _kilometers(value: Any) -> float | None:
     meters = _number(value, minimum=0)
-    return round(meters / 1000, 2) if meters is not None else None
+    if meters is None:
+        return None
+    try:
+        return _rounded_finite(meters / 1000, 2)
+    except OverflowError:
+        return None
 
 
 def _speed_kph(value: Any) -> float | None:
     speed = _number(value, minimum=0)
-    return round(speed * 3.6, 1) if speed is not None else None
+    if speed is None:
+        return None
+    try:
+        return _rounded_finite(speed * 3.6, 1)
+    except OverflowError:
+        return None
 
 
 def _elevation(value: Any) -> float | None:
     meters = _number(value)
-    return round(meters, 1) if meters is not None else None
+    return _rounded_finite(meters, 1) if meters is not None else None
 
 
 def _pace(sport_family: str, duration: Any, distance: Any) -> str | None:
@@ -166,7 +192,13 @@ def _pace(sport_family: str, duration: Any, distance: Any) -> str | None:
     meters = _number(distance, minimum=0)
     if sport_family not in {"running", "walking"} or not seconds or not meters:
         return None
-    seconds_per_km = int(round(seconds / (meters / 1000)))
+    try:
+        kilometers = meters / 1000
+        if not math.isfinite(kilometers) or kilometers <= 0:
+            return None
+        seconds_per_km = int(round(seconds / kilometers))
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return None
     return f"{seconds_per_km // 60}:{seconds_per_km % 60:02d}/km"
 
 
