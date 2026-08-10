@@ -64,6 +64,9 @@ def reader(monkeypatch: pytest.MonkeyPatch) -> Mock:
     mock = Mock(return_value=ProviderResult(raw_activity()))
     monkeypatch.setattr(service, "get_activity", mock)
     monkeypatch.setattr(service, "get_splits", Mock(return_value=ProviderResult(None)), raising=False)
+    monkeypatch.setattr(service, "get_heart_rate_zones", Mock(return_value=ProviderResult(None)), raising=False)
+    monkeypatch.setattr(service, "get_power_zones", Mock(return_value=ProviderResult(None)), raising=False)
+    monkeypatch.setattr(service, "get_strength", Mock(return_value=ProviderResult(None)), raising=False)
     return mock
 
 
@@ -604,7 +607,7 @@ def test_overflow_and_subnormal_split_facts_are_safely_null(reader: Mock, monkey
     assert item["pace"] is None
 
 
-def test_valid_base_then_split_is_the_only_provider_call_sequence(monkeypatch: pytest.MonkeyPatch):
+def test_valid_base_then_split_then_hr_zone_is_the_provider_call_sequence(monkeypatch: pytest.MonkeyPatch):
     calls: list[tuple[str, int]] = []
 
     def base(_client: object, activity_id: int) -> ProviderResult:
@@ -615,13 +618,18 @@ def test_valid_base_then_split_is_the_only_provider_call_sequence(monkeypatch: p
         calls.append(("splits", activity_id))
         return ProviderResult({"lapDTOs": []})
 
+    def heart_rate_zones(_client: object, activity_id: int) -> ProviderResult:
+        calls.append(("heart_rate_zones", activity_id))
+        return ProviderResult(None)
+
     monkeypatch.setattr(service, "get_activity", base)
     monkeypatch.setattr(service, "get_splits", splits)
+    monkeypatch.setattr(service, "get_heart_rate_zones", heart_rate_zones, raising=False)
 
     result = analyze_activity_service(Mock(), 123)
 
     assert result["status"] == "success"
-    assert calls == [("activity", 123), ("splits", 123)]
+    assert calls == [("activity", 123), ("splits", 123), ("heart_rate_zones", 123)]
 
 
 def test_base_error_never_attempts_splits(reader: Mock, monkeypatch: pytest.MonkeyPatch):
@@ -672,3 +680,295 @@ def test_oversized_native_integer_fields_are_null_and_the_response_stays_json_se
     assert invalid_id_result["status"] == "error"
     assert invalid_id_result["error"]["code"] == "invalid_activity_id"  # type: ignore[index]
     json.dumps(invalid_id_result, allow_nan=False)
+
+
+def test_running_hr_signal_fetches_hr_zones_after_splits(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+
+    def base(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("activity")
+        return ProviderResult(raw_activity())
+
+    def splits(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("splits")
+        return ProviderResult({"lapDTOs": []})
+
+    def zones(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("heart_rate_zones")
+        return ProviderResult([])
+
+    monkeypatch.setattr(service, "get_activity", base)
+    monkeypatch.setattr(service, "get_splits", splits)
+    monkeypatch.setattr(service, "get_heart_rate_zones", zones, raising=False)
+    monkeypatch.setattr(service, "get_power_zones", Mock(return_value=ProviderResult(None)), raising=False)
+    monkeypatch.setattr(service, "get_strength", Mock(return_value=ProviderResult(None)), raising=False)
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert calls == ["activity", "splits", "heart_rate_zones"]
+    assert result["availability"]["heart_rate_zones"] is True
+    assert result["heart_rate_zones"] == {"items": []}
+
+
+def optional_readers(
+    monkeypatch: pytest.MonkeyPatch, calls: list[str], *, hr: object = None,
+    power: object = None, strength: object = None,
+) -> None:
+    def optional(name: str, data: object):
+        def read(_client: object, _activity_id: int) -> ProviderResult:
+            calls.append(name)
+            return ProviderResult(data)
+        return read
+
+    monkeypatch.setattr(service, "get_heart_rate_zones", optional("heart_rate_zones", hr), raising=False)
+    monkeypatch.setattr(service, "get_power_zones", optional("power_zones", power), raising=False)
+    monkeypatch.setattr(service, "get_strength", optional("strength", strength), raising=False)
+
+
+@pytest.mark.parametrize(
+    ("type_key", "summary", "expected"),
+    [
+        ("running", {"averageHR": 1}, ["activity", "splits", "heart_rate_zones"]),
+        ("trail_running", {"maxHR": 1}, ["activity", "splits", "heart_rate_zones"]),
+        ("treadmill_running", {"minHR": 1}, ["activity", "splits", "heart_rate_zones"]),
+        ("walking", {"averageHR": 1}, ["activity", "splits", "heart_rate_zones"]),
+        ("treadmill_walking", {"maxHR": 1}, ["activity", "splits", "heart_rate_zones"]),
+        ("cycling", {"averageHR": 1, "averagePower": 1}, ["activity", "splits", "heart_rate_zones", "power_zones"]),
+        ("indoor_cycling", {"averagePower": 1}, ["activity", "splits", "power_zones"]),
+        ("road_biking", {"maxPower": 1}, ["activity", "splits", "power_zones"]),
+        ("mountain_biking", {"normalizedPower": 1}, ["activity", "splits", "power_zones"]),
+        ("gravel_cycling", {"averageHR": 1}, ["activity", "splits", "heart_rate_zones"]),
+        ("strength_training", {"averageHR": 1, "averagePower": 1}, ["activity", "strength"]),
+        ("yoga", {"averageHR": 1, "averagePower": 1}, ["activity"]),
+    ],
+)
+def test_sport_keys_have_exact_optional_provider_budgets_and_order(
+    monkeypatch: pytest.MonkeyPatch, type_key: str, summary: dict[str, object], expected: list[str],
+):
+    calls: list[str] = []
+
+    def base(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("activity")
+        return ProviderResult(raw_activity(activityTypeDTO={"typeKey": type_key}, summaryDTO=summary))
+
+    def splits(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("splits")
+        return ProviderResult({"lapDTOs": []})
+
+    monkeypatch.setattr(service, "get_activity", base)
+    monkeypatch.setattr(service, "get_splits", splits)
+    optional_readers(monkeypatch, calls, hr=None, power=None, strength=None)
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert calls == expected
+    assert result["status"] == "success"
+
+
+@pytest.mark.parametrize("signal", [0, -1, True, False, float("nan"), float("inf"), "1", None])
+def test_invalid_or_nonpositive_summary_signals_skip_optional_zone_providers(
+    monkeypatch: pytest.MonkeyPatch, signal: object,
+):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "cycling"},
+        summaryDTO={"averageHR": signal, "maxHR": signal, "minHR": signal,
+                    "averagePower": signal, "maxPower": signal, "normalizedPower": signal},
+    )))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
+    optional_readers(monkeypatch, calls)
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert calls == []
+    assert result["availability"]["heart_rate_zones"] is False
+    assert result["availability"]["power_zones"] is False
+    assert result["warnings"] == []
+
+
+@pytest.mark.parametrize("root", [[], {"zones": []}])
+def test_zone_empty_roots_are_available_empty_sections(monkeypatch: pytest.MonkeyPatch, root: object):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "cycling"}, summaryDTO={"averageHR": 1, "averagePower": 1},
+    )))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
+    optional_readers(monkeypatch, calls, hr=root, power=root)
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["heart_rate_zones"] == {"items": []}
+    assert result["power_zones"] == {"items": []}
+    assert result["availability"]["heart_rate_zones"] is True
+    assert result["availability"]["power_zones"] is True
+
+
+@pytest.mark.parametrize("root", [None, {}])
+def test_absent_zone_roots_are_silent_and_unavailable(monkeypatch: pytest.MonkeyPatch, root: object):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        summaryDTO={"averageHR": 1}, activityTypeDTO={"typeKey": "running"},
+    )))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
+    optional_readers(monkeypatch, calls, hr=root)
+    result = analyze_activity_service(Mock(), 123)
+    assert result["heart_rate_zones"] is None
+    assert result["warnings"] == []
+
+
+def test_zone_items_preserve_fields_units_source_order_and_percentages(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    zones = [
+        {"zoneNumber": 2, "timeInZone": 90, "percentageInZone": 22.24,
+         "zoneLowBoundary": 120, "zoneHighBoundary": 140, "label": "ignored"},
+        {"timeInZone": 0, "percentageInZone": 50, "zoneLowBoundary": 0, "zoneHighBoundary": 200},
+    ]
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "cycling"}, summaryDTO={"averageHR": 1, "averagePower": 1},
+    )))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
+    optional_readers(monkeypatch, calls, hr=zones, power={"zones": zones})
+    result = analyze_activity_service(Mock(), 123)
+    assert result["heart_rate_zones"] == {"items": [
+        {"zone": 2, "duration_seconds": 90, "duration_minutes": 1.5, "percentage": 22.2,
+         "lower_bpm": 120, "upper_bpm": 140},
+        {"zone": None, "duration_seconds": 0, "duration_minutes": 0.0, "percentage": 50.0,
+         "lower_bpm": 0, "upper_bpm": 200},
+    ]}
+    assert result["power_zones"] == {"items": [
+        {"zone": 2, "duration_seconds": 90, "duration_minutes": 1.5, "percentage": 22.2,
+         "lower_watts": 120, "upper_watts": 140},
+        {"zone": None, "duration_seconds": 0, "duration_minutes": 0.0, "percentage": 50.0,
+         "lower_watts": 0, "upper_watts": 200},
+    ]}
+
+
+@pytest.mark.parametrize(
+    ("provider", "root", "message"),
+    [
+        ("heart_rate_zones", [None, {}, {"zoneNumber": True}, 7], "Heart-rate zone response had an unexpected shape."),
+        ("power_zones", {"bad": []}, "Power-zone response had an unexpected shape."),
+    ],
+)
+def test_malformed_and_all_invalid_zone_data_are_bounded(monkeypatch: pytest.MonkeyPatch, provider: str, root: object, message: str):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "cycling"}, summaryDTO={"averageHR": 1, "averagePower": 1},
+    )))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
+    optional_readers(monkeypatch, calls, hr=root if provider == "heart_rate_zones" else None,
+                     power=root if provider == "power_zones" else None)
+    result = analyze_activity_service(Mock(), 123)
+    assert result["status"] == "partial_success"
+    assert result[provider] is None
+    assert result["warnings"] == [{"provider": provider, "code": "invalid_provider_response", "message": message}]
+
+
+def test_mixed_zone_items_drop_invalid_values_once_and_unsafe_ints_are_null(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    huge = 10 ** 5000
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(summaryDTO={"averageHR": 1})))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
+    optional_readers(monkeypatch, calls, hr=[{"zoneNumber": huge, "timeInZone": 10}, {"percentageInZone": 101}, {"timeInZone": 2}])
+    result = analyze_activity_service(Mock(), 123)
+    assert result["heart_rate_zones"] == {"items": [
+        {"zone": None, "duration_seconds": 10, "duration_minutes": 0.2, "percentage": None, "lower_bpm": None, "upper_bpm": None},
+        {"zone": None, "duration_seconds": 2, "duration_minutes": 0.0, "percentage": None, "lower_bpm": None, "upper_bpm": None},
+    ]}
+    assert result["warnings"] == [{"provider": "heart_rate_zones", "code": "invalid_provider_response", "message": "Heart-rate zone response had an unexpected shape."}]
+
+
+@pytest.mark.parametrize("root", [None, {}])
+def test_absent_strength_roots_are_silent(monkeypatch: pytest.MonkeyPatch, root: object):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
+    optional_readers(monkeypatch, calls, strength=root)
+    result = analyze_activity_service(Mock(), 123)
+    assert result["strength"] is None and result["warnings"] == []
+
+
+def test_strength_empty_and_normalized_sets_ignore_weight_volume_and_sum_reps(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    strength = {"exercises": [
+        {"exerciseName": "  Squat  ", "sets": [
+            {"setNumber": 1, "reps": 0, "weight": 100, "volume": 999},
+            {"setNumber": 2, "reps": 8, "resistance": 10, "unit": "kg"},
+        ], "category": "ignored"},
+        {"exerciseName": "  Plank  ", "sets": []},
+    ]}
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
+    optional_readers(monkeypatch, calls, strength=strength)
+    result = analyze_activity_service(Mock(), 123)
+    assert result["strength"] == {"exercise_count": 2, "set_count": 2, "repetition_count": 8, "items": [
+        {"name": "Squat", "set_count": 2, "repetition_count": 8,
+         "sets": [{"set_number": 1, "repetitions": 0}, {"set_number": 2, "repetitions": 8}]},
+        {"name": "Plank", "set_count": 0, "repetition_count": None, "sets": []},
+    ]}
+    assert result["availability"]["strength"] is True
+
+
+def test_strength_empty_exercises_are_available_and_zero_count(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
+    optional_readers(monkeypatch, calls, strength={"exercises": []})
+    assert analyze_activity_service(Mock(), 123)["strength"] == {
+        "exercise_count": 0, "set_count": 0, "repetition_count": None, "items": [],
+    }
+
+
+def test_strength_missing_repetitions_stay_null_while_known_zero_totals_stay_zero(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
+    optional_readers(monkeypatch, calls, strength={"exercises": [
+        {"sets": [{"setNumber": 1, "reps": 0}]},
+        {"sets": [{"setNumber": 1}]},
+    ]})
+    strength = analyze_activity_service(Mock(), 123)["strength"]
+    assert strength["repetition_count"] == 0
+    assert strength["items"][0]["repetition_count"] == 0
+    assert strength["items"][1]["repetition_count"] is None
+
+
+def test_strength_sparse_named_and_mixed_invalid_entries_have_stable_totals(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    huge = 10 ** 5000
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
+    optional_readers(monkeypatch, calls, strength={"exercises": [
+        {"exerciseName": "Named", "sets": []},
+        {"sets": [{"setNumber": 1}, {"reps": 3}, {"setNumber": True, "reps": huge}, None]},
+        {"exerciseName": "Missing sets"},
+        None,
+    ]})
+    result = analyze_activity_service(Mock(), 123)
+    assert result["strength"] == {"exercise_count": 2, "set_count": 2, "repetition_count": 3, "items": [
+        {"name": "Named", "set_count": 0, "repetition_count": None, "sets": []},
+        {"name": None, "set_count": 2, "repetition_count": 3,
+         "sets": [{"set_number": 1, "repetitions": None}, {"set_number": None, "repetitions": 3}]},
+    ]}
+    assert result["warnings"] == [{"provider": "strength", "code": "invalid_provider_response", "message": "Strength exercise-set response had an unexpected shape."}]
+
+
+@pytest.mark.parametrize("root", [{"exercises": "bad"}, [], {"exercises": [{"sets": "bad"}]}])
+def test_wrong_or_all_invalid_strength_roots_are_unavailable_with_one_fixed_warning(monkeypatch: pytest.MonkeyPatch, root: object):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
+    optional_readers(monkeypatch, calls, strength=root)
+    result = analyze_activity_service(Mock(), 123)
+    assert result["status"] == "partial_success" and result["strength"] is None
+    assert result["warnings"] == [{"provider": "strength", "code": "invalid_provider_response", "message": "Strength exercise-set response had an unexpected shape."}]
+
+
+def test_later_optional_provider_runs_after_prior_malformed_response_and_warnings_compose(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "cycling"}, summaryDTO={"averageHR": 1, "averagePower": 1},
+    )))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
+    optional_readers(monkeypatch, calls, hr={"bad": []}, power={"bad": []})
+    result = analyze_activity_service(Mock(), 123)
+    assert calls == ["heart_rate_zones", "power_zones"]
+    assert result["status"] == "partial_success"
+    assert result["warnings"] == [
+        {"provider": "heart_rate_zones", "code": "invalid_provider_response", "message": "Heart-rate zone response had an unexpected shape."},
+        {"provider": "power_zones", "code": "invalid_provider_response", "message": "Power-zone response had an unexpected shape."},
+    ]

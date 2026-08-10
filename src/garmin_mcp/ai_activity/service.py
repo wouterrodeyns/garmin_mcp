@@ -14,7 +14,10 @@ from .providers import (
     WALKING_TYPE_KEYS,
     ProviderResult,
     get_activity,
+    get_heart_rate_zones,
+    get_power_zones,
     get_splits,
+    get_strength,
 )
 
 
@@ -333,6 +336,179 @@ def _apply_splits(result: dict[str, Any], client: Any, activity_id: int, payload
     result["derived"] = _split_derived(items_with_pace, truncated, family)
 
 
+def _provider_invalid(result: dict[str, Any], provider: str, message: str) -> None:
+    result["status"] = "partial_success"
+    result["warnings"].append(_warning(provider, "invalid_provider_response", message))
+
+
+def _provider_unavailable(result: dict[str, Any], provider: str, message: str) -> None:
+    result["status"] = "partial_success"
+    result["warnings"].append(_warning(provider, "provider_unavailable", message))
+
+
+def _signal_present(summary: Mapping[str, Any], *keys: str) -> bool:
+    return any(_number(summary.get(key), minimum=1) is not None for key in keys)
+
+
+def _zone_list(data: Any) -> list[Any] | None | bool:
+    """Return zones, None for an absent response, and False for a malformed root."""
+    if data is None or data == {}:
+        return None
+    if isinstance(data, list):
+        return data
+    if isinstance(data, Mapping) and isinstance(data.get("zones"), list):
+        return data["zones"]
+    return False
+
+
+def _zone_item(value: Any, *, boundary_unit: str) -> tuple[dict[str, Any] | None, bool]:
+    if not isinstance(value, Mapping):
+        return None, True
+    zone = _integer_equivalent(value.get("zoneNumber"), positive=True)
+    duration_seconds = _number(value.get("timeInZone"), minimum=0)
+    percentage = _number(value.get("percentageInZone"))
+    if percentage is not None and not 0 <= percentage <= 100:
+        percentage = None
+    lower = _number(value.get("zoneLowBoundary"), minimum=0)
+    upper = _number(value.get("zoneHighBoundary"), minimum=0)
+    invalid = (
+        ("zoneNumber" in value and zone is None)
+        or ("timeInZone" in value and duration_seconds is None)
+        or ("percentageInZone" in value and percentage is None)
+        or ("zoneLowBoundary" in value and lower is None)
+        or ("zoneHighBoundary" in value and upper is None)
+    )
+    item = {
+        "zone": zone,
+        "duration_seconds": duration_seconds,
+        "duration_minutes": _minutes(duration_seconds),
+        "percentage": _rounded_finite(percentage, 1) if percentage is not None else None,
+        f"lower_{boundary_unit}": lower,
+        f"upper_{boundary_unit}": upper,
+    }
+    if not any(value is not None for value in (zone, duration_seconds, percentage, lower, upper)):
+        return None, True
+    return item, invalid
+
+
+def _apply_zones(
+    result: dict[str, Any], client: Any, activity_id: int, *, provider: str, reader: Any,
+    boundary_unit: str, invalid_message: str, unavailable_message: str,
+) -> None:
+    try:
+        provider_result = reader(client, activity_id)
+    except Exception:
+        provider_result = ProviderResult(None, failed=True)
+    if not isinstance(provider_result, ProviderResult) or provider_result.failed:
+        _provider_unavailable(result, provider, unavailable_message)
+        return
+    zones = _zone_list(provider_result.data)
+    if zones is None:
+        return
+    if zones is False:
+        _provider_invalid(result, provider, invalid_message)
+        return
+    items: list[dict[str, Any]] = []
+    malformed = False
+    for value in zones:
+        item, item_malformed = _zone_item(value, boundary_unit=boundary_unit)
+        malformed = malformed or item_malformed
+        if item is not None:
+            items.append(item)
+    if not items and zones:
+        _provider_invalid(result, provider, invalid_message)
+        return
+    result["availability"][provider] = True
+    result[provider] = {"items": items}
+    if malformed:
+        _provider_invalid(result, provider, invalid_message)
+
+
+def _strength_root(data: Any) -> list[Any] | None | bool:
+    if data is None or data == {}:
+        return None
+    if isinstance(data, Mapping) and isinstance(data.get("exercises"), list):
+        return data["exercises"]
+    return False
+
+
+def _strength_exercise(value: Any) -> tuple[dict[str, Any] | None, bool]:
+    if not isinstance(value, Mapping):
+        return None, True
+    name = _text(value.get("exerciseName"), 200)
+    malformed = "exerciseName" in value and name is None
+    sets = value.get("sets")
+    if not isinstance(sets, list):
+        return None, True
+    normalized_sets: list[dict[str, int | None]] = []
+    repetitions: int | None = None
+    for raw_set in sets:
+        if not isinstance(raw_set, Mapping):
+            malformed = True
+            continue
+        set_number = _integer_equivalent(raw_set.get("setNumber"), positive=True)
+        raw_repetitions = _integer_equivalent(raw_set.get("reps"), positive=False)
+        reps = raw_repetitions if raw_repetitions is not None and raw_repetitions >= 0 else None
+        set_malformed = (
+            ("setNumber" in raw_set and set_number is None)
+            or ("reps" in raw_set and reps is None)
+        )
+        if set_number is None and reps is None:
+            malformed = True
+            continue
+        malformed = malformed or set_malformed
+        normalized_sets.append({"set_number": set_number, "repetitions": reps})
+        if reps is not None:
+            repetitions = (repetitions or 0) + reps
+    if name is None and not normalized_sets:
+        return None, True
+    return {
+        "name": name,
+        "set_count": len(normalized_sets),
+        "repetition_count": repetitions,
+        "sets": normalized_sets,
+    }, malformed
+
+
+def _apply_strength(result: dict[str, Any], client: Any, activity_id: int) -> None:
+    provider = "strength"
+    invalid_message = "Strength exercise-set response had an unexpected shape."
+    try:
+        provider_result = get_strength(client, activity_id)
+    except Exception:
+        provider_result = ProviderResult(None, failed=True)
+    if not isinstance(provider_result, ProviderResult) or provider_result.failed:
+        _provider_unavailable(result, provider, "Strength exercise-set data is unavailable.")
+        return
+    exercises = _strength_root(provider_result.data)
+    if exercises is None:
+        return
+    if exercises is False:
+        _provider_invalid(result, provider, invalid_message)
+        return
+    items: list[dict[str, Any]] = []
+    malformed = False
+    for value in exercises:
+        item, item_malformed = _strength_exercise(value)
+        malformed = malformed or item_malformed
+        if item is not None:
+            items.append(item)
+    if not items and exercises:
+        _provider_invalid(result, provider, invalid_message)
+        return
+    set_count = sum(item["set_count"] for item in items)
+    known_repetitions = [item["repetition_count"] for item in items if item["repetition_count"] is not None]
+    result["availability"][provider] = True
+    result[provider] = {
+        "exercise_count": len(items),
+        "set_count": set_count,
+        "repetition_count": sum(known_repetitions) if known_repetitions else None,
+        "items": items,
+    }
+    if malformed:
+        _provider_invalid(result, provider, invalid_message)
+
+
 def _activity_summary(payload: Mapping[str, Any], activity_id: int) -> dict[str, Any]:
     summary = _mapping_value(payload, "summaryDTO")
     metadata = _mapping_value(payload, "metadataDTO")
@@ -431,7 +607,31 @@ def analyze_activity_service(client: Any, activity_id: Any) -> dict[str, Any]:
     result["status"] = "success"
     result["activity"] = _activity_summary(provider_result.data, normalized_id)
     result["availability"]["activity"] = True
+    family = result["activity"]["sport_family"]
+    if family == "strength":
+        _apply_strength(result, client, normalized_id)
+        return result
+
     _apply_splits(result, client, normalized_id, provider_result.data)
+    summary = _mapping_value(provider_result.data, "summaryDTO")
+    if family in {"running", "walking", "cycling"} and _signal_present(
+        summary, "averageHR", "maxHR", "minHR"
+    ):
+        _apply_zones(
+            result, client, normalized_id,
+            provider="heart_rate_zones", reader=get_heart_rate_zones, boundary_unit="bpm",
+            invalid_message="Heart-rate zone response had an unexpected shape.",
+            unavailable_message="Heart-rate zones are unavailable.",
+        )
+    if family == "cycling" and _signal_present(
+        summary, "averagePower", "maxPower", "normalizedPower"
+    ):
+        _apply_zones(
+            result, client, normalized_id,
+            provider="power_zones", reader=get_power_zones, boundary_unit="watts",
+            invalid_message="Power-zone response had an unexpected shape.",
+            unavailable_message="Power-zone data is unavailable.",
+        )
     return result
 
 
