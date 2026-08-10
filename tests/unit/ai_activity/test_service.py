@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import ANY, Mock
 
 import pytest
@@ -647,3 +648,27 @@ def test_failed_split_provider_is_a_sanitized_partial_warning(reader: Mock, monk
         "message": "Activity splits are unavailable.",
     }]
     assert "secret" not in str(result)
+
+
+def test_oversized_native_integer_fields_are_null_and_the_response_stays_json_serializable(
+    reader: Mock, monkeypatch: pytest.MonkeyPatch
+):
+    oversized = 10**5_000
+    reader.return_value = ProviderResult(raw_activity(metadataDTO={"lapCount": oversized, "hasSplits": True}))
+    split_reader(monkeypatch, {"lapDTOs": [split(lapIndex=oversized)]})
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["status"] == "success"
+    assert result["availability"]["activity"] is True
+    assert result["availability"]["splits"] is True
+    assert result["activity"]["reported_lap_count"] is None  # type: ignore[index]
+    assert result["splits"]["items"][0]["lap_number"] is None  # type: ignore[index]
+    assert result["warnings"] == []
+    json.dumps(result, allow_nan=False)
+
+    invalid_id_result = analyze_activity_service(Mock(), oversized)
+
+    assert invalid_id_result["status"] == "error"
+    assert invalid_id_result["error"]["code"] == "invalid_activity_id"  # type: ignore[index]
+    json.dumps(invalid_id_result, allow_nan=False)

@@ -59,7 +59,7 @@ def _positive_id(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value if value > 0 else None
+        return value if value > 0 and _number(value) is not None else None
     if isinstance(value, str):
         text = value.strip()
         if text and text.isascii() and text.isdecimal():
@@ -67,7 +67,7 @@ def _positive_id(value: Any) -> int | None:
                 parsed = int(text)
             except ValueError:
                 return None
-            return parsed if parsed > 0 else None
+            return parsed if parsed > 0 and _number(parsed) is not None else None
     return None
 
 
@@ -89,6 +89,8 @@ def _integer_equivalent(value: Any, *, positive: bool = False) -> int | None:
         except ValueError:
             return None
     else:
+        return None
+    if _number(parsed) is None:
         return None
     if positive and parsed <= 0:
         return None
