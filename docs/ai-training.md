@@ -31,7 +31,15 @@ within that page it selects the newest timestamped running item. Only the newest
 20 recent activities are returned. If the computed cap is reached, period
 totals are lower bounds. If a later page fails, already retrieved pages are
 kept; this mid-page failure is marked as truncated rather than discarding useful
-history.
+history. Latest run is searched independently across up to 1,000 activity
+records and may be older than the requested period.
+
+| Data | Query window |
+| --- | --- |
+| Activities | `days` retrospective activity lookback |
+| Scheduled workouts | Today through the following six days |
+| Daily recovery and fitness metrics | Today |
+| Sleep, HRV, and readiness | Today, then yesterday only for a legitimately empty response |
 
 ## Returned metric groups
 
@@ -52,6 +60,13 @@ collection is different from an unavailable provider: zero activities can be a
 known value, while unsupported or missing scalar metrics remain null, not zero.
 The Body Battery and training-readiness flags are independent, as are
 training readiness and recovery time.
+
+A null optional metric with no warning means the metric was not available in
+this snapshot; it does not prove the account or device does not support it.
+Provider failures are reported in structured warnings. Garmin metric
+availability can vary by device and account, but the fixed query windows above
+mean old recovery or fitness metric dates must not be used to infer today's
+recovery state.
 
 Sleep, HRV, and readiness first query today. When today's response is
 legitimately empty, each may fall back once to the previous local calendar day.

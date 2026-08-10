@@ -24,10 +24,17 @@ def register_tools(app: Any) -> Any:
     async def get_training_context(days: int = 14) -> str:
         """Return a compact read-only Garmin coaching snapshot.
 
-        days is an inclusive retrospective lookback from 1 through 90.
+        days applies only to the retrospective activity lookback (1 through 90).
+        Latest run is searched independently across up to 1,000 activity records
+        and may be older than the requested period.
         Scheduled workouts always cover today through the following six days.
+        Daily recovery and fitness metrics query today. Sleep, HRV, and readiness
+        query today and then yesterday only for a legitimately empty response.
         Garmin metric availability varies by device and account; optional
-        metrics may be unavailable or null. Isolated failures return warnings.
+        metrics may be unavailable or null. A null optional metric with no warning
+        means it was not available in this snapshot; it does not prove the account
+        or device does not support it. Provider failures are reported in structured
+        warnings.
         """
         result = get_training_context_service(garmin_client, days)
         return json.dumps(result, indent=2)
