@@ -1317,3 +1317,80 @@ def test_real_provider_seam_optional_failures_continue_later_reads_without_forbi
     assert client.calls == expected_reads
     assert client.forbidden_calls == []
     assert "private" not in json.dumps(result, allow_nan=False)
+
+
+class ExplodingEq:
+    def __eq__(self, _other: object) -> bool:
+        raise RuntimeError("token=private@example.test")
+
+
+def test_base_exploding_equality_payload_is_a_bounded_invalid_response_without_optional_calls(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    optional_calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(ExplodingEq()))
+    for name in ("get_splits", "get_heart_rate_zones", "get_power_zones", "get_strength"):
+        monkeypatch.setattr(service, name, lambda _c, _i, name=name: optional_calls.append(name), raising=False)
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert_envelope(result)
+    assert result["error"] == {
+        "code": "invalid_activity_response", "message": "Activity data had an unexpected shape.",
+    }
+    assert optional_calls == []
+    serialized = json.dumps(result, allow_nan=False)
+    assert "private" not in serialized and "token" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("provider", "type_key", "summary", "expected_calls", "message"),
+    [
+        ("splits", "cycling", {"averageHR": 1, "averagePower": 1},
+         ["activity", "splits", "heart_rate_zones", "power_zones"], "Activity splits response had an unexpected shape."),
+        ("heart_rate_zones", "cycling", {"averageHR": 1, "averagePower": 1},
+         ["activity", "splits", "heart_rate_zones", "power_zones"], "Heart-rate zone response had an unexpected shape."),
+        ("power_zones", "cycling", {"averageHR": 1, "averagePower": 1},
+         ["activity", "splits", "heart_rate_zones", "power_zones"], "Power-zone response had an unexpected shape."),
+        ("strength", "strength_training", {}, ["activity", "strength"], "Strength exercise-set response had an unexpected shape."),
+    ],
+)
+def test_optional_exploding_equality_payloads_are_bounded_and_later_reads_continue(
+    monkeypatch: pytest.MonkeyPatch, provider: str, type_key: str, summary: dict[str, object],
+    expected_calls: list[str], message: str,
+):
+    calls: list[str] = []
+
+    def reader(name: str):
+        def read(_client: object, _activity_id: int) -> ProviderResult:
+            calls.append(name)
+            if name == provider:
+                return ProviderResult(ExplodingEq())
+            return ProviderResult({
+                "splits": {"lapDTOs": []},
+                "heart_rate_zones": [],
+                "power_zones": [],
+                "strength": {"exercises": []},
+            }[name])
+        return read
+
+    def base(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("activity")
+        return ProviderResult(raw_activity(activityTypeDTO={"typeKey": type_key}, summaryDTO=summary))
+
+    monkeypatch.setattr(service, "get_activity", base)
+    monkeypatch.setattr(service, "get_splits", reader("splits"))
+    monkeypatch.setattr(service, "get_heart_rate_zones", reader("heart_rate_zones"))
+    monkeypatch.setattr(service, "get_power_zones", reader("power_zones"))
+    monkeypatch.setattr(service, "get_strength", reader("strength"))
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert calls == expected_calls
+    assert result["status"] == "partial_success"
+    assert result[provider] is None and result["availability"][provider] is False
+    assert result["warnings"] == [{
+        "provider": provider, "code": "invalid_provider_response", "message": message,
+    }]
+    serialized = json.dumps(result, allow_nan=False)
+    assert "private" not in serialized and "token" not in serialized

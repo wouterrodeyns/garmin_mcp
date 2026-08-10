@@ -243,6 +243,11 @@ def _fixed_warning(provider: str, code: str) -> dict[str, str]:
     return _warning(provider, code, PROVIDER_WARNING_MESSAGES[code][provider])
 
 
+def _absent_provider_data(data: Any) -> bool:
+    """Recognize only JSON-like absent values without invoking foreign equality."""
+    return data is None or (isinstance(data, dict) and not data)
+
+
 def _split_item(lap: Mapping[str, Any], sport_family: str) -> tuple[dict[str, Any], float | None]:
     """Normalize a Garmin lap and retain its raw pace for split comparisons."""
     duration = _number(lap.get("duration"), minimum=0)
@@ -321,7 +326,7 @@ def _apply_splits(result: dict[str, Any], client: Any, activity_id: int, payload
         _provider_unavailable(result, "splits")
         return
     split_data = provider_result.data
-    if split_data is None or split_data == {}:
+    if _absent_provider_data(split_data):
         return
     if not isinstance(split_data, Mapping) or not isinstance(split_data.get("lapDTOs"), list):
         _provider_invalid(result, "splits")
@@ -375,7 +380,7 @@ def _signal_present(summary: Mapping[str, Any], *keys: str) -> bool:
 
 def _zone_list(data: Any) -> list[Any] | None | bool:
     """Return zones, None for an absent response, and False for a malformed root."""
-    if data is None or data == {}:
+    if _absent_provider_data(data):
         return None
     if isinstance(data, list):
         return data
@@ -448,7 +453,7 @@ def _apply_zones(
 
 
 def _strength_root(data: Any) -> list[Any] | None | bool:
-    if data is None or data == {}:
+    if _absent_provider_data(data):
         return None
     if isinstance(data, Mapping) and isinstance(data.get("exercises"), list):
         return data["exercises"]
@@ -606,7 +611,7 @@ def analyze_activity_service(client: Any, activity_id: Any) -> dict[str, Any]:
         return _error("activity_unavailable")
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
         return _error("activity_unavailable")
-    if provider_result.data is None or provider_result.data == {}:
+    if _absent_provider_data(provider_result.data):
         return _error("activity_not_found")
     if not isinstance(provider_result.data, Mapping):
         return _error("invalid_activity_response")
