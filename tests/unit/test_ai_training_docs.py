@@ -63,6 +63,20 @@ def test_docs_pin_availability_null_and_overnight_date_semantics():
         assert text in lower
 
 
+def test_docs_pin_snapshot_scoped_missing_metric_interpretation_and_query_windows():
+    lower = " ".join(DOCS.lower().split())
+    for text in (
+        "| activities | `days` retrospective activity lookback |",
+        "| scheduled workouts | today through the following six days |",
+        "| daily recovery and fitness metrics | today |",
+        "| sleep, hrv, and readiness | today, then yesterday only for a legitimately empty response |",
+        "null optional metric with no warning means the metric was not available in this snapshot",
+        "does not prove the account or device does not support it",
+        "provider failures are reported in structured warnings",
+    ):
+        assert text in lower
+
+
 def test_docs_pin_request_caps_paging_and_truncation():
     lower = DOCS.lower()
     for text in (

@@ -126,7 +126,23 @@ async def test_get_training_context_documents_device_dependent_availability():
     ai_training.register_tools(app)
 
     tools = {tool.name: tool for tool in await app.list_tools()}
-    description = tools["get_training_context"].description.lower()
+    description = " ".join(tools["get_training_context"].description.lower().split())
 
     assert "varies by device and account" in description
     assert "metrics may be unavailable" in description
+
+
+@pytest.mark.asyncio
+async def test_get_training_context_documents_snapshot_scoped_missing_metrics():
+    app = FastMCP("test")
+    ai_training.register_tools(app)
+
+    tools = {tool.name: tool for tool in await app.list_tools()}
+    description = " ".join(tools["get_training_context"].description.lower().split())
+
+    assert "days applies only to the retrospective activity lookback" in description
+    assert "daily recovery and fitness metrics query today" in description
+    assert "sleep, hrv, and readiness query today and then yesterday only for a legitimately empty response" in description
+    assert "null optional metric with no warning means it was not available in this snapshot" in description
+    assert "does not prove the account or device does not support it" in description
+    assert "provider failures are reported in structured warnings" in description
