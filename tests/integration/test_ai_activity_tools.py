@@ -12,6 +12,17 @@ from garmin_mcp import ai_activity
 from garmin_mcp.ai_activity import tools
 
 
+@pytest.fixture(autouse=True)
+def isolate_configured_garmin_client():
+    """Start each test unconfigured and restore the prior module-global client."""
+    original_client = tools.garmin_client
+    tools.garmin_client = None
+    try:
+        yield
+    finally:
+        tools.garmin_client = original_client
+
+
 class ReadOnlyActivityClient:
     """A client that permits only the one read required by this test."""
 
@@ -57,6 +68,18 @@ async def test_analyze_activity_has_only_a_required_integer_or_string_activity_i
         }
     }
     assert schema["required"] == ["activity_id"]
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_registration_after_a_configured_test_is_client_unavailable():
+    app = FastMCP("AI Activity")
+    ai_activity.register_tools(app)
+
+    payload = json.loads(
+        response_text(await app.call_tool("analyze_activity", {"activity_id": 42}))
+    )
+
+    assert payload["error"]["code"] == "client_unavailable"
 
 
 @pytest.mark.asyncio
