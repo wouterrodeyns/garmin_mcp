@@ -72,8 +72,11 @@ def test_docs_pin_request_caps_paging_and_truncation():
         "20 recent activities",
         "mid-page",
         "lower bounds",
+        "first page containing a running match",
+        "newest timestamped running item",
     ):
         assert text in lower
+    assert "stops at the first local running match" not in lower
 
 
 def test_docs_pin_status_boundary_error_codes_and_warning_vocabulary():

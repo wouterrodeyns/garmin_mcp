@@ -26,7 +26,8 @@ MCP argument.
 Activity history uses 200-record pages in newest-first order. The computed
 period cap is the smallest 200-record multiple covering `max(200, days * 10)`,
 with a hard maximum of 1,000 records. The most recent run search also pages by
-200 and stops at the first local running match or 1,000 records. Only the newest
+200 and stops after the first page containing a running match or 1,000 records;
+within that page it selects the newest timestamped running item. Only the newest
 20 recent activities are returned. If the computed cap is reached, period
 totals are lower bounds. If a later page fails, already retrieved pages are
 kept; this mid-page failure is marked as truncated rather than discarding useful
