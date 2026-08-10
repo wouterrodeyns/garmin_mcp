@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 from garminconnect import GarminConnectAuthenticationError, GarminConnectConnectionError
 
+import garmin_mcp.ai_training.service as service
 from garmin_mcp.ai_training.providers import ProviderResult
 from garmin_mcp.ai_training.service import AVAILABILITY_KEYS, get_training_context_service
 
@@ -303,6 +304,32 @@ def test_recent_activities_sort_by_the_full_valid_local_start_time(providers: di
     result = get_training_context_service(Mock(), today=TODAY)
 
     assert [item["sport"] for item in result["recent_activities"]] == ["late", "early"]  # type: ignore[index]
+
+
+def test_recent_activities_keep_an_epoch_timestamp_above_an_invalid_timestamp(
+    providers: dict[str, Mock], monkeypatch: pytest.MonkeyPatch,
+):
+    invalid = activity(
+        activityId=1, activityType={"typeKey": "invalid"}, startTimeLocal="invalid",
+    )
+    epoch = activity(
+        activityId=2, activityType={"typeKey": "epoch"}, startTimeLocal="epoch",
+    )
+    providers["activities"].return_value = ProviderResult(data=(invalid, epoch))
+    monkeypatch.setattr(
+        service,
+        "_local_timestamp",
+        lambda value: {"invalid": None, "epoch": 0.0}[value],
+    )
+    monkeypatch.setattr(
+        service,
+        "_iso_day",
+        lambda value: "2026-02-13",
+    )
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert [item["sport"] for item in result["recent_activities"]] == ["epoch", "invalid"]  # type: ignore[index]
 
 
 def test_missing_or_invalid_duration_has_no_zero_coercion(providers: dict[str, Mock]):
@@ -740,6 +767,31 @@ def test_both_core_failures_stop_all_enrichment_reads(providers: dict[str, Mock]
     assert result["training"]["running_sessions"] is None
     assert result["training"]["total_training_minutes"] is None
     assert result["training"]["running_distance_km"] is None
+    for name in ("last_run", "daily_stats", "sleep", "hrv", "readiness", "training_status"):
+        providers[name].assert_not_called()
+
+
+def test_both_core_authentication_errors_return_a_sanitized_unavailable_context(
+    providers: dict[str, Mock],
+):
+    providers["activities"].side_effect = GarminConnectAuthenticationError("token=private")
+    providers["scheduled"].side_effect = GarminConnectAuthenticationError("token=private")
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "context_unavailable"  # type: ignore[index]
+    assert result["availability"]["activities"] is False  # type: ignore[index]
+    assert result["availability"]["scheduled_workouts"] is False  # type: ignore[index]
+    assert result["warnings"] == [
+        {"provider": "activities", "code": "provider_unavailable", "message": "Activities are unavailable."},
+        {
+            "provider": "scheduled_workouts",
+            "code": "provider_unavailable",
+            "message": "Scheduled workouts are unavailable.",
+        },
+    ]
+    assert "token=private" not in str(result)
     for name in ("last_run", "daily_stats", "sleep", "hrv", "readiness", "training_status"):
         providers[name].assert_not_called()
 

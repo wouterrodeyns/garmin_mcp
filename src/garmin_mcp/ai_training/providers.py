@@ -163,13 +163,19 @@ def _newest_running_activity(page: tuple[Any, ...]) -> dict[str, Any] | None:
     matches = [item for item in page if _is_running_activity(item)]
     if not matches:
         return None
+
+    def sort_key(indexed: tuple[int, dict[str, Any]]) -> tuple[bool, float, int]:
+        position, activity = indexed
+        timestamp = _local_start_timestamp(activity)
+        return (
+            timestamp is not None,
+            timestamp if timestamp is not None else float("-inf"),
+            -position,
+        )
+
     return max(
         enumerate(matches),
-        key=lambda indexed: (
-            _local_start_timestamp(indexed[1]) is not None,
-            _local_start_timestamp(indexed[1]) or float("-inf"),
-            -indexed[0],
-        ),
+        key=sort_key,
     )[1]
 
 

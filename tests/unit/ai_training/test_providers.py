@@ -9,6 +9,7 @@ from unittest.mock import Mock, call
 import pytest
 from garminconnect import GarminConnectConnectionError
 
+import garmin_mcp.ai_training.providers as providers_module
 from garmin_mcp.ai_training.providers import (
     MAX_ACTIVITY_RECORDS,
     PAGE_SIZE,
@@ -219,6 +220,43 @@ def test_last_run_selects_the_newest_running_match_within_a_page():
     result = get_last_run(garmin)
 
     assert result == ProviderResult(data=newer)
+
+
+def test_last_run_selects_the_latest_of_two_valid_out_of_order_matches_within_a_page():
+    garmin = client()
+    older = {
+        "activityId": 201,
+        "activityType": {"typeKey": "running"},
+        "startTimeLocal": "2026-01-04 08:00:00",
+    }
+    newer = {
+        "activityId": 202,
+        "activityType": {"typeKey": "trail_running"},
+        "startTimeLocal": "2026-01-05 08:00:00",
+    }
+    garmin.connectapi.return_value = [older, newer]
+
+    result = get_last_run(garmin)
+
+    assert result == ProviderResult(data=newer)
+
+
+def test_last_run_keeps_an_epoch_timestamp_above_an_older_valid_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    garmin = client()
+    older = {"activityId": 201, "activityType": {"typeKey": "running"}}
+    epoch = {"activityId": 202, "activityType": {"typeKey": "trail_running"}}
+    garmin.connectapi.return_value = [older, epoch]
+    monkeypatch.setattr(
+        providers_module,
+        "_local_start_timestamp",
+        lambda item: {201: -1.0, 202: 0.0}[item["activityId"]],
+    )
+
+    result = get_last_run(garmin)
+
+    assert result == ProviderResult(data=epoch)
 
 
 def test_last_run_returns_empty_without_warning_after_a_short_nonmatching_page():
