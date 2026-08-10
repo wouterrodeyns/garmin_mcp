@@ -312,12 +312,9 @@ def _split_derived(
     }
 
 
-def _apply_splits(result: dict[str, Any], client: Any, activity_id: int, payload: Mapping[str, Any]) -> None:
+def _apply_splits(result: dict[str, Any], client: Any, activity_id: int) -> None:
     """Fetch and normalize eligible split data without exposing provider details."""
     family = result["activity"]["sport_family"]
-    metadata = _mapping_value(payload, "metadataDTO")
-    if family not in {"running", "walking", "cycling"} or metadata.get("hasSplits") is False:
-        return
     try:
         provider_result = get_splits(client, activity_id)
     except Exception:
@@ -325,45 +322,53 @@ def _apply_splits(result: dict[str, Any], client: Any, activity_id: int, payload
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
         _provider_unavailable(result, "splits")
         return
-    split_data = provider_result.data
-    if _absent_provider_data(split_data):
-        return
-    if not isinstance(split_data, Mapping) or not isinstance(split_data.get("lapDTOs"), list):
-        _provider_invalid(result, "splits")
-        return
+    try:
+        split_data = provider_result.data
+        if _absent_provider_data(split_data):
+            return
+        if not isinstance(split_data, Mapping) or not isinstance(split_data.get("lapDTOs"), list):
+            _provider_invalid(result, "splits")
+            return
 
-    laps = split_data["lapDTOs"]
-    truncated = len(laps) > MAX_RETURNED_SPLITS
-    if truncated:
-        result["warnings"].append(_fixed_warning("splits", "splits_truncated"))
-    items_with_pace: list[tuple[dict[str, Any], float | None]] = []
-    malformed = False
-    for lap in laps[:MAX_RETURNED_SPLITS]:
-        if not isinstance(lap, Mapping):
-            malformed = True
-            continue
-        item, raw_pace = _split_item(lap, family)
-        if not any(value is not None for value in item.values()):
-            malformed = True
-            continue
-        items_with_pace.append((item, raw_pace))
-    if malformed:
+        laps = split_data["lapDTOs"]
+        truncated = len(laps) > MAX_RETURNED_SPLITS
+        if truncated:
+            result["warnings"].append(_fixed_warning("splits", "splits_truncated"))
+        items_with_pace: list[tuple[dict[str, Any], float | None]] = []
+        malformed = False
+        for lap in laps[:MAX_RETURNED_SPLITS]:
+            if not isinstance(lap, Mapping):
+                malformed = True
+                continue
+            item, raw_pace = _split_item(lap, family)
+            if not any(value is not None for value in item.values()):
+                malformed = True
+                continue
+            items_with_pace.append((item, raw_pace))
+        if malformed:
+            _provider_invalid(result, "splits")
+        if not items_with_pace and laps:
+            return
+        result["availability"]["splits"] = True
+        result["splits"] = {
+            "total_count": len(laps),
+            "returned_count": len(items_with_pace),
+            "truncated": truncated,
+            "items": [item for item, _pace_value in items_with_pace],
+        }
+        result["derived"] = _split_derived(items_with_pace, truncated, family)
+    except Exception:
         _provider_invalid(result, "splits")
-    if not items_with_pace and laps:
         return
-    result["availability"]["splits"] = True
-    result["splits"] = {
-        "total_count": len(laps),
-        "returned_count": len(items_with_pace),
-        "truncated": truncated,
-        "items": [item for item, _pace_value in items_with_pace],
-    }
-    result["derived"] = _split_derived(items_with_pace, truncated, family)
 
 
 def _provider_invalid(result: dict[str, Any], provider: str) -> None:
     result["status"] = "partial_success"
-    result["warnings"].append(_fixed_warning(provider, "invalid_provider_response"))
+    if not any(
+        warning["provider"] == provider and warning["code"] == "invalid_provider_response"
+        for warning in result["warnings"]
+    ):
+        result["warnings"].append(_fixed_warning(provider, "invalid_provider_response"))
 
 
 def _provider_unavailable(result: dict[str, Any], provider: str) -> None:
@@ -430,25 +435,28 @@ def _apply_zones(
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
         _provider_unavailable(result, provider)
         return
-    zones = _zone_list(provider_result.data)
-    if zones is None:
-        return
-    if zones is False:
-        _provider_invalid(result, provider)
-        return
-    items: list[dict[str, Any]] = []
-    malformed = False
-    for value in zones:
-        item, item_malformed = _zone_item(value, boundary_unit=boundary_unit)
-        malformed = malformed or item_malformed
-        if item is not None:
-            items.append(item)
-    if not items and zones:
-        _provider_invalid(result, provider)
-        return
-    result["availability"][provider] = True
-    result[provider] = {"items": items}
-    if malformed:
+    try:
+        zones = _zone_list(provider_result.data)
+        if zones is None:
+            return
+        if zones is False:
+            _provider_invalid(result, provider)
+            return
+        items: list[dict[str, Any]] = []
+        malformed = False
+        for value in zones:
+            item, item_malformed = _zone_item(value, boundary_unit=boundary_unit)
+            malformed = malformed or item_malformed
+            if item is not None:
+                items.append(item)
+        if not items and zones:
+            _provider_invalid(result, provider)
+            return
+        result["availability"][provider] = True
+        result[provider] = {"items": items}
+        if malformed:
+            _provider_invalid(result, provider)
+    except Exception:
         _provider_invalid(result, provider)
 
 
@@ -507,32 +515,35 @@ def _apply_strength(result: dict[str, Any], client: Any, activity_id: int) -> No
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
         _provider_unavailable(result, provider)
         return
-    exercises = _strength_root(provider_result.data)
-    if exercises is None:
-        return
-    if exercises is False:
-        _provider_invalid(result, provider)
-        return
-    items: list[dict[str, Any]] = []
-    malformed = False
-    for value in exercises:
-        item, item_malformed = _strength_exercise(value)
-        malformed = malformed or item_malformed
-        if item is not None:
-            items.append(item)
-    if not items and exercises:
-        _provider_invalid(result, provider)
-        return
-    set_count = sum(item["set_count"] for item in items)
-    known_repetitions = [item["repetition_count"] for item in items if item["repetition_count"] is not None]
-    result["availability"][provider] = True
-    result[provider] = {
-        "exercise_count": len(items),
-        "set_count": set_count,
-        "repetition_count": sum(known_repetitions) if known_repetitions else None,
-        "items": items,
-    }
-    if malformed:
+    try:
+        exercises = _strength_root(provider_result.data)
+        if exercises is None:
+            return
+        if exercises is False:
+            _provider_invalid(result, provider)
+            return
+        items: list[dict[str, Any]] = []
+        malformed = False
+        for value in exercises:
+            item, item_malformed = _strength_exercise(value)
+            malformed = malformed or item_malformed
+            if item is not None:
+                items.append(item)
+        if not items and exercises:
+            _provider_invalid(result, provider)
+            return
+        set_count = sum(item["set_count"] for item in items)
+        known_repetitions = [item["repetition_count"] for item in items if item["repetition_count"] is not None]
+        result["availability"][provider] = True
+        result[provider] = {
+            "exercise_count": len(items),
+            "set_count": set_count,
+            "repetition_count": sum(known_repetitions) if known_repetitions else None,
+            "items": items,
+        }
+        if malformed:
+            _provider_invalid(result, provider)
+    except Exception:
         _provider_invalid(result, provider)
 
 
@@ -611,35 +622,45 @@ def analyze_activity_service(client: Any, activity_id: Any) -> dict[str, Any]:
         return _error("activity_unavailable")
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
         return _error("activity_unavailable")
-    if _absent_provider_data(provider_result.data):
-        return _error("activity_not_found")
-    if not isinstance(provider_result.data, Mapping):
-        return _error("invalid_activity_response")
-    response_id = _integer_equivalent(provider_result.data.get("activityId"), positive=True)
-    if response_id != normalized_id:
+    try:
+        payload = provider_result.data
+        if _absent_provider_data(payload):
+            return _error("activity_not_found")
+        if not isinstance(payload, Mapping):
+            return _error("invalid_activity_response")
+        response_id = _integer_equivalent(payload.get("activityId"), positive=True)
+        if response_id != normalized_id:
+            return _error("invalid_activity_response")
+        activity = _activity_summary(payload, normalized_id)
+        family = activity["sport_family"]
+        metadata = _mapping_value(payload, "metadataDTO")
+        fetch_splits = family in {"running", "walking", "cycling"} and metadata.get("hasSplits") is not False
+        summary = _mapping_value(payload, "summaryDTO")
+        fetch_heart_rate_zones = family in {"running", "walking", "cycling"} and _signal_present(
+            summary, "averageHR", "maxHR", "minHR"
+        )
+        fetch_power_zones = family == "cycling" and _signal_present(
+            summary, "averagePower", "maxPower", "normalizedPower"
+        )
+    except Exception:
         return _error("invalid_activity_response")
 
     result = _empty_envelope()
     result["status"] = "success"
-    result["activity"] = _activity_summary(provider_result.data, normalized_id)
+    result["activity"] = activity
     result["availability"]["activity"] = True
-    family = result["activity"]["sport_family"]
     if family == "strength":
         _apply_strength(result, client, normalized_id)
         return result
 
-    _apply_splits(result, client, normalized_id, provider_result.data)
-    summary = _mapping_value(provider_result.data, "summaryDTO")
-    if family in {"running", "walking", "cycling"} and _signal_present(
-        summary, "averageHR", "maxHR", "minHR"
-    ):
+    if fetch_splits:
+        _apply_splits(result, client, normalized_id)
+    if fetch_heart_rate_zones:
         _apply_zones(
             result, client, normalized_id,
             provider="heart_rate_zones", reader=get_heart_rate_zones, boundary_unit="bpm",
         )
-    if family == "cycling" and _signal_present(
-        summary, "averagePower", "maxPower", "normalizedPower"
-    ):
+    if fetch_power_zones:
         _apply_zones(
             result, client, normalized_id,
             provider="power_zones", reader=get_power_zones, boundary_unit="watts",
