@@ -28,7 +28,7 @@ def raw_activity(**overrides: object) -> dict[str, object]:
             "elevationGain": 42.45, "elevationLoss": 20.04, "minElevation": -2.55,
             "maxElevation": 86.66, "calories": 450, "trainingEffect": 3.4,
             "anaerobicTrainingEffect": 1.2, "trainingEffectLabel": "PRODUCTIVE",
-            "activityTrainingLoad": 71, "directWorkoutRpe": 7,
+            "activityTrainingLoad": 71, "directWorkoutRpe": 70,
             "directWorkoutFeel": 75, "recoveryHeartRate": 32,
             "differenceBodyBattery": -8,
         },
@@ -193,7 +193,7 @@ def test_success_has_an_exact_stable_envelope_and_all_normalized_summary_fields(
         "cadence": {"average_spm": 176, "max_spm": 190},
         "elevation": {"gain_meters": 42.5, "loss_meters": 20.0, "minimum_meters": -2.5, "maximum_meters": 86.7},
         "calories": 450, "training_effect": {"aerobic": 3.4, "anaerobic": 1.2, "label": "PRODUCTIVE", "load": 71},
-        "workout_feedback": {"rpe": 7, "feel": 75},
+        "workout_feedback": {"rpe": 7.0, "feel": 75},
         "recovery": {"heart_rate_bpm": 32, "body_battery_impact": -8}, "reported_lap_count": 5,
     }
     assert result["splits"] is None and result["heart_rate_zones"] is None
@@ -204,6 +204,31 @@ def test_success_has_an_exact_stable_envelope_and_all_normalized_summary_fields(
     }
     assert result["warnings"] == []
     reader.assert_called_once_with(client, 123)
+
+
+@pytest.mark.parametrize(
+    ("raw_rpe", "expected"),
+    [(70, 7.0), (75, 7.5), (0, 0.0)],
+)
+def test_direct_workout_rpe_uses_garmins_raw_x10_scale(reader: Mock, raw_rpe: int, expected: float):
+    reader.return_value = ProviderResult(raw_activity(summaryDTO={"directWorkoutRpe": raw_rpe}))
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["activity"]["workout_feedback"]["rpe"] == expected
+
+
+@pytest.mark.parametrize(
+    "raw_rpe",
+    [-1, 101, True, float("nan"), float("inf"), pytest.param(10 ** 5000, id="oversized")],
+)
+def test_invalid_or_unsafe_raw_rpe_is_null_and_json_safe(reader: Mock, raw_rpe: object):
+    reader.return_value = ProviderResult(raw_activity(summaryDTO={"directWorkoutRpe": raw_rpe}))
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["activity"]["workout_feedback"]["rpe"] is None
+    json.dumps(result, allow_nan=False)
 
 
 def test_fallback_types_missing_fields_invalid_physical_facts_and_text_bounds_are_sanitized(reader: Mock):
@@ -850,7 +875,7 @@ def test_absent_zone_roots_are_silent_and_unavailable(monkeypatch: pytest.Monkey
 def test_zone_items_preserve_fields_units_source_order_and_percentages(monkeypatch: pytest.MonkeyPatch):
     calls: list[str] = []
     zones = [
-        {"zoneNumber": 2, "timeInZone": 90, "percentageInZone": 22.24,
+        {"zone": 2, "timeInZone": 90, "percentageInZone": 22.24,
          "zoneLowBoundary": 120, "zoneHighBoundary": 140, "label": "ignored"},
         {"timeInZone": 0, "percentageInZone": 50, "zoneLowBoundary": 0, "zoneHighBoundary": 200},
     ]
@@ -874,10 +899,30 @@ def test_zone_items_preserve_fields_units_source_order_and_percentages(monkeypat
     ]}
 
 
+def test_upstream_hr_and_power_zone_shapes_preserve_explicit_zone_values(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    zones = [
+        {"zone": 1, "timeInZone": 60, "percentageInZone": 25,
+         "zoneLowBoundary": 100, "zoneHighBoundary": 120},
+        {"zone": 2, "timeInZone": 180, "percentageInZone": 75,
+         "zoneLowBoundary": 120, "zoneHighBoundary": 140},
+    ]
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "cycling"}, summaryDTO={"averageHR": 1, "averagePower": 1},
+    )))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
+    optional_readers(monkeypatch, calls, hr=zones, power={"zones": zones})
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert [item["zone"] for item in result["heart_rate_zones"]["items"]] == [1, 2]
+    assert [item["zone"] for item in result["power_zones"]["items"]] == [1, 2]
+
+
 @pytest.mark.parametrize(
     ("provider", "root", "message"),
     [
-        ("heart_rate_zones", [None, {}, {"zoneNumber": True}, 7], "Heart-rate zone response had an unexpected shape."),
+        ("heart_rate_zones", [None, {}, {"zone": True}, 7], "Heart-rate zone response had an unexpected shape."),
         ("power_zones", {"bad": []}, "Power-zone response had an unexpected shape."),
     ],
 )
@@ -900,7 +945,7 @@ def test_mixed_zone_items_drop_invalid_values_once_and_unsafe_ints_are_null(monk
     huge = 10 ** 5000
     monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(summaryDTO={"averageHR": 1})))
     monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
-    optional_readers(monkeypatch, calls, hr=[{"zoneNumber": huge, "timeInZone": 10}, {"percentageInZone": 101}, {"timeInZone": 2}])
+    optional_readers(monkeypatch, calls, hr=[{"zone": huge, "timeInZone": 10}, {"percentageInZone": 101}, {"timeInZone": 2}])
     result = analyze_activity_service(Mock(), 123)
     assert result["heart_rate_zones"] == {"items": [
         {"zone": None, "duration_seconds": 10, "duration_minutes": 0.2, "percentage": None, "lower_bpm": None, "upper_bpm": None},
@@ -936,6 +981,20 @@ def test_strength_empty_and_normalized_sets_ignore_weight_volume_and_sum_reps(mo
         {"name": "Plank", "set_count": 0, "repetition_count": None, "sets": []},
     ]}
     assert result["availability"]["strength"] is True
+
+
+def test_strength_exercise_name_is_trimmed_to_the_approved_120_character_bound(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "strength_training"},
+    )))
+    optional_readers(monkeypatch, calls, strength={"exercises": [
+        {"exerciseName": "x" * 121, "sets": []},
+    ]})
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["strength"]["items"][0]["name"] == "x" * 120
 
 
 def test_strength_empty_exercises_are_available_and_zero_count(monkeypatch: pytest.MonkeyPatch):

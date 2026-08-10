@@ -151,6 +151,13 @@ def _number_or_text(value: Any, maximum: int = 100) -> int | float | str | None:
     return numeric if numeric is not None else _text(value, maximum)
 
 
+def _rpe(value: Any) -> float | None:
+    raw = _number(value, minimum=0)
+    if raw is None or raw > 100:
+        return None
+    return _rounded_finite(raw / 10, 1)
+
+
 def _mapping_value(payload: dict[str, Any], key: str) -> dict[str, Any]:
     candidate = payload.get(key)
     return candidate if type(candidate) is dict else {}
@@ -397,7 +404,7 @@ def _zone_list(data: Any) -> list[Any] | None | bool:
 def _zone_item(value: Any, *, boundary_unit: str) -> tuple[dict[str, Any] | None, bool]:
     if type(value) is not dict:
         return None, True
-    zone = _integer_equivalent(value.get("zoneNumber"), positive=True)
+    zone = _integer_equivalent(value.get("zone"), positive=True)
     duration_seconds = _number(value.get("timeInZone"), minimum=0)
     percentage = _number(value.get("percentageInZone"))
     if percentage is not None and not 0 <= percentage <= 100:
@@ -405,7 +412,7 @@ def _zone_item(value: Any, *, boundary_unit: str) -> tuple[dict[str, Any] | None
     lower = _number(value.get("zoneLowBoundary"), minimum=0)
     upper = _number(value.get("zoneHighBoundary"), minimum=0)
     invalid = (
-        ("zoneNumber" in value and zone is None)
+        ("zone" in value and zone is None)
         or ("timeInZone" in value and duration_seconds is None)
         or ("percentageInZone" in value and percentage is None)
         or ("zoneLowBoundary" in value and lower is None)
@@ -470,7 +477,7 @@ def _strength_root(data: Any) -> list[Any] | None | bool:
 def _strength_exercise(value: Any) -> tuple[dict[str, Any] | None, bool]:
     if type(value) is not dict:
         return None, True
-    name = _text(value.get("exerciseName"), 200)
+    name = _text(value.get("exerciseName"), 120)
     malformed = "exerciseName" in value and name is None
     sets = value.get("sets")
     if type(sets) is not list:
@@ -593,7 +600,7 @@ def _activity_summary(payload: dict[str, Any], activity_id: int) -> dict[str, An
             "load": _number(summary.get("activityTrainingLoad"), minimum=0),
         },
         "workout_feedback": {
-            "rpe": _number(summary.get("directWorkoutRpe")),
+            "rpe": _rpe(summary.get("directWorkoutRpe")),
             "feel": _number_or_text(summary.get("directWorkoutFeel")),
         },
         "recovery": {
