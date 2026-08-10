@@ -20,10 +20,12 @@ compatibility and targeted read.
 
 The accepted identifier is a positive integer or decimal string.
 
-The service always makes one base activity read. Optional reads are gated by
-the normalized Garmin raw activity type key and by signals in the base
-summary. These are the exact supported sport families and maximum call
-budgets. This fixed call budget is part of the v1 contract:
+After a valid activity_id and configured client, the service makes one base
+activity read. Invalid activity_id input and an unavailable client make zero
+Garmin calls. Optional reads are gated by the normalized Garmin raw activity
+type key and by signals in the base summary. These are the exact supported
+sport families and maximum call budgets. This fixed call budget is part of the
+v1 contract:
 
 In shorthand: run/walk: splits + heart-rate zones when a heart-rate signal
 exists; cycling: splits + heart-rate zones + power zones when the corresponding
@@ -60,9 +62,11 @@ power_zones, strength, derived, warnings
 Availability is section-level. The `availability` object has one boolean per section: `activity`, `splits`,
 `heart_rate_zones`, `power_zones`, and `strength`. A known empty collection can
 be available, while an unavailable optional scalar or section is `null`, not
-zero. Missing optional values are null, not zero. Device, account, and sync state affect which optional sections exist in
-a snapshot. Missing optional sections are therefore not evidence that Garmin
-does not support it.
+zero. Missing optional values are null, not zero. Optional sections are always
+present in the top-level envelope; unavailable optional sections are null.
+Device, account, and sync state affect whether those optional sections are
+available in a snapshot. An unavailable optional section is therefore not
+evidence that Garmin does not support it.
 
 `status` is `success` when the base activity is usable and optional reads are
 absent or valid; `partial_success` when an attempted optional provider fails or
@@ -112,8 +116,9 @@ their units are verified.
 
 This is a compact shape example using exact current key names. Illustrative
 values are copied from normalized source fields after conversion; no metrics
-are inferred. Optional sections are omitted or null when unavailable in the
-snapshot, and this example uses null for the stable envelope keys.
+are inferred. Optional sections are null when unavailable in the snapshot, and
+nested optional metric fields may also be null. This example uses null for the
+stable envelope keys.
 
 ```json
 {

@@ -229,8 +229,11 @@ Warnings never include raw Garmin responses, tokens, or credentials.
 
 ## AI-coach profile and workflow
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 12 tools. The high-level
-coaching flow normally needs only the two flagship tools:
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 12 tools. The three
+high-level coaching roles are context eyes (`get_training_context`),
+completed-session feedback (`analyze_activity`), and workout hands
+(`create_workout`). The full profile also preserves compatibility for focused
+reads and calendar operations:
 
 ```text
 User: "I haven't run for two months and I'm targeting a half marathon.

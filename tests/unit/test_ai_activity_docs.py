@@ -70,9 +70,11 @@ def test_activity_docs_pin_scope_and_exact_supported_call_budget():
         "strength: exercise sets",
         "generic: base activity summary only",
         "fixed call budget",
+        "after a valid activity_id and configured client, the service makes one base activity read",
         "no optional provider calls",
     ):
         assert phrase in lower
+    assert "the service always makes one base activity read" not in lower
     assert "exactly these sport families" in lower
 
 
@@ -102,9 +104,11 @@ def test_activity_docs_pin_stable_envelope_availability_and_statuses():
         "error",
         "null, not zero",
         "device, account, and sync state",
-        "missing optional sections",
+        "optional sections are always present in the top-level envelope",
+        "unavailable optional sections are null",
     ):
         assert phrase in lower
+    assert "optional sections are omitted or null" not in lower
 
 
 def test_activity_docs_pin_units_raw_first_rounding_bounds_and_truncation():
@@ -217,7 +221,8 @@ def test_activity_docs_example_is_compact_current_and_explicitly_raw_backed():
     lower = " ".join(_read(DOCS_PATH).lower().split())
     assert "illustrative values are copied from normalized source fields" in lower
     assert "no metrics are inferred" in lower
-    assert "optional sections are omitted or null when unavailable" in lower
+    assert "optional sections are null when unavailable" in lower
+    assert "optional sections are omitted or null" not in lower
 
 
 def test_current_docs_publish_the_exact_profile_without_stale_eleven_claims():
@@ -236,3 +241,20 @@ def test_current_docs_publish_the_exact_profile_without_stale_eleven_claims():
     assert "ai-activity.md" in setup
     assert "ai-activity.md" in training
     assert "ai-activity.md" in workouts
+
+
+def test_current_docs_describe_three_high_level_coaching_roles():
+    readme = " ".join(_read(README_PATH).lower().split())
+    training = " ".join(_read(TRAINING_PATH).lower().split())
+    for phrase in (
+        "three high-level coaching roles",
+        "get_training_context",
+        "analyze_activity",
+        "create_workout",
+        "context eyes",
+        "completed-session feedback",
+        "workout hands",
+    ):
+        assert phrase in readme
+    assert "two high-level tools" not in readme
+    assert "two flagship tools" not in training

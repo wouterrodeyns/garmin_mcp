@@ -13,13 +13,13 @@ subscription, and sync state.
 
 ## Designed AI-coach workflow
 
-The recommended experience centers on two high-level tools:
+The recommended experience centers on three high-level coaching roles:
 
 | Tool | Role |
 |---|---|
-| [`get_training_context(days=14)`](docs/ai-training.md) | The coach's eyes: a compact, read-only factual snapshot before making a recommendation. |
+| [`get_training_context(days=14)`](docs/ai-training.md) | Context eyes: a compact, read-only factual snapshot before making a recommendation. |
 | [`analyze_activity(activity_id)`](docs/ai-activity.md) | Completed-session feedback read: bounded facts for the AI to interpret. |
-| [`create_workout(...)`](docs/ai-workouts.md) | The coach's hands: validate a readable workout, upload it, and optionally schedule it as one intentional write. |
+| [`create_workout(...)`](docs/ai-workouts.md) | Workout hands: validate a readable workout, upload it, and optionally schedule it as one intentional write. |
 
 ```text
 User: Review my last 30 days and recommend today's run.
