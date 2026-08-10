@@ -29,6 +29,32 @@ AVAILABILITY_KEYS = (
     "strength",
 )
 
+ERROR_MESSAGES = {
+    "invalid_activity_id": "activity_id must be a positive integer or decimal string.",
+    "client_unavailable": "Garmin client is unavailable. Authenticate with garmin-mcp-auth and restart the server.",
+    "activity_unavailable": "Activity data is unavailable. Check the activity ID, re-run garmin-mcp-auth if the session expired, or retry later.",
+    "activity_not_found": "No activity data was found for the requested activity ID.",
+    "invalid_activity_response": "Activity data had an unexpected shape.",
+}
+
+PROVIDER_WARNING_MESSAGES = {
+    "provider_unavailable": {
+        "splits": "Activity splits are unavailable.",
+        "heart_rate_zones": "Heart-rate zone data is unavailable.",
+        "power_zones": "Power-zone data is unavailable.",
+        "strength": "Strength exercise-set data is unavailable.",
+    },
+    "invalid_provider_response": {
+        "splits": "Activity splits response had an unexpected shape.",
+        "heart_rate_zones": "Heart-rate zone response had an unexpected shape.",
+        "power_zones": "Power-zone response had an unexpected shape.",
+        "strength": "Strength exercise-set response had an unexpected shape.",
+    },
+    "splits_truncated": {
+        "splits": "Activity splits were limited to 100 laps; split comparisons are unavailable.",
+    },
+}
+
 
 def _empty_envelope() -> dict[str, Any]:
     return {
@@ -52,9 +78,9 @@ def _empty_envelope() -> dict[str, Any]:
     }
 
 
-def _error(code: str, message: str) -> dict[str, Any]:
+def _error(code: str) -> dict[str, Any]:
     result = _empty_envelope()
-    result["error"] = {"code": code, "message": message}
+    result["error"] = {"code": code, "message": ERROR_MESSAGES[code]}
     return result
 
 
@@ -213,6 +239,10 @@ def _warning(provider: str, code: str, message: str) -> dict[str, str]:
     return {"provider": provider, "code": code, "message": message}
 
 
+def _fixed_warning(provider: str, code: str) -> dict[str, str]:
+    return _warning(provider, code, PROVIDER_WARNING_MESSAGES[code][provider])
+
+
 def _split_item(lap: Mapping[str, Any], sport_family: str) -> tuple[dict[str, Any], float | None]:
     """Normalize a Garmin lap and retain its raw pace for split comparisons."""
     duration = _number(lap.get("duration"), minimum=0)
@@ -288,26 +318,19 @@ def _apply_splits(result: dict[str, Any], client: Any, activity_id: int, payload
     except Exception:
         provider_result = ProviderResult(None, failed=True)
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
-        result["status"] = "partial_success"
-        result["warnings"].append(_warning("splits", "provider_unavailable", "Activity splits are unavailable."))
+        _provider_unavailable(result, "splits")
         return
     split_data = provider_result.data
     if split_data is None or split_data == {}:
         return
     if not isinstance(split_data, Mapping) or not isinstance(split_data.get("lapDTOs"), list):
-        result["status"] = "partial_success"
-        result["warnings"].append(_warning(
-            "splits", "invalid_provider_response", "Activity splits response had an unexpected shape."
-        ))
+        _provider_invalid(result, "splits")
         return
 
     laps = split_data["lapDTOs"]
     truncated = len(laps) > MAX_RETURNED_SPLITS
     if truncated:
-        result["warnings"].append(_warning(
-            "splits", "splits_truncated",
-            "Activity splits were limited to 100 laps; split comparisons are unavailable.",
-        ))
+        result["warnings"].append(_fixed_warning("splits", "splits_truncated"))
     items_with_pace: list[tuple[dict[str, Any], float | None]] = []
     malformed = False
     for lap in laps[:MAX_RETURNED_SPLITS]:
@@ -320,10 +343,7 @@ def _apply_splits(result: dict[str, Any], client: Any, activity_id: int, payload
             continue
         items_with_pace.append((item, raw_pace))
     if malformed:
-        result["status"] = "partial_success"
-        result["warnings"].append(_warning(
-            "splits", "invalid_provider_response", "Activity splits response had an unexpected shape."
-        ))
+        _provider_invalid(result, "splits")
     if not items_with_pace and laps:
         return
     result["availability"]["splits"] = True
@@ -336,14 +356,14 @@ def _apply_splits(result: dict[str, Any], client: Any, activity_id: int, payload
     result["derived"] = _split_derived(items_with_pace, truncated, family)
 
 
-def _provider_invalid(result: dict[str, Any], provider: str, message: str) -> None:
+def _provider_invalid(result: dict[str, Any], provider: str) -> None:
     result["status"] = "partial_success"
-    result["warnings"].append(_warning(provider, "invalid_provider_response", message))
+    result["warnings"].append(_fixed_warning(provider, "invalid_provider_response"))
 
 
-def _provider_unavailable(result: dict[str, Any], provider: str, message: str) -> None:
+def _provider_unavailable(result: dict[str, Any], provider: str) -> None:
     result["status"] = "partial_success"
-    result["warnings"].append(_warning(provider, "provider_unavailable", message))
+    result["warnings"].append(_fixed_warning(provider, "provider_unavailable"))
 
 
 def _signal_present(summary: Mapping[str, Any], *keys: str) -> bool:
@@ -396,20 +416,20 @@ def _zone_item(value: Any, *, boundary_unit: str) -> tuple[dict[str, Any] | None
 
 def _apply_zones(
     result: dict[str, Any], client: Any, activity_id: int, *, provider: str, reader: Any,
-    boundary_unit: str, invalid_message: str, unavailable_message: str,
+    boundary_unit: str,
 ) -> None:
     try:
         provider_result = reader(client, activity_id)
     except Exception:
         provider_result = ProviderResult(None, failed=True)
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
-        _provider_unavailable(result, provider, unavailable_message)
+        _provider_unavailable(result, provider)
         return
     zones = _zone_list(provider_result.data)
     if zones is None:
         return
     if zones is False:
-        _provider_invalid(result, provider, invalid_message)
+        _provider_invalid(result, provider)
         return
     items: list[dict[str, Any]] = []
     malformed = False
@@ -419,12 +439,12 @@ def _apply_zones(
         if item is not None:
             items.append(item)
     if not items and zones:
-        _provider_invalid(result, provider, invalid_message)
+        _provider_invalid(result, provider)
         return
     result["availability"][provider] = True
     result[provider] = {"items": items}
     if malformed:
-        _provider_invalid(result, provider, invalid_message)
+        _provider_invalid(result, provider)
 
 
 def _strength_root(data: Any) -> list[Any] | None | bool:
@@ -475,19 +495,18 @@ def _strength_exercise(value: Any) -> tuple[dict[str, Any] | None, bool]:
 
 def _apply_strength(result: dict[str, Any], client: Any, activity_id: int) -> None:
     provider = "strength"
-    invalid_message = "Strength exercise-set response had an unexpected shape."
     try:
         provider_result = get_strength(client, activity_id)
     except Exception:
         provider_result = ProviderResult(None, failed=True)
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
-        _provider_unavailable(result, provider, "Strength exercise-set data is unavailable.")
+        _provider_unavailable(result, provider)
         return
     exercises = _strength_root(provider_result.data)
     if exercises is None:
         return
     if exercises is False:
-        _provider_invalid(result, provider, invalid_message)
+        _provider_invalid(result, provider)
         return
     items: list[dict[str, Any]] = []
     malformed = False
@@ -497,7 +516,7 @@ def _apply_strength(result: dict[str, Any], client: Any, activity_id: int) -> No
         if item is not None:
             items.append(item)
     if not items and exercises:
-        _provider_invalid(result, provider, invalid_message)
+        _provider_invalid(result, provider)
         return
     set_count = sum(item["set_count"] for item in items)
     known_repetitions = [item["repetition_count"] for item in items if item["repetition_count"] is not None]
@@ -509,7 +528,7 @@ def _apply_strength(result: dict[str, Any], client: Any, activity_id: int) -> No
         "items": items,
     }
     if malformed:
-        _provider_invalid(result, provider, invalid_message)
+        _provider_invalid(result, provider)
 
 
 def _activity_summary(payload: Mapping[str, Any], activity_id: int) -> dict[str, Any]:
@@ -577,34 +596,23 @@ def analyze_activity_service(client: Any, activity_id: Any) -> dict[str, Any]:
     """Return a complete stable envelope for one normalized Garmin activity."""
     normalized_id = _positive_id(activity_id)
     if normalized_id is None:
-        return _error(
-            "invalid_activity_id", "activity_id must be a positive integer or decimal string."
-        )
+        return _error("invalid_activity_id")
     if client is None:
-        return _error(
-            "client_unavailable",
-            "Garmin client is unavailable. Authenticate with garmin-mcp-auth and restart the server.",
-        )
+        return _error("client_unavailable")
 
     try:
         provider_result = get_activity(client, normalized_id)
     except Exception:
-        return _error(
-            "activity_unavailable",
-            "Activity data is unavailable. Check the activity ID, re-run garmin-mcp-auth if the session expired, or retry later.",
-        )
+        return _error("activity_unavailable")
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
-        return _error(
-            "activity_unavailable",
-            "Activity data is unavailable. Check the activity ID, re-run garmin-mcp-auth if the session expired, or retry later.",
-        )
+        return _error("activity_unavailable")
     if provider_result.data is None or provider_result.data == {}:
-        return _error("activity_not_found", "No activity data was found for the requested activity ID.")
+        return _error("activity_not_found")
     if not isinstance(provider_result.data, Mapping):
-        return _error("invalid_activity_response", "Activity data had an unexpected shape.")
+        return _error("invalid_activity_response")
     response_id = _integer_equivalent(provider_result.data.get("activityId"), positive=True)
     if response_id != normalized_id:
-        return _error("invalid_activity_response", "Activity data had an unexpected shape.")
+        return _error("invalid_activity_response")
 
     result = _empty_envelope()
     result["status"] = "success"
@@ -623,8 +631,6 @@ def analyze_activity_service(client: Any, activity_id: Any) -> dict[str, Any]:
         _apply_zones(
             result, client, normalized_id,
             provider="heart_rate_zones", reader=get_heart_rate_zones, boundary_unit="bpm",
-            invalid_message="Heart-rate zone response had an unexpected shape.",
-            unavailable_message="Heart-rate zones are unavailable.",
         )
     if family == "cycling" and _signal_present(
         summary, "averagePower", "maxPower", "normalizedPower"
@@ -632,8 +638,6 @@ def analyze_activity_service(client: Any, activity_id: Any) -> dict[str, Any]:
         _apply_zones(
             result, client, normalized_id,
             provider="power_zones", reader=get_power_zones, boundary_unit="watts",
-            invalid_message="Power-zone response had an unexpected shape.",
-            unavailable_message="Power-zone data is unavailable.",
         )
     return result
 

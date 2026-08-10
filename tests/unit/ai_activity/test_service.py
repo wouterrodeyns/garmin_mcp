@@ -1003,3 +1003,245 @@ def test_later_optional_provider_runs_after_prior_malformed_response_and_warning
         {"provider": "heart_rate_zones", "code": "invalid_provider_response", "message": "Heart-rate zone response had an unexpected shape."},
         {"provider": "power_zones", "code": "invalid_provider_response", "message": "Power-zone response had an unexpected shape."},
     ]
+
+
+@pytest.mark.parametrize(
+    ("provider", "exception", "message"),
+    [
+        ("splits", RuntimeError("token=private; Authorization: Bearer secret"), "Activity splits are unavailable."),
+        ("heart_rate_zones", RuntimeError("https://private.example/?token=private"), "Heart-rate zone data is unavailable."),
+        ("power_zones", RuntimeError("email=private@example.test; request-id=private"), "Power-zone data is unavailable."),
+    ],
+)
+def test_raised_optional_provider_seams_are_sanitized_and_later_reads_continue(
+    monkeypatch: pytest.MonkeyPatch, provider: str, exception: Exception, message: str,
+):
+    calls: list[str] = []
+
+    def base(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("activity")
+        return ProviderResult(raw_activity(
+            activityTypeDTO={"typeKey": "cycling"}, summaryDTO={"averageHR": 1, "averagePower": 1},
+        ))
+
+    def split_provider(_client: object, _activity_id: int) -> ProviderResult:
+        calls.append("splits")
+        if provider == "splits":
+            raise exception
+        return ProviderResult({"lapDTOs": []})
+
+    def zone_provider(name: str):
+        def read(_client: object, _activity_id: int) -> ProviderResult:
+            calls.append(name)
+            if provider == name:
+                raise exception
+            return ProviderResult([])
+        return read
+
+    monkeypatch.setattr(service, "get_activity", base)
+    monkeypatch.setattr(service, "get_splits", split_provider)
+    monkeypatch.setattr(service, "get_heart_rate_zones", zone_provider("heart_rate_zones"))
+    monkeypatch.setattr(service, "get_power_zones", zone_provider("power_zones"))
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert calls == ["activity", "splits", "heart_rate_zones", "power_zones"]
+    assert result["status"] == "partial_success"
+    assert result["availability"][provider] is False
+    assert result[provider] is None
+    assert result["warnings"] == [{"provider": provider, "code": "provider_unavailable", "message": message}]
+    serialized = json.dumps(result, allow_nan=False)
+    for secret in ("private", "Bearer", "example.test", "request-id", "Authorization"):
+        assert secret not in serialized
+
+
+@pytest.mark.parametrize("raise_directly", [False, True])
+def test_strength_provider_failures_are_sanitized_and_json_safe(
+    monkeypatch: pytest.MonkeyPatch, raise_directly: bool,
+):
+    def strength(_client: object, _activity_id: int) -> ProviderResult:
+        if raise_directly:
+            raise RuntimeError("token=private@example.test")
+        return ProviderResult({"payload": "token=private@example.test"}, failed=True)
+
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(
+        raw_activity(activityTypeDTO={"typeKey": "strength_training"})
+    ))
+    monkeypatch.setattr(service, "get_strength", strength)
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["status"] == "partial_success"
+    assert result["strength"] is None and result["availability"]["strength"] is False
+    assert result["warnings"] == [{
+        "provider": "strength", "code": "provider_unavailable",
+        "message": "Strength exercise-set data is unavailable.",
+    }]
+    assert "private" not in json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    ("provider", "type_key", "summary", "expected_calls", "message"),
+    [
+        ("splits", "cycling", {"averageHR": 1, "averagePower": 1},
+         ["splits", "heart_rate_zones", "power_zones"], "Activity splits are unavailable."),
+        ("heart_rate_zones", "cycling", {"averageHR": 1, "averagePower": 1},
+         ["splits", "heart_rate_zones", "power_zones"], "Heart-rate zone data is unavailable."),
+        ("power_zones", "cycling", {"averageHR": 1, "averagePower": 1},
+         ["splits", "heart_rate_zones", "power_zones"], "Power-zone data is unavailable."),
+        ("strength", "strength_training", {}, ["strength"], "Strength exercise-set data is unavailable."),
+    ],
+)
+def test_failed_optional_provider_results_are_sanitized_once_and_do_not_stop_later_calls(
+    monkeypatch: pytest.MonkeyPatch, provider: str, type_key: str, summary: dict[str, object],
+    expected_calls: list[str], message: str,
+):
+    calls: list[str] = []
+
+    def optional(name: str):
+        def read(_client: object, _activity_id: int) -> ProviderResult:
+            calls.append(name)
+            if name == provider:
+                return ProviderResult({"token": "private@example.test"}, failed=True)
+            data = {
+                "splits": {"lapDTOs": []},
+                "heart_rate_zones": [],
+                "power_zones": [],
+                "strength": {"exercises": []},
+            }[name]
+            return ProviderResult(data)
+        return read
+
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": type_key}, summaryDTO=summary,
+    )))
+    monkeypatch.setattr(service, "get_splits", optional("splits"))
+    monkeypatch.setattr(service, "get_heart_rate_zones", optional("heart_rate_zones"))
+    monkeypatch.setattr(service, "get_power_zones", optional("power_zones"))
+    monkeypatch.setattr(service, "get_strength", optional("strength"))
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert calls == expected_calls
+    assert result["status"] == "partial_success"
+    assert result[provider] is None and result["availability"][provider] is False
+    assert result["warnings"] == [{"provider": provider, "code": "provider_unavailable", "message": message}]
+    assert "private" not in json.dumps(result, allow_nan=False)
+
+
+class ForbiddenNestedClient:
+    @staticmethod
+    def post(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("raw request client API accessed")
+
+    @staticmethod
+    def put(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("raw request client API accessed")
+
+    @staticmethod
+    def delete(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("raw request client API accessed")
+
+
+class RecordingReadOnlyClient:
+    """Client double that permits only the documented activity reads."""
+
+    def __init__(self, payload: dict[str, object], *, failures: set[str] | None = None):
+        self.calls: list[str] = []
+        self.payload = payload
+        self.failures = failures or set()
+        self.post = self.put = self.delete = self._forbidden
+        self.client = ForbiddenNestedClient()
+
+    def _read(self, name: str, value: object) -> object:
+        self.calls.append(name)
+        if name in self.failures:
+            raise RuntimeError("token=private@example.test")
+        return value
+
+    def get_activity(self, activity_id: int) -> object:
+        assert activity_id == 123
+        return self._read("get_activity", self.payload)
+
+    def get_activity_splits(self, activity_id: int) -> object:
+        assert activity_id == 123
+        return self._read("get_activity_splits", {"lapDTOs": []})
+
+    def get_activity_hr_in_timezones(self, activity_id: int) -> object:
+        assert activity_id == 123
+        return self._read("get_activity_hr_in_timezones", [])
+
+    def get_activity_power_in_timezones(self, activity_id: int) -> object:
+        assert activity_id == 123
+        return self._read("get_activity_power_in_timezones", [])
+
+    def get_activity_exercise_sets(self, activity_id: int) -> object:
+        assert activity_id == 123
+        return self._read("get_activity_exercise_sets", {"exercises": []})
+
+    def upload_workout(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden()
+
+    def schedule_workout(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden()
+
+    def unschedule_workout(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden()
+
+    def delete_workout(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden()
+
+    def set_activity_name(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden()
+
+    def set_activity_description(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden()
+
+    def set_activity_type(self, *_args: object, **_kwargs: object) -> None:
+        self._forbidden()
+
+    @staticmethod
+    def _forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("mutating or raw request client API accessed")
+
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"unexpected client attribute accessed: {name}")
+
+
+@pytest.mark.parametrize(
+    ("type_key", "summary", "expected_reads"),
+    [
+        ("running", {"averageHR": 1}, ["get_activity", "get_activity_splits", "get_activity_hr_in_timezones"]),
+        ("walking", {"averageHR": 1}, ["get_activity", "get_activity_splits", "get_activity_hr_in_timezones"]),
+        ("cycling", {"averageHR": 1, "averagePower": 1}, [
+            "get_activity", "get_activity_splits", "get_activity_hr_in_timezones", "get_activity_power_in_timezones",
+        ]),
+        ("strength_training", {}, ["get_activity", "get_activity_exercise_sets"]),
+        ("yoga", {}, ["get_activity"]),
+    ],
+)
+def test_real_provider_seams_use_only_documented_reads_in_exact_order(
+    type_key: str, summary: dict[str, object], expected_reads: list[str],
+):
+    client = RecordingReadOnlyClient(raw_activity(activityTypeDTO={"typeKey": type_key}, summaryDTO=summary))
+
+    result = analyze_activity_service(client, 123)
+
+    assert result["status"] == "success"
+    assert client.calls == expected_reads
+    json.dumps(result, allow_nan=False)
+
+
+def test_real_provider_seams_remain_read_only_after_a_partial_failure():
+    client = RecordingReadOnlyClient(
+        raw_activity(activityTypeDTO={"typeKey": "cycling"}, summaryDTO={"averageHR": 1, "averagePower": 1}),
+        failures={"get_activity_splits"},
+    )
+
+    result = analyze_activity_service(client, 123)
+
+    assert result["status"] == "partial_success"
+    assert client.calls == [
+        "get_activity", "get_activity_splits", "get_activity_hr_in_timezones", "get_activity_power_in_timezones",
+    ]
+    assert "private" not in json.dumps(result, allow_nan=False)
