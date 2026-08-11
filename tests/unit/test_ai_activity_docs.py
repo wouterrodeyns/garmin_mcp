@@ -136,8 +136,9 @@ def test_activity_docs_pin_garmin_set_centric_strength_contract():
         "set-centric `exercisesets` response",
         "`active` records are work sets",
         "`rest` records are excluded",
-        "first exercise candidate's bounded name and category",
-        "only its name is returned",
+        "first exercise candidate's full trimmed name and category",
+        "only the displayed name is capped at 120",
+        "category is never returned",
         "`set_number` is null",
         "probability, category, weight, resistance, duration, and volume are not returned",
     ):

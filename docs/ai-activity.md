@@ -111,10 +111,11 @@ recommendation, pass/fail judgment, or proof of workout execution.
 
 Strength is normalized from Garmin's set-centric `exerciseSets` response:
 `ACTIVE` records are work sets and `REST` records are excluded. Sets sharing
-the first exercise candidate's bounded name and category are grouped; only its
-name is returned. Garmin does not provide a verified set sequence here, so
-each returned `set_number` is null. Probability, category, weight, resistance,
-duration, and volume are not returned.
+the first exercise candidate's full trimmed name and category are grouped; only
+the displayed name is capped at 120, and category is never returned. Garmin
+does not provide a verified set sequence here, so each returned `set_number` is
+null. Probability, category, weight, resistance, duration, and volume are not
+returned.
 
 ## Example
 
