@@ -468,48 +468,54 @@ def _strength_root(data: Any) -> list[Any] | None | bool:
     if _absent_provider_data(data):
         return None
     if type(data) is dict:
-        exercises = data.get("exercises")
-        if type(exercises) is list:
-            return exercises
+        exercise_sets = data.get("exerciseSets")
+        if type(exercise_sets) is list:
+            return exercise_sets
     return False
 
 
-def _strength_exercise(value: Any) -> tuple[dict[str, Any] | None, bool]:
+def _strength_active_set(
+    value: Any,
+) -> tuple[dict[str, int | None] | None, tuple[str, str] | None, bool, bool]:
+    """Normalize one Garmin set record.
+
+    The final boolean marks a syntactically valid record (including REST), while
+    the preceding boolean reports malformed fields without discarding a known
+    ACTIVE set.
+    """
     if type(value) is not dict:
-        return None, True
-    name = _text(value.get("exerciseName"), 120)
-    malformed = "exerciseName" in value and name is None
-    sets = value.get("sets")
-    if type(sets) is not list:
-        return None, True
-    normalized_sets: list[dict[str, int | None]] = []
+        return None, None, True, False
+    set_type = value.get("setType")
+    if type(set_type) is not str or set_type not in {"ACTIVE", "REST"}:
+        return None, None, True, False
+    if set_type == "REST":
+        return None, None, False, True
+
+    malformed = False
     repetitions: int | None = None
-    for raw_set in sets:
-        if type(raw_set) is not dict:
+    if value.get("repetitionCount") is not None:
+        repetitions = _integer_equivalent(value.get("repetitionCount"), positive=False)
+        if repetitions is None or repetitions < 0:
+            repetitions = None
             malformed = True
-            continue
-        set_number = _integer_equivalent(raw_set.get("setNumber"), positive=True)
-        raw_repetitions = _integer_equivalent(raw_set.get("reps"), positive=False)
-        reps = raw_repetitions if raw_repetitions is not None and raw_repetitions >= 0 else None
-        set_malformed = (
-            ("setNumber" in raw_set and set_number is None)
-            or ("reps" in raw_set and reps is None)
-        )
-        if set_number is None and reps is None:
+
+    identity: tuple[str, str] | None = None
+    if "exercises" in value:
+        candidates = value.get("exercises")
+        if type(candidates) is not list:
             malformed = True
-            continue
-        malformed = malformed or set_malformed
-        normalized_sets.append({"set_number": set_number, "repetitions": reps})
-        if reps is not None:
-            repetitions = (repetitions or 0) + reps
-    if name is None and not normalized_sets:
-        return None, True
-    return {
-        "name": name,
-        "set_count": len(normalized_sets),
-        "repetition_count": repetitions,
-        "sets": normalized_sets,
-    }, malformed
+        elif candidates:
+            first = candidates[0]
+            if type(first) is not dict:
+                malformed = True
+            else:
+                name = _text(first.get("name"), 120)
+                category = _text(first.get("category"), 120)
+                if name is None or category is None:
+                    malformed = True
+                else:
+                    identity = (name, category)
+    return {"set_number": None, "repetitions": repetitions}, identity, malformed, True
 
 
 def _apply_strength(result: dict[str, Any], client: Any, activity_id: int) -> None:
@@ -521,22 +527,39 @@ def _apply_strength(result: dict[str, Any], client: Any, activity_id: int) -> No
     if not isinstance(provider_result, ProviderResult) or provider_result.failed:
         _provider_unavailable(result, provider)
         return
-    exercises = _strength_root(provider_result.data)
-    if exercises is None:
+    exercise_sets = _strength_root(provider_result.data)
+    if exercise_sets is None:
         return
-    if exercises is False:
+    if exercise_sets is False:
         _provider_invalid(result, provider)
         return
     items: list[dict[str, Any]] = []
+    grouped_items: dict[tuple[str, str], dict[str, Any]] = {}
     malformed = False
-    for value in exercises:
-        item, item_malformed = _strength_exercise(value)
+    valid_records = 0
+    for value in exercise_sets:
+        normalized_set, identity, item_malformed, valid_record = _strength_active_set(value)
         malformed = malformed or item_malformed
-        if item is not None:
+        valid_records += valid_record
+        if normalized_set is None:
+            continue
+        if identity is None:
+            item = {"name": None, "set_count": 0, "repetition_count": None, "sets": []}
             items.append(item)
-    if not items and exercises:
+        else:
+            item = grouped_items.get(identity)
+            if item is None:
+                item = {"name": identity[0], "set_count": 0, "repetition_count": None, "sets": []}
+                grouped_items[identity] = item
+                items.append(item)
+        item["sets"].append(normalized_set)
+    if not valid_records and exercise_sets:
         _provider_invalid(result, provider)
         return
+    for item in items:
+        item["set_count"] = len(item["sets"])
+        known_repetitions = [set_["repetitions"] for set_ in item["sets"] if set_["repetitions"] is not None]
+        item["repetition_count"] = sum(known_repetitions) if known_repetitions else None
     set_count = sum(item["set_count"] for item in items)
     known_repetitions = [item["repetition_count"] for item in items if item["repetition_count"] is not None]
     result["availability"][provider] = True

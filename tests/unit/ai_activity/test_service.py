@@ -963,24 +963,36 @@ def test_absent_strength_roots_are_silent(monkeypatch: pytest.MonkeyPatch, root:
     assert result["strength"] is None and result["warnings"] == []
 
 
-def test_strength_empty_and_normalized_sets_ignore_weight_volume_and_sum_reps(monkeypatch: pytest.MonkeyPatch):
+def test_strength_garmin_set_records_group_active_sets_and_ignore_raw_fields(monkeypatch: pytest.MonkeyPatch):
     calls: list[str] = []
-    strength = {"exercises": [
-        {"exerciseName": "  Squat  ", "sets": [
-            {"setNumber": 1, "reps": 0, "weight": 100, "volume": 999},
-            {"setNumber": 2, "reps": 8, "resistance": 10, "unit": "kg"},
-        ], "category": "ignored"},
-        {"exerciseName": "  Plank  ", "sets": []},
+    strength = {"activityId": 123, "exerciseSets": [
+        {"setType": "ACTIVE", "repetitionCount": 0, "weight": 100, "duration": 45,
+         "startTime": 100, "wktStepIndex": 2,
+         "exercises": [
+             {"name": "  Squat  ", "category": "STRENGTH", "probability": 0.99},
+             {"name": "Wrong candidate", "category": "OTHER", "probability": 1},
+         ]},
+        {"setType": "REST", "repetitionCount": 99, "weight": 999, "duration": 60,
+         "startTime": 145, "wktStepIndex": 3,
+         "exercises": [{"name": "Ignored rest", "category": "REST", "probability": 1}]},
+        {"setType": "ACTIVE", "repetitionCount": 8,
+         "exercises": [{"name": "Squat", "category": "STRENGTH", "probability": 0.5}]},
+        {"setType": "ACTIVE", "repetitionCount": 12,
+         "exercises": [{"name": "Push-up", "category": "STRENGTH", "probability": 0.8}]},
+        {"setType": "ACTIVE", "repetitionCount": None,
+         "exercises": [{"name": "Push-up", "category": "STRENGTH", "probability": 0.7}]},
     ]}
     monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
     optional_readers(monkeypatch, calls, strength=strength)
     result = analyze_activity_service(Mock(), 123)
-    assert result["strength"] == {"exercise_count": 2, "set_count": 2, "repetition_count": 8, "items": [
+    assert result["strength"] == {"exercise_count": 2, "set_count": 4, "repetition_count": 20, "items": [
         {"name": "Squat", "set_count": 2, "repetition_count": 8,
-         "sets": [{"set_number": 1, "repetitions": 0}, {"set_number": 2, "repetitions": 8}]},
-        {"name": "Plank", "set_count": 0, "repetition_count": None, "sets": []},
+         "sets": [{"set_number": None, "repetitions": 0}, {"set_number": None, "repetitions": 8}]},
+        {"name": "Push-up", "set_count": 2, "repetition_count": 12,
+         "sets": [{"set_number": None, "repetitions": 12}, {"set_number": None, "repetitions": None}]},
     ]}
     assert result["availability"]["strength"] is True
+    assert result["warnings"] == []
 
 
 def test_strength_exercise_name_is_trimmed_to_the_approved_120_character_bound(monkeypatch: pytest.MonkeyPatch):
@@ -988,57 +1000,127 @@ def test_strength_exercise_name_is_trimmed_to_the_approved_120_character_bound(m
     monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
         activityTypeDTO={"typeKey": "strength_training"},
     )))
-    optional_readers(monkeypatch, calls, strength={"exercises": [
-        {"exerciseName": "x" * 121, "sets": []},
-    ]})
+    optional_readers(monkeypatch, calls, strength={"exerciseSets": [{
+        "setType": "ACTIVE", "exercises": [{"name": "x" * 121, "category": "STRENGTH"}],
+    }]})
 
     result = analyze_activity_service(Mock(), 123)
 
     assert result["strength"]["items"][0]["name"] == "x" * 120
 
 
-def test_strength_empty_exercises_are_available_and_zero_count(monkeypatch: pytest.MonkeyPatch):
+def test_strength_empty_exercise_sets_are_available_and_zero_count(monkeypatch: pytest.MonkeyPatch):
     calls: list[str] = []
     monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
-    optional_readers(monkeypatch, calls, strength={"exercises": []})
+    optional_readers(monkeypatch, calls, strength={"exerciseSets": []})
     assert analyze_activity_service(Mock(), 123)["strength"] == {
         "exercise_count": 0, "set_count": 0, "repetition_count": None, "items": [],
     }
 
 
+def test_strength_rest_only_payload_is_available_empty_without_a_warning(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "strength_training"},
+    )))
+    optional_readers(monkeypatch, calls, strength={"exerciseSets": [
+        {"setType": "REST", "repetitionCount": 12, "exercises": "ignored"},
+        {"setType": "REST", "weight": 50},
+    ]})
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["availability"]["strength"] is True
+    assert result["strength"] == {
+        "exercise_count": 0, "set_count": 0, "repetition_count": None, "items": [],
+    }
+    assert result["warnings"] == []
+
+
 def test_strength_missing_repetitions_stay_null_while_known_zero_totals_stay_zero(monkeypatch: pytest.MonkeyPatch):
     calls: list[str] = []
     monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
-    optional_readers(monkeypatch, calls, strength={"exercises": [
-        {"sets": [{"setNumber": 1, "reps": 0}]},
-        {"sets": [{"setNumber": 1}]},
+    optional_readers(monkeypatch, calls, strength={"exerciseSets": [
+        {"setType": "ACTIVE", "repetitionCount": 0},
+        {"setType": "ACTIVE"},
     ]})
-    strength = analyze_activity_service(Mock(), 123)["strength"]
+    result = analyze_activity_service(Mock(), 123)
+    strength = result["strength"]
     assert strength["repetition_count"] == 0
     assert strength["items"][0]["repetition_count"] == 0
     assert strength["items"][1]["repetition_count"] is None
+    assert result["warnings"] == []
 
 
-def test_strength_sparse_named_and_mixed_invalid_entries_have_stable_totals(monkeypatch: pytest.MonkeyPatch):
+def test_strength_identityless_active_entries_remain_separate_and_malformed_sets_remain_known(monkeypatch: pytest.MonkeyPatch):
     calls: list[str] = []
     huge = 10 ** 5000
     monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
-    optional_readers(monkeypatch, calls, strength={"exercises": [
-        {"exerciseName": "Named", "sets": []},
-        {"sets": [{"setNumber": 1}, {"reps": 3}, {"setNumber": True, "reps": huge}, None]},
-        {"exerciseName": "Missing sets"},
+    optional_readers(monkeypatch, calls, strength={"exerciseSets": [
+        {"setType": "ACTIVE", "repetitionCount": 3},
+        {"setType": "ACTIVE", "repetitionCount": huge},
+        {"setType": "ACTIVE", "repetitionCount": True},
+        {"setType": "ACTIVE", "exercises": "bad"},
+        {"setType": "REST"},
+        {"setType": "active"},
         None,
     ]})
     result = analyze_activity_service(Mock(), 123)
-    assert result["strength"] == {"exercise_count": 2, "set_count": 2, "repetition_count": 3, "items": [
-        {"name": "Named", "set_count": 0, "repetition_count": None, "sets": []},
-        {"name": None, "set_count": 2, "repetition_count": 3,
-         "sets": [{"set_number": 1, "repetitions": None}, {"set_number": None, "repetitions": 3}]},
+    assert result["strength"] == {"exercise_count": 4, "set_count": 4, "repetition_count": 3, "items": [
+        {"name": None, "set_count": 1, "repetition_count": 3,
+         "sets": [{"set_number": None, "repetitions": 3}]},
+        {"name": None, "set_count": 1, "repetition_count": None,
+         "sets": [{"set_number": None, "repetitions": None}]},
+        {"name": None, "set_count": 1, "repetition_count": None,
+         "sets": [{"set_number": None, "repetitions": None}]},
+        {"name": None, "set_count": 1, "repetition_count": None,
+         "sets": [{"set_number": None, "repetitions": None}]},
     ]}
     assert result["warnings"] == [{"provider": "strength", "code": "invalid_provider_response", "message": "Strength exercise-set response had an unexpected shape."}]
 
 
-@pytest.mark.parametrize("root", [{"exercises": "bad"}, [], {"exercises": [{"sets": "bad"}]}])
+def test_strength_invalid_first_candidate_is_retained_unnamed_with_one_warning(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "strength_training"},
+    )))
+    optional_readers(monkeypatch, calls, strength={"exerciseSets": [
+        {"setType": "ACTIVE", "repetitionCount": 2,
+         "exercises": [{"name": "Known", "category": "STRENGTH"}]},
+        {"setType": "ACTIVE", "repetitionCount": 4,
+         "exercises": [{"name": "Missing category"}]},
+        {"setType": "ACTIVE", "repetitionCount": 6, "weight": 99, "duration": 30,
+         "startTime": 123, "wktStepIndex": 2, "exercises": ["bad first candidate"]},
+    ]})
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["strength"] == {"exercise_count": 3, "set_count": 3, "repetition_count": 12, "items": [
+        {"name": "Known", "set_count": 1, "repetition_count": 2,
+         "sets": [{"set_number": None, "repetitions": 2}]},
+        {"name": None, "set_count": 1, "repetition_count": 4,
+         "sets": [{"set_number": None, "repetitions": 4}]},
+        {"name": None, "set_count": 1, "repetition_count": 6,
+         "sets": [{"set_number": None, "repetitions": 6}]},
+    ]}
+    assert result["warnings"] == [{
+        "provider": "strength", "code": "invalid_provider_response",
+        "message": "Strength exercise-set response had an unexpected shape.",
+    }]
+    serialized = json.dumps(result["strength"])
+    assert all(field not in serialized for field in (
+        "weight", "duration", "probability", "category", "startTime", "wktStepIndex",
+    ))
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        {"exercises": []}, {"exerciseSets": "bad"}, [],
+        {"exerciseSets": [{"setType": "unknown"}]}, {"exerciseSets": [{"setType": "ACTIVE "}]},
+        {"exerciseSets": [{"setType": True}]}, {"exerciseSets": [{}]},
+    ],
+)
 def test_wrong_or_all_invalid_strength_roots_are_unavailable_with_one_fixed_warning(monkeypatch: pytest.MonkeyPatch, root: object):
     calls: list[str] = []
     monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))
@@ -1166,7 +1248,7 @@ def test_failed_optional_provider_results_are_sanitized_once_and_do_not_stop_lat
                 "splits": {"lapDTOs": []},
                 "heart_rate_zones": [],
                 "power_zones": [],
-                "strength": {"exercises": []},
+                "strength": {"exerciseSets": []},
             }[name]
             return ProviderResult(data)
         return read
@@ -1236,7 +1318,7 @@ class RecordingReadOnlyClient:
 
     def get_activity_exercise_sets(self, activity_id: int) -> object:
         assert activity_id == 123
-        return self._read("get_activity_exercise_sets", {"exercises": []})
+        return self._read("get_activity_exercise_sets", {"exerciseSets": []})
 
     def upload_workout(self, *_args: object, **_kwargs: object) -> None:
         self._forbidden("upload_workout")
@@ -1439,7 +1521,7 @@ def test_optional_exploding_equality_payloads_are_bounded_and_later_reads_contin
                 "splits": {"lapDTOs": []},
                 "heart_rate_zones": [],
                 "power_zones": [],
-                "strength": {"exercises": []},
+                "strength": {"exerciseSets": []},
             }[name])
         return read
 
@@ -1517,7 +1599,7 @@ def test_optional_exploding_dict_payloads_are_bounded_and_later_reads_continue(
                 "splits": {"lapDTOs": []},
                 "heart_rate_zones": [],
                 "power_zones": [],
-                "strength": {"exercises": []},
+                "strength": {"exerciseSets": []},
             }[name])
         return read
 

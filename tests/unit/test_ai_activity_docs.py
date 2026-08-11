@@ -130,6 +130,20 @@ def test_activity_docs_pin_units_raw_first_rounding_bounds_and_truncation():
         assert phrase in lower
 
 
+def test_activity_docs_pin_garmin_set_centric_strength_contract():
+    lower = " ".join(_read(DOCS_PATH).lower().split())
+    for phrase in (
+        "set-centric `exercisesets` response",
+        "`active` records are work sets",
+        "`rest` records are excluded",
+        "first exercise candidate's bounded name and category",
+        "only its name is returned",
+        "`set_number` is null",
+        "probability, category, weight, resistance, duration, and volume are not returned",
+    ):
+        assert phrase in lower
+
+
 def test_activity_docs_pin_warning_security_and_bounded_field_contracts():
     lower = " ".join(_read(DOCS_PATH).lower().split())
     for phrase in (

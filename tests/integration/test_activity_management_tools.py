@@ -586,15 +586,14 @@ async def test_get_activity_exercise_sets_tool(app_with_activity_management, moc
     """Test get_activity_exercise_sets tool returns exercise sets for strength training"""
     # Setup mock
     exercise_sets = {
-        "exercises": [
+        "activityId": 12345678901,
+        "exerciseSets": [
             {
-                "exerciseName": "Bench Press",
-                "sets": [
-                    {"setNumber": 1, "weight": 80.0, "reps": 10},
-                    {"setNumber": 2, "weight": 80.0, "reps": 8},
-                    {"setNumber": 3, "weight": 80.0, "reps": 6}
-                ]
-            }
+                "setType": "ACTIVE", "repetitionCount": 10, "weight": 80.0,
+                "duration": 35, "startTime": 1710000000, "wktStepIndex": 1,
+                "exercises": [{"name": "Bench Press", "category": "STRENGTH", "probability": 0.98}],
+            },
+            {"setType": "REST", "duration": 60, "startTime": 1710000035},
         ]
     }
     mock_garmin_client.get_activity_exercise_sets.return_value = exercise_sets
@@ -609,6 +608,7 @@ async def test_get_activity_exercise_sets_tool(app_with_activity_management, moc
     # Verify
     assert result is not None
     mock_garmin_client.get_activity_exercise_sets.assert_called_once_with(activity_id)
+    assert json.loads(result[0][0].text) == exercise_sets
 
 
 @pytest.mark.asyncio

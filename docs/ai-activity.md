@@ -109,9 +109,12 @@ facts over valid returned laps, with source-order tie breaking. They describe
 the recorded splits, not coaching quality or compliance, and are not a
 recommendation, pass/fail judgment, or proof of workout execution.
 
-Strength results expose exercise and set counts and repetitions when known.
-Strength weight, resistance, and volume are intentionally not returned until
-their units are verified.
+Strength is normalized from Garmin's set-centric `exerciseSets` response:
+`ACTIVE` records are work sets and `REST` records are excluded. Sets sharing
+the first exercise candidate's bounded name and category are grouped; only its
+name is returned. Garmin does not provide a verified set sequence here, so
+each returned `set_number` is null. Probability, category, weight, resistance,
+duration, and volume are not returned.
 
 ## Example
 
