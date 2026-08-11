@@ -1,98 +1,49 @@
-# GitHub Actions Workflows
+# GitHub Actions
 
-This repository uses GitHub Actions for continuous integration and security checks. Below is an overview of each workflow.
+This repository uses one GitHub Actions workflow: `.github/workflows/ci.yml`.
+It runs for every pull request, every push to `main`, and manual invocations from
+the Actions tab.
 
-## Workflows
+## Checks
 
-### 1. CI (`ci.yml`)
+The workflow has two jobs:
 
-**Triggers:**
-- Pull requests to `main` or `master`
-- Pushes to `main` or `master`
+- **Offline tests** runs the complete credential-free test suite on
+  Python 3.10 and 3.13, the boundaries of the supported Python range.
+- **Lock file and package** verifies that `uv.lock` matches `pyproject.toml` and
+  builds the source distribution and wheel on Python 3.13.
 
-**What it does:**
-- Tests the codebase across Python versions 3.10, 3.11, 3.12, and 3.13
-- Runs all integration and unit tests
-- Uses uv for fast dependency management
-- Provides a test summary
+Dependencies are installed from the committed lock file. Commands fail their job
+directly; failures are not replaced with informational success messages.
 
-**Matrix:** Tests run in parallel across 4 Python versions for comprehensive compatibility checks.
+## Garmin credentials and E2E tests
 
-### 2. PR Validation (`pr-validation.yml`)
-
-**Triggers:**
-- Pull request opened, synchronized, or reopened
-
-**What it does:**
-- Comprehensive validation on Python 3.13
-- Runs all tests with strict markers and fail-fast behavior (max 5 failures)
-- Validates package installation
-- Checks `pyproject.toml` syntax
-- Provides PR metadata information
-
-**Jobs:**
-1. `validate` - Runs complete test suite
-2. `test-installation` - Verifies the package installs correctly
-3. `pr-info` - Displays PR metadata for debugging
-
-### 3. Security Checks (`security.yml`)
-
-**Triggers:**
-- Pull requests to `main` or `master`
-- Weekly schedule (Mondays at 9am UTC)
-- Manual trigger via workflow_dispatch
-
-**What it does:**
-- Checks dependency vulnerabilities
-- Verifies lock file (`uv.lock`) is in sync with `pyproject.toml`
-- Validates Python syntax across all source files
-- Checks package import structure
-
-**Jobs:**
-1. `dependency-check` - Security and dependency validation
-2. `code-quality` - Code syntax and import checks
-
-## Running Tests Locally
-
-To run the same tests that CI runs:
+CI does not receive Garmin credentials. Live tests are marked `e2e` and are
+explicitly excluded with:
 
 ```bash
-# Install dependencies
-uv sync
+uv run pytest -m "not e2e"
+```
 
-# Run integration and unit tests
-uv run pytest tests/integration tests/unit -v --tb=short
+Run live tests manually only from an authenticated local environment:
 
-# Check lock file status
+```bash
+uv run pytest -m e2e
+```
+
+## Local equivalents
+
+Install the locked development environment and run the same checks locally:
+
+```bash
+uv sync --locked --all-extras --dev
 uv lock --check
+uv run pytest -m "not e2e"
+uv build
 ```
 
-## Skipped Tests
+## Deliberately not configured
 
-The workflows skip end-to-end (e2e) tests because they require valid Garmin credentials. E2E tests are located in `tests/e2e/` and should be run manually with proper authentication.
-
-## Badge Status
-
-Add these badges to your README.md:
-
-```markdown
-![CI](https://github.com/YOUR_USERNAME/garmin_mcp/workflows/CI/badge.svg)
-![PR Validation](https://github.com/YOUR_USERNAME/garmin_mcp/workflows/PR%20Validation/badge.svg)
-![Security Checks](https://github.com/YOUR_USERNAME/garmin_mcp/workflows/Security%20Checks/badge.svg)
-```
-
-## Troubleshooting
-
-### Lock file out of sync
-
-If the security check fails with "Lock file is out of sync":
-
-```bash
-uv lock
-git add uv.lock
-git commit -m "Update uv.lock"
-```
-
-### Test failures
-
-Check the Actions tab for detailed test output. Tests run with `-v --tb=short` for verbose output with short tracebacks.
+The workflow does not currently use a dependency vulnerability scanner or a
+coverage-reporting service. CI does not claim to provide either check until a
+real tool is configured and reviewed.
