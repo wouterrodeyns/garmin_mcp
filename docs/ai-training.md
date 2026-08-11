@@ -6,7 +6,7 @@ to coaching-relevant facts. `create_workout` is the coach's **hands** when the
 athlete later asks to put a recommendation on Garmin. The context tool never
 uploads, schedules, changes, or deletes Garmin data. It does not provide coaching advice.
 
-The implementation is pinned to `garminconnect==0.3.2`. Garmin metric
+The implementation is pinned to `garminconnect==0.3.10`. Garmin metric
 availability varies by device and account, so every recovery and fitness metric
 described below is optional.
 

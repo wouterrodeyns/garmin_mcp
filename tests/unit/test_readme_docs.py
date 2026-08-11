@@ -58,6 +58,20 @@ def test_setup_reference_has_required_sections_and_fork_sources():
     assert "uv run pytest -m e2e" in setup
 
 
+def test_current_runtime_docs_require_python_312_and_pinned_client():
+    readme = _readme()
+    setup = _setup()
+    training = (ROOT / "docs" / "ai-training.md").read_text()
+    workouts = (ROOT / "docs" / "ai-workouts.md").read_text()
+
+    assert "Python 3.12+" in readme
+    assert "Python 3.12+" in setup
+    assert "garminconnect==0.3.10" in training
+    assert "garminconnect==0.3.10" in workouts
+    assert "Python 3.10+" not in readme
+    assert "Python 3.10+" not in setup
+
+
 def test_file_secret_guidance_is_deployment_only():
     setup = _setup()
     docker = _section(setup, "Docker and non-interactive deployments")

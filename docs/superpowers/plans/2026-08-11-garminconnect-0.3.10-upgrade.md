@@ -431,7 +431,7 @@ Make these exact contract changes:
 - `README.md`: “The project supports Python 3.12+.”
 - `docs/setup.md`: “The project supports Python 3.12+.”
 - `docs/ai-training.md`: implementation pinned to `garminconnect==0.3.10`; retain the existing bounded snapshot and coarse warning semantics.
-- `docs/ai-workouts.md`: pinned API section targets `garminconnect==0.3.10`, links to the 0.3.10 PyPI/source tags, and continues to state that the high-level client has no workout-update method.
+- `docs/ai-workouts.md`: pinned API section targets `garminconnect==0.3.10`, links to the 0.3.10 PyPI/source tags, and records the new high-level whole-document `update_workout` method while keeping the fork tool deferred.
 
 Do not rewrite historical specs or implementation plans; they describe the repository at their creation time.
 

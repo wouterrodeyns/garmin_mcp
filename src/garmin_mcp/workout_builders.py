@@ -549,7 +549,7 @@ def register_tools(app):
                     })
                     continue
 
-                # garminconnect 0.3.2 dropped the .garth attribute; use .client.
+                # Modern garminconnect versions expose the raw client as .client.
                 url = f"workout-service/schedule/{workout_id}"
                 response = garmin_client.client.post(
                     "connectapi", url, json={"date": calendar_date}

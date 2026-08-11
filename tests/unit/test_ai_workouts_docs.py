@@ -64,7 +64,7 @@ def test_ai_workouts_docs_covers_threshold_schema_and_partial_success():
     ):
         assert expected in create
     assert "partial_success" in SECTIONS["what the call does"]
-    assert "garminconnect==0.3.2" in SECTIONS["pinned api assumptions"]
+    assert "garminconnect==0.3.10" in SECTIONS["pinned api assumptions"]
 
 
 def test_ai_workouts_docs_protects_schema_cardinality_and_strength_limitations():
@@ -257,16 +257,18 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
     assert "unrelated" in precedence
 
 
-def test_ai_workouts_docs_protects_pinned_ids_and_missing_update_api():
+def test_ai_workouts_docs_protects_pinned_ids_and_available_update_api():
     pinned = SECTIONS["pinned api assumptions"].lower()
     for expected in (
-        "garminconnect==0.3.2",
-        "no update method",
+        "garminconnect==0.3.10",
+        "update_workout",
+        "whole-document",
         "workout_id",
         "scheduled_workout_id",
         "distinct",
     ):
         assert expected in pinned
+    assert "no update method" not in pinned
 
 
 def test_ai_workouts_docs_protects_deferred_operation_contracts():

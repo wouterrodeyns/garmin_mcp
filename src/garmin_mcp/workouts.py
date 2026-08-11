@@ -1184,10 +1184,8 @@ def register_tools(app):
             workout_id: ID of the workout to delete (get IDs from get_workouts)
         """
         try:
-            # Use the high-level garminconnect method. In garminconnect 0.3.2,
-            # client.delete(..., api=True) returns resp.json() (a dict), not a
-            # Response, so checking response.status_code raises AttributeError.
-            # Delegate to the library and rely on exceptions to signal failure.
+            # Use the high-level method: the raw client returns parsed response
+            # data, not a Response object. Rely on exceptions to signal failure.
             garmin_client.delete_workout(workout_id)
             return json.dumps({
                 "status": "success",
@@ -1213,8 +1211,8 @@ def register_tools(app):
         results = []
         for workout_id in workout_ids:
             try:
-                # See note in delete_workout: high-level call avoids the
-                # garminconnect 0.3.2 dict-vs-Response trap.
+                # See note in delete_workout: use the high-level method rather
+                # than treating parsed raw-client data as a Response object.
                 garmin_client.delete_workout(workout_id)
                 results.append({
                     "status": "success",

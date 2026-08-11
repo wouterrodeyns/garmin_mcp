@@ -26,6 +26,7 @@ REQUIRED_METHODS = {
     "query_garmin_graphql",
     "schedule_workout",
     "unschedule_workout",
+    "update_workout",
     "upload_workout",
 }
 

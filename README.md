@@ -128,7 +128,7 @@ AI-facing default.
 - [Setup and operations](docs/setup.md) covers clients, authentication, local
   development, transports, Docker, China, testing, and troubleshooting.
 
-The project supports Python 3.10+. For local development:
+The project supports Python 3.12+. For local development:
 
 ```bash
 git clone https://github.com/wouterrodeyns/garmin_mcp.git
