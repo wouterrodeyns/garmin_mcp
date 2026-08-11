@@ -75,6 +75,18 @@ also sent as-is and must be a category Garmin accepts.
 To create a workout without scheduling, omit `schedule_date` or pass `null`.
 An empty string is invalid; scheduled dates must use canonical `YYYY-MM-DD`.
 
+## Native Garmin cycling power targets
+
+Callers of `create_workout` should keep using the friendly `power_zone` and
+`power` fields above; the compiler handles Garmin's native representation.
+Both forms use `workoutTargetTypeId` `2` with key `power.zone`. A named FTP
+zone uses `zoneNumber` from 1 through 7, while an absolute watt range uses
+step-level `targetValueOne` and `targetValueTwo` with no `zoneNumber`.
+
+ID `6` is Garmin's `pace.zone` speed target. The obsolete `power.between` key
+is rejected before upload because pairing watts with ID `6` makes Garmin
+interpret them as speed and display distance-per-time units instead of watts.
+
 ## What the call does
 
 The service follows this sequence:
