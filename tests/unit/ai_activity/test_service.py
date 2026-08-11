@@ -1009,6 +1009,38 @@ def test_strength_exercise_name_is_trimmed_to_the_approved_120_character_bound(m
     assert result["strength"]["items"][0]["name"] == "x" * 120
 
 
+def test_strength_groups_by_full_trimmed_candidate_identity_before_bounding_display_name(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[str] = []
+    shared_name_prefix = "n" * 120
+    shared_category_prefix = "c" * 120
+    first_identity = {"name": f" {shared_name_prefix}A ", "category": f" {shared_category_prefix}A "}
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "strength_training"},
+    )))
+    optional_readers(monkeypatch, calls, strength={"exerciseSets": [
+        {"setType": "ACTIVE", "repetitionCount": 1, "exercises": [first_identity]},
+        {"setType": "ACTIVE", "repetitionCount": 2,
+         "exercises": [{"name": f" {shared_name_prefix}B ", "category": f" {shared_category_prefix}A "}]},
+        {"setType": "ACTIVE", "repetitionCount": 3,
+         "exercises": [{"name": f" {shared_name_prefix}A ", "category": f" {shared_category_prefix}B "}]},
+        {"setType": "ACTIVE", "repetitionCount": 4, "exercises": [first_identity]},
+    ]})
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["strength"] == {"exercise_count": 3, "set_count": 4, "repetition_count": 10, "items": [
+        {"name": shared_name_prefix, "set_count": 2, "repetition_count": 5,
+         "sets": [{"set_number": None, "repetitions": 1}, {"set_number": None, "repetitions": 4}]},
+        {"name": shared_name_prefix, "set_count": 1, "repetition_count": 2,
+         "sets": [{"set_number": None, "repetitions": 2}]},
+        {"name": shared_name_prefix, "set_count": 1, "repetition_count": 3,
+         "sets": [{"set_number": None, "repetitions": 3}]},
+    ]}
+    assert result["warnings"] == []
+
+
 def test_strength_empty_exercise_sets_are_available_and_zero_count(monkeypatch: pytest.MonkeyPatch):
     calls: list[str] = []
     monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(activityTypeDTO={"typeKey": "strength_training"})))

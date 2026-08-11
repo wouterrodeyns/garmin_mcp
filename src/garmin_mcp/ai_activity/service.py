@@ -509,9 +509,11 @@ def _strength_active_set(
             if type(first) is not dict:
                 malformed = True
             else:
-                name = _text(first.get("name"), 120)
-                category = _text(first.get("category"), 120)
-                if name is None or category is None:
+                raw_name = first.get("name")
+                raw_category = first.get("category")
+                name = raw_name.strip() if isinstance(raw_name, str) else None
+                category = raw_category.strip() if isinstance(raw_category, str) else None
+                if not name or not category:
                     malformed = True
                 else:
                     identity = (name, category)
@@ -549,7 +551,7 @@ def _apply_strength(result: dict[str, Any], client: Any, activity_id: int) -> No
         else:
             item = grouped_items.get(identity)
             if item is None:
-                item = {"name": identity[0], "set_count": 0, "repetition_count": None, "sets": []}
+                item = {"name": _text(identity[0], 120), "set_count": 0, "repetition_count": None, "sets": []}
                 grouped_items[identity] = item
                 items.append(item)
         item["sets"].append(normalized_set)
