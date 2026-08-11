@@ -504,10 +504,13 @@ UV_CACHE_DIR=/private/tmp/garmin-mcp-upgrade-uv-cache uv export --locked --no-de
   --no-emit-project --format requirements-txt --no-hashes \
   --output-file /private/tmp/garmin-mcp-upgrade-requirements.txt
 UV_CACHE_DIR=/private/tmp/garmin-mcp-upgrade-uv-cache uvx --from pip-audit pip-audit \
+  --no-deps --disable-pip \
   -r /private/tmp/garmin-mcp-upgrade-requirements.txt
 ```
 
-Expected: `pip-audit` reports no known vulnerabilities.
+The export is already the complete, exactly pinned transitive runtime set, so
+the audit disables redundant pip resolution. Expected: `pip-audit` reports no
+known vulnerabilities.
 
 - [ ] **Step 5: Run a bounded read-only live smoke when local tokens exist**
 
