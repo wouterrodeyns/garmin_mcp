@@ -9,7 +9,7 @@ the Actions tab.
 The workflow has two jobs:
 
 - **Offline tests** runs the complete credential-free test suite on
-  Python 3.10 and 3.13, the boundaries of the supported Python range.
+  Python 3.12 and 3.13, the supported lower bound and current upper CI target.
 - **Lock file and package** verifies that `uv.lock` matches `pyproject.toml` and
   builds the source distribution and wheel on Python 3.13.
 

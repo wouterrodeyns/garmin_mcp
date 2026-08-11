@@ -14,7 +14,7 @@ def test_ci_is_the_only_workflow() -> None:
 def test_ci_pins_the_offline_safety_contract() -> None:
     workflow = CI.read_text()
 
-    assert 'python-version: ["3.10", "3.13"]' in workflow
+    assert 'python-version: ["3.12", "3.13"]' in workflow
     assert workflow.count("astral-sh/setup-uv@v8.3.2") == 2
     assert workflow.count("uv sync --locked --all-extras --dev") == 2
     assert 'uv run pytest -m "not e2e"' in workflow
@@ -32,6 +32,6 @@ def test_workflow_documentation_matches_ci() -> None:
 
     assert "one GitHub Actions workflow" in docs
     assert 'uv run pytest -m "not e2e"' in docs
-    assert "Python 3.10 and 3.13" in docs
+    assert "Python 3.12 and 3.13" in docs
     assert "Garmin credentials" in docs
     assert "vulnerability scanner" in docs
