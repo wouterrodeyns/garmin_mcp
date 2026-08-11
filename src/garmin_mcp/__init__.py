@@ -24,6 +24,7 @@ from garmin_mcp import training
 from garmin_mcp import workouts
 from garmin_mcp import ai_workouts
 from garmin_mcp import ai_training
+from garmin_mcp import ai_activity
 from garmin_mcp import workout_templates
 from garmin_mcp import data_management
 from garmin_mcp import womens_health
@@ -111,6 +112,7 @@ def _parse_tool_set(value):
 TOOL_PROFILES = {
     "ai-coach": {
         "get_training_context",
+        "analyze_activity",
         "create_workout",
         "get_activities",
         "get_activities_by_date",
@@ -503,6 +505,7 @@ def main():
     workouts.configure(garmin_client)
     ai_workouts.configure(garmin_client)
     ai_training.configure(garmin_client)
+    ai_activity.configure(garmin_client)
     data_management.configure(garmin_client)
     womens_health.configure(garmin_client)
     nutrition.configure(garmin_client)
@@ -537,6 +540,7 @@ def main():
     app = workouts.register_tools(app)
     app = ai_workouts.register_tools(app)
     app = ai_training.register_tools(app)
+    app = ai_activity.register_tools(app)
     app = data_management.register_tools(app)
     app = womens_health.register_tools(app)
     app = nutrition.register_tools(app)

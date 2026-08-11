@@ -117,7 +117,8 @@ def test_docs_pin_status_boundary_error_codes_and_warning_vocabulary():
 
 def test_docs_pin_profile_and_sport_translation():
     lower = DOCS.lower()
-    assert "exactly 11 tools" in lower
+    assert "exactly 12 tools" in lower
+    assert "analyze_activity" in lower
     assert "recent_activities[].sport" in lower
     assert "garmin activity type keys" in lower
     assert "trail_running" in lower

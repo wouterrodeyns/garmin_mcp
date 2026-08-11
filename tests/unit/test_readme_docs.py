@@ -89,6 +89,7 @@ def test_setup_client_config_fences_are_credential_free():
 README_PATH = ROOT / "README.md"
 PROFILE_TOOLS = {
     "get_training_context",
+    "analyze_activity",
     "create_workout",
     "get_activities",
     "get_activities_by_date",
@@ -112,8 +113,10 @@ def test_readme_is_ai_coach_first_and_credits_upstream_once():
     for expected in (
         "purpose-built Garmin MCP for AI coaching and workout creation",
         "get_training_context",
+        "analyze_activity",
         "create_workout",
         "docs/ai-training.md",
+        "docs/ai-activity.md",
         "docs/ai-workouts.md",
         FORK_URL,
         "python-garminconnect",
@@ -221,6 +224,11 @@ def test_cross_document_install_sources_and_client_config_fences_are_safe():
 def test_readme_is_concise_and_links_to_tracked_detail():
     readme = _readme()
     assert 150 <= len(readme.splitlines()) <= 220
-    for target in ("docs/ai-training.md", "docs/ai-workouts.md", "docs/setup.md"):
+    for target in (
+        "docs/ai-training.md",
+        "docs/ai-activity.md",
+        "docs/ai-workouts.md",
+        "docs/setup.md",
+    ):
         assert f"]({target})" in readme
         assert (ROOT / target).is_file()

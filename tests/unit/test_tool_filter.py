@@ -104,6 +104,7 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
     assert disabled == set()
     assert enabled == {
         "get_training_context",
+        "analyze_activity",
         "create_workout",
         "get_activities",
         "get_activities_by_date",
@@ -134,10 +135,10 @@ def test_explicit_enabled_tools_override_profile_and_disabled_tools():
 
 def test_ai_coach_profile_subtracts_disabled_tools():
     enabled, disabled = _resolve_tool_filters(
-        "AI-COACH", None, " GET_WORKOUTS, create_workout "
+        "AI-COACH", None, " GET_WORKOUTS, analyze_activity "
     )
 
-    assert enabled == TOOL_PROFILES["ai-coach"] - {"get_workouts", "create_workout"}
+    assert enabled == TOOL_PROFILES["ai-coach"] - {"get_workouts", "analyze_activity"}
     assert disabled == set()
 
 

@@ -211,6 +211,7 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
     tools = re.findall(r"^\d+\. `([^`]+)`$", profile, re.MULTILINE)
     expected = {
         "get_training_context",
+        "analyze_activity",
         "create_workout",
         "get_activities",
         "get_activities_by_date",
@@ -222,7 +223,7 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
         "unschedule_workout",
         "delete_workout",
     }
-    assert len(tools) == 11
+    assert len(tools) == 12
     assert set(tools) == expected
     assert "full upstream tool registration" in profile
 

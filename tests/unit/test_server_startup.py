@@ -113,6 +113,48 @@ def test_main_configures_and_registers_ai_training(monkeypatch):
     assert registered[0] is not None
 
 
+def test_main_configures_and_registers_ai_activity_adjacent_to_ai_tools(monkeypatch):
+    events = []
+    original_activity_configure = garmin_mcp.ai_activity.configure
+    original_activity_register_tools = garmin_mcp.ai_activity.register_tools
+    original_training_configure = garmin_mcp.ai_training.configure
+    original_training_register_tools = garmin_mcp.ai_training.register_tools
+
+    monkeypatch.delenv("GARMIN_MCP_TRANSPORT", raising=False)
+    monkeypatch.delenv("GARMIN_MCP_HOST", raising=False)
+    monkeypatch.delenv("GARMIN_MCP_PORT", raising=False)
+    _clear_tool_filter_environment(monkeypatch)
+    monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
+    monkeypatch.setattr(
+        garmin_mcp.ai_training,
+        "configure",
+        lambda client: (events.append(("configure_training", client)), original_training_configure(client))[1],
+    )
+    monkeypatch.setattr(
+        garmin_mcp.ai_activity,
+        "configure",
+        lambda client: (events.append(("configure_activity", client)), original_activity_configure(client))[1],
+    )
+    monkeypatch.setattr(
+        garmin_mcp.ai_training,
+        "register_tools",
+        lambda app: (events.append(("register_training", app)), original_training_register_tools(app))[1],
+    )
+    monkeypatch.setattr(
+        garmin_mcp.ai_activity,
+        "register_tools",
+        lambda app: (events.append(("register_activity", app)), original_activity_register_tools(app))[1],
+    )
+    monkeypatch.setattr(FastMCP, "run", lambda self, **_kwargs: None)
+
+    garmin_mcp.main()
+
+    names = [event[0] for event in events]
+    assert names.index("configure_training") < names.index("configure_activity")
+    assert names.index("register_training") < names.index("register_activity")
+    assert events[names.index("configure_activity")][1]._client is not None
+
+
 def test_main_rejects_unknown_profile_before_authentication(monkeypatch, capsys):
     authentication = Mock()
     monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai_coach")
