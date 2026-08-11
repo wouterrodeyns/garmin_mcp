@@ -46,6 +46,9 @@ place. This does not meet the security goal.
 - Set `requires-python = ">=3.12"`.
 - Pin `garminconnect==0.3.10`.
 - Refresh `uv.lock` so it resolves at least `click 8.3.3` and `h11 0.16.0`.
+- Restrict lock upgrades to GarminConnect and the packages needed to remove the
+  audited findings (`click`, `h11`, and `httpcore`); retain unrelated locked
+  versions, including MCP, Pydantic, pytest, Starlette, and Uvicorn.
 - Do not add `click` or `h11` as artificial direct runtime dependencies. Their
   secure versions belong in the lock through the existing dependency graph.
 - Move the deprecated `[tool.uv].dev-dependencies` declaration to the standard

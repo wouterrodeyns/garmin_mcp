@@ -204,11 +204,17 @@ In `.github/WORKFLOWS.md`, state that offline tests run on Python 3.12 and 3.13,
 Run:
 
 ```bash
-UV_CACHE_DIR=/private/tmp/garmin-mcp-upgrade-uv-cache uv lock --upgrade
+UV_CACHE_DIR=/private/tmp/garmin-mcp-upgrade-uv-cache uv lock \
+  --upgrade-package garminconnect \
+  --upgrade-package click \
+  --upgrade-package h11 \
+  --upgrade-package httpcore
 UV_CACHE_DIR=/private/tmp/garmin-mcp-upgrade-uv-cache uv sync --locked --all-extras --dev
 ```
 
-Expected: `uv.lock` records `requires-python = ">=3.12"`, GarminConnect 0.3.10, Click at least 8.3.3, and h11 at least 0.16.0.
+Expected: `uv.lock` records `requires-python = ">=3.12"`, GarminConnect 0.3.10,
+Click at least 8.3.3, h11 at least 0.16.0, and a compatible httpcore. Unrelated
+locked packages retain their pre-PR versions.
 
 - [ ] **Step 8: Run the focused tests and verify GREEN**
 
