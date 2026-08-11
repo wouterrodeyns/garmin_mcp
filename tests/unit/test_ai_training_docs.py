@@ -19,7 +19,7 @@ def test_docs_pin_purpose_dependency_bounds_and_windows():
     for text in (
         "get_training_context",
         "read-only",
-        "garminconnect==0.3.2",
+        "garminconnect==0.3.10",
         "1 through 90",
         "inclusive retrospective",
         "today through the following six days",

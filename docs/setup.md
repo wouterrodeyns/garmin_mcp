@@ -97,7 +97,7 @@ may take longer while it downloads and caches dependencies.
 
 ## Local development
 
-The project supports Python 3.10+. Hosted examples choose Python 3.12 for a
+The project supports Python 3.12+. Hosted examples use that lower bound for a
 predictable environment.
 
 ```bash

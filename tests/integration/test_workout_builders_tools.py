@@ -36,9 +36,9 @@ async def test_schedule_week_uses_client_post_not_garth(
 ):
     """schedule_week must route through garmin_client.client.post
 
-    Regression: garminconnect 0.3.2 removed the `.garth` attribute. The old
-    code called `garmin_client.garth.post(...)` which raises AttributeError.
-    This test pins the fix.
+    Modern garminconnect exposes the raw request client as `.client`; routing
+    through the removed `.garth` attribute would raise AttributeError. This
+    test pins the supported seam.
     """
     mock_response = MagicMock()
     mock_response.status_code = 200

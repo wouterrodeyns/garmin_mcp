@@ -155,23 +155,25 @@ tools.
 
 ## Pinned API assumptions
 
-This seam targets `garminconnect==0.3.2`. That upstream client provides
+This seam targets `garminconnect==0.3.10`. That upstream client provides
 `upload_workout`, `schedule_workout`, `unschedule_workout`, and
-`delete_workout`; it has no update method. A calendar schedule entry ID is
-distinct from the workout ID: unscheduling needs the
+`delete_workout`. It also provides a whole-document `update_workout` method,
+but this fork does not expose an AI-facing update tool yet. A calendar schedule
+entry ID is distinct from the workout ID: unscheduling needs the
 `scheduled_workout_id`, while deletion needs the `workout_id`.
 
-The primary references are the [python-garminconnect 0.3.2 package on
-PyPI](https://pypi.org/project/garminconnect/0.3.2/) and its [upstream source on
-GitHub](https://github.com/cyberjunky/python-garminconnect/tree/0.3.2).
+The primary references are the [python-garminconnect 0.3.10 package on
+PyPI](https://pypi.org/project/garminconnect/0.3.10/) and its [upstream source on
+GitHub](https://github.com/cyberjunky/python-garminconnect/tree/0.3.10).
 
 ## Update (deferred)
 
-True update support is intentionally deferred. The desired operation is a
-current-upstream whole-document `PUT` that preserves the existing workout ID
-and its schedules, with a compatibility path for the pinned 0.3.2 client.
-Until that seam exists, create a new workout rather than pretending that an
-upload is an in-place update.
+The pinned client now supports a whole-document `PUT` through
+`update_workout`; it preserves the existing workout ID and its schedules. An
+AI-facing update operation remains intentionally deferred until the fork adds
+friendly-schema compilation, retained scheduling behavior, and explicit
+partial-failure tests around that seam. Until then, do not present a normal
+upload as an in-place update.
 
 ## Move (deferred)
 

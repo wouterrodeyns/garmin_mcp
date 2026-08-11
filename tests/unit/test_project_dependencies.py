@@ -1,11 +1,44 @@
-"""Project metadata regression tests."""
+"""Project metadata and locked dependency regression tests."""
 
 from pathlib import Path
+import tomllib
 
 
-def test_project_caps_mcp_to_v1_series() -> None:
-    """The project should explicitly stay on the MCP v1 series for compatibility."""
-    repo_root = Path(__file__).resolve().parents[2]
-    pyproject_text = (repo_root / "pyproject.toml").read_text()
+ROOT = Path(__file__).resolve().parents[2]
+PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text())
+LOCK = tomllib.loads((ROOT / "uv.lock").read_text())
 
-    assert '"mcp>=1.28.1,<2"' in pyproject_text
+
+def _locked_version(name: str) -> str:
+    packages = [item for item in LOCK["package"] if item["name"] == name]
+    assert len(packages) == 1
+    return packages[0]["version"]
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in value.split("."))
+
+
+def test_project_pins_secure_runtime_contract() -> None:
+    project = PYPROJECT["project"]
+
+    assert project["requires-python"] == ">=3.12"
+    assert "garminconnect==0.3.10" in project["dependencies"]
+    assert "mcp>=1.28.1,<2" in project["dependencies"]
+
+
+def test_project_uses_standard_development_dependency_group() -> None:
+    assert set(PYPROJECT["dependency-groups"]["dev"]) == {
+        "pytest>=9.0.2",
+        "pytest-asyncio>=0.25.2",
+        "pytest-mock>=3.14.0",
+        "pytest-timeout>=2.3.1",
+    }
+    assert "dev-dependencies" not in PYPROJECT.get("tool", {}).get("uv", {})
+
+
+def test_lock_contains_fixed_dependency_versions() -> None:
+    assert LOCK["requires-python"] == ">=3.12"
+    assert _locked_version("garminconnect") == "0.3.10"
+    assert _version_tuple(_locked_version("click")) >= (8, 3, 3)
+    assert _version_tuple(_locked_version("h11")) >= (0, 16, 0)
