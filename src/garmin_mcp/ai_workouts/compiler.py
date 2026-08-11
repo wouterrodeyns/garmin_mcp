@@ -70,7 +70,7 @@ def _power_zone_target(target: Target) -> dict[str, Any]:
 
 
 def _power_target(target: Target) -> dict[str, Any]:
-    return _bounds_target(target, 6, "power.between")
+    return _bounds_target(target, 2, "power.zone")
 
 
 TargetCompiler = Callable[[Target], dict[str, Any]]

@@ -140,7 +140,7 @@ def test_prepare_preserves_plausible_custom_heart_rate_range():
     assert "zoneNumber" not in target
 
 
-def test_compile_cycling_power_zone_and_watts_use_distinct_canonical_ids():
+def test_compile_cycling_power_zone_and_watts_use_canonical_target_with_distinct_shapes():
     result = compile_friendly(
         "Power",
         "cycling",
@@ -152,8 +152,10 @@ def test_compile_cycling_power_zone_and_watts_use_distinct_canonical_ids():
     steps = result["workoutSegments"][0]["workoutSteps"]
     assert steps[0]["targetType"] == {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"}
     assert steps[0]["zoneNumber"] == 4
-    assert steps[1]["targetType"] == {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "power.between"}
+    assert "targetValueOne" not in steps[0] and "targetValueTwo" not in steps[0]
+    assert steps[1]["targetType"] == {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"}
     assert steps[1]["targetValueOne"] == 200.0 and steps[1]["targetValueTwo"] == 250.0
+    assert "zoneNumber" not in steps[1]
 
 
 def test_compile_walking_uses_garmin_sport_id_12():
