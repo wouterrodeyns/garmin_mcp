@@ -29,6 +29,10 @@ def register_tools(app: Any) -> Any:
         This read-only tool reports mechanical facts, not coaching advice: AI
         interprets the evidence. Optional Garmin detail can be null or
         unavailable and can vary by activity, device, account, or sync.
+        Returned zone durations are authoritative; never estimate time in zone
+        from split-average heart rate. Split averages do not establish
+        heart-rate drift or decoupling, so do not calculate or claim those
+        metrics.
         """
         result = analyze_activity_service(garmin_client, activity_id)
         return json.dumps(result, indent=2)
