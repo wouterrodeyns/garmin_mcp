@@ -211,6 +211,19 @@ def test_activity_docs_pin_current_workflow_and_explicit_v1_exclusions():
         assert phrase in lower
 
 
+def test_activity_docs_pin_zone_aliases_and_interpretation_boundary():
+    lower = " ".join(_read(DOCS_PATH).lower().split())
+    for phrase in (
+        "zone or zonenumber",
+        "timeinzone or secsinzone",
+        "zero-second zones are retained",
+        "percentage and upper boundary remain null when garmin omits them",
+        "never estimate time in zone from split-average heart rate",
+        "split averages do not establish heart-rate drift or cardiovascular decoupling",
+    ):
+        assert phrase in lower
+
+
 def test_activity_docs_example_is_compact_current_and_explicitly_raw_backed():
     example = _example_json()
     assert set(example) == {

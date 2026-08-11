@@ -919,6 +919,42 @@ def test_upstream_hr_and_power_zone_shapes_preserve_explicit_zone_values(monkeyp
     assert [item["zone"] for item in result["power_zones"]["items"]] == [1, 2]
 
 
+def test_real_garmin_hr_zone_aliases_preserve_durations_and_zero_second_zones(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[str] = []
+    zones = [
+        {"zoneNumber": 1, "secsInZone": 246.2, "zoneLowBoundary": 100},
+        {"zoneNumber": 2, "secsInZone": 900.0, "zoneLowBoundary": 138},
+        {"zoneNumber": 3, "secsInZone": 1196.5, "zoneLowBoundary": 157},
+        {"zoneNumber": 4, "secsInZone": 0.0, "zoneLowBoundary": 168},
+        {"zoneNumber": 5, "secsInZone": 0.0, "zoneLowBoundary": 182},
+    ]
+    monkeypatch.setattr(service, "get_activity", lambda _c, _i: ProviderResult(raw_activity(
+        activityTypeDTO={"typeKey": "running"}, summaryDTO={"averageHR": 145},
+    )))
+    monkeypatch.setattr(service, "get_splits", lambda _c, _i: ProviderResult({"lapDTOs": []}))
+    optional_readers(monkeypatch, calls, hr=zones)
+
+    result = analyze_activity_service(Mock(), 123)
+
+    assert result["status"] == "success"
+    assert result["availability"]["heart_rate_zones"] is True
+    assert result["heart_rate_zones"] == {"items": [
+        {"zone": 1, "duration_seconds": 246.2, "duration_minutes": 4.1,
+         "percentage": None, "lower_bpm": 100, "upper_bpm": None},
+        {"zone": 2, "duration_seconds": 900.0, "duration_minutes": 15.0,
+         "percentage": None, "lower_bpm": 138, "upper_bpm": None},
+        {"zone": 3, "duration_seconds": 1196.5, "duration_minutes": 19.9,
+         "percentage": None, "lower_bpm": 157, "upper_bpm": None},
+        {"zone": 4, "duration_seconds": 0.0, "duration_minutes": 0.0,
+         "percentage": None, "lower_bpm": 168, "upper_bpm": None},
+        {"zone": 5, "duration_seconds": 0.0, "duration_minutes": 0.0,
+         "percentage": None, "lower_bpm": 182, "upper_bpm": None},
+    ]}
+    assert result["warnings"] == []
+
+
 @pytest.mark.parametrize(
     ("provider", "root", "message"),
     [

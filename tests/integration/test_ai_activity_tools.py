@@ -196,5 +196,9 @@ async def test_analyze_activity_documents_the_ai_coach_boundary():
         "mechanical facts",
         "not coaching advice",
         "ai interprets the evidence",
+        "returned zone durations are authoritative",
+        "never estimate time in zone from split-average heart rate",
+        "split averages do not establish heart-rate drift or decoupling",
+        "do not calculate or claim those metrics",
     ):
         assert phrase in description

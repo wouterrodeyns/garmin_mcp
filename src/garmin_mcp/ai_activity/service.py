@@ -404,16 +404,20 @@ def _zone_list(data: Any) -> list[Any] | None | bool:
 def _zone_item(value: Any, *, boundary_unit: str) -> tuple[dict[str, Any] | None, bool]:
     if type(value) is not dict:
         return None, True
-    zone = _integer_equivalent(value.get("zone"), positive=True)
-    duration_seconds = _number(value.get("timeInZone"), minimum=0)
+    zone_present = "zone" in value or "zoneNumber" in value
+    zone_value = value.get("zone") if "zone" in value else value.get("zoneNumber")
+    duration_present = "timeInZone" in value or "secsInZone" in value
+    duration_value = value.get("timeInZone") if "timeInZone" in value else value.get("secsInZone")
+    zone = _integer_equivalent(zone_value, positive=True) if zone_present else None
+    duration_seconds = _number(duration_value, minimum=0) if duration_present else None
     percentage = _number(value.get("percentageInZone"))
     if percentage is not None and not 0 <= percentage <= 100:
         percentage = None
     lower = _number(value.get("zoneLowBoundary"), minimum=0)
     upper = _number(value.get("zoneHighBoundary"), minimum=0)
     invalid = (
-        ("zone" in value and zone is None)
-        or ("timeInZone" in value and duration_seconds is None)
+        (zone_present and zone is None)
+        or (duration_present and duration_seconds is None)
         or ("percentageInZone" in value and percentage is None)
         or ("zoneLowBoundary" in value and lower is None)
         or ("zoneHighBoundary" in value and upper is None)

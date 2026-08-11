@@ -94,6 +94,17 @@ seconds as `M:SS/km`. Zone durations retain raw seconds and also expose
 one-decimal minutes; zone percentages are bounded to 0–100 and displayed to
 one decimal.
 
+Garmin zone payloads use more than one field vocabulary. The accepted raw
+aliases are zone or zoneNumber, and timeInZone or secsInZone; both normalize to
+the stable `zone` and `duration_seconds` fields. Zero-second zones are retained.
+Percentage and upper boundary remain null when Garmin omits them; the service
+does not derive either value.
+
+Returned zone durations are authoritative. Never estimate time in zone from
+split-average heart rate. Split averages do not establish heart-rate drift or
+cardiovascular decoupling, so the AI must not calculate or claim those metrics
+from this response.
+
 workout_feedback.rpe is a human 0-10 value, normalized from Garmin
 directWorkoutRpe x10 storage. These raw source semantics mean Garmin's stored
 value is divided by 10; the example rpe 7 remains correct.
