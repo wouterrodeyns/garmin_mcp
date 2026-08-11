@@ -223,11 +223,12 @@ def test_compile_hr_forms_do_not_mix_fields():
     assert (custom["targetValueOne"], custom["targetValueTwo"]) == (150.0, 165.0)
     assert "zoneNumber" not in custom
 
-def test_compile_cycling_power_forms_use_distinct_ids():
+def test_compile_cycling_power_forms_use_distinct_shapes():
     zone = first_step(compile_friendly("Z4", "cycling", [{"work": {"duration": "10m", "power_zone": "Z4"}}]))
     watts = first_step(compile_friendly("Watts", "cycling", [{"work": {"duration": "10m", "power": "220-250W"}}]))
     assert zone["targetType"] == {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"}
-    assert watts["targetType"] == {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "power.between"}
+    assert watts["targetType"] == {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"}
+    assert "zoneNumber" not in watts
 
 def test_compile_distance_walking_strength_and_lap_button():
     distance = first_step(compile_friendly("800s", "running", [{"run": {"distance": "800m"}}]))

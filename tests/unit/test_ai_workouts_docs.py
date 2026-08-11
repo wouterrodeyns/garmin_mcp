@@ -7,6 +7,7 @@ README = (ROOT / "README.md").read_text()
 DOCS_PATH = ROOT / "docs/ai-workouts.md"
 DOCS = DOCS_PATH.read_text() if DOCS_PATH.exists() else ""
 WORKOUTS_SOURCE = (ROOT / "src/garmin_mcp/workouts.py").read_text()
+WORKOUT_TEMPLATES_SOURCE = (ROOT / "src/garmin_mcp/workout_templates.py").read_text()
 
 
 def _normalize_heading(value: str) -> str:
@@ -182,6 +183,27 @@ def test_ai_workouts_docs_protects_safe_create_flow_order():
     )
     assert "upload" in steps[3]
     assert "schedule" in steps[4]
+
+
+def test_ai_workouts_docs_protects_canonical_cycling_power_targets():
+    native = SECTIONS["native garmin cycling power targets"]
+    for expected in (
+        "workoutTargetTypeId",
+        "2",
+        "power.zone",
+        "zoneNumber",
+        "targetValueOne",
+        "targetValueTwo",
+        "ID `6`",
+        "pace.zone",
+        "power.between",
+        "rejected",
+    ):
+        assert expected in native
+
+    assert 'workoutTargetTypeId 6, key "power.between"' not in WORKOUTS_SOURCE
+    assert '"6 (cycling)"' not in WORKOUT_TEMPLATES_SOURCE
+    assert "use workoutTargetTypeId 2 / 'power.zone'" in WORKOUTS_SOURCE
 
 
 def test_ai_workouts_docs_protects_all_statuses_and_retention_safety():
