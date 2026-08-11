@@ -2,6 +2,7 @@
 Workout-related functions for Garmin Connect MCP Server
 """
 import json
+import math
 import re
 import datetime
 from copy import deepcopy
@@ -35,17 +36,26 @@ END_CONDITION_TYPE_KEYS = {
     for condition_key, condition_id in END_CONDITION_TYPE_IDS.items()
 }
 
-# Verified from Garmin-created workouts and live upload/fetch probes. Unknown
+# Verified from Garmin-created workouts and live upload/fetch/FIT probes. Unknown
 # target type IDs are allowed so we do not block valid Garmin targets that are
 # not in this partial mapping yet.
+#
+# Cycling power uses target ID 2 for both named FTP zones and custom watt
+# ranges. The payload shape selects the mode: zoneNumber for a named zone, or
+# targetValueOne/targetValueTwo for absolute watts. ID 6 is pace.zone; Garmin
+# treats that numeric ID as authoritative even when paired with another key.
 KNOWN_TARGET_TYPE_IDS = {
     1: frozenset(["no.target"]),
     2: frozenset(["power.zone"]),
     4: frozenset(["heart.rate.zone"]),
-    # ID 6 is sport-context-dependent:
-    #   - running / swimming: "pace.zone"
-    #   - cycling: "power.between" (absolute watt range, uses targetValueOne/targetValueTwo)
-    6: frozenset(["pace.zone", "power.between"]),
+    6: frozenset(["pace.zone"]),
+}
+
+REJECTED_TARGET_TYPE_KEYS = {
+    "power.between": (
+        "use workoutTargetTypeId 2 / 'power.zone' with step-level "
+        "targetValueOne/targetValueTwo and no zoneNumber for absolute watts"
+    ),
 }
 
 # Reverse map: workoutTargetTypeKey -> workoutTargetTypeId (each key maps to exactly one ID).
@@ -288,6 +298,13 @@ def _validate_target_type_block(step: dict, path: str, target_field: str) -> Non
         target_key = target_type.get('workoutTargetTypeKey')
         target_id = target_type.get('workoutTargetTypeId')
 
+        rejection = REJECTED_TARGET_TYPE_KEYS.get(target_key)
+        if rejection is not None:
+            raise ValueError(
+                f"{path}.{target_field} workoutTargetTypeKey "
+                f"{target_key!r} is unsupported; {rejection}"
+            )
+
         if target_id is not None:
             try:
                 target_id = int(target_id)
@@ -317,10 +334,115 @@ def _validate_target_type_block(step: dict, path: str, target_field: str) -> Non
             )
 
 
+def _effective_target_type_key(target_type: dict) -> Optional[str]:
+    """Resolve a missing target key from a known authoritative numeric ID."""
+    target_key = target_type.get('workoutTargetTypeKey')
+    if target_key:
+        return target_key
+
+    target_id = target_type.get('workoutTargetTypeId')
+    try:
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        return None
+
+    valid_keys = KNOWN_TARGET_TYPE_IDS.get(target_id)
+    if valid_keys is not None and len(valid_keys) == 1:
+        return next(iter(valid_keys))
+    return None
+
+
+def _validate_power_target_values(
+    step: dict,
+    path: str,
+    target_field: str,
+    value_one_field: str,
+    value_two_field: str,
+    zone_field: str,
+) -> None:
+    """Validate named-zone and custom-watt payload shapes for power targets."""
+    target_type = step.get(target_field)
+    if not isinstance(target_type, dict):
+        return
+    if _effective_target_type_key(target_type) != 'power.zone':
+        return
+
+    zone = step.get(zone_field)
+    low = step.get(value_one_field)
+    high = step.get(value_two_field)
+    has_range = low is not None or high is not None
+
+    # _normalize_workout_steps already rejects zone-plus-range ambiguity.
+    if zone is None and not has_range:
+        raise ValueError(
+            f"{path}.{target_field} power target requires {zone_field} or a "
+            f"{value_one_field}/{value_two_field} watt range"
+        )
+    if has_range and (low is None or high is None):
+        raise ValueError(
+            f"{path}.{target_field} custom power target requires both "
+            f"{value_one_field} and {value_two_field}"
+        )
+
+    if zone is not None:
+        if isinstance(zone, bool) or not isinstance(zone, (int, float)):
+            raise ValueError(f"{path}.{zone_field} must be an integer between 1 and 7")
+        try:
+            zone_number = float(zone)
+        except OverflowError as exc:
+            raise ValueError(
+                f"{path}.{zone_field} must be an integer between 1 and 7"
+            ) from exc
+        if (
+            not math.isfinite(zone_number)
+            or not zone_number.is_integer()
+            or not 1 <= zone_number <= 7
+        ):
+            raise ValueError(f"{path}.{zone_field} must be an integer between 1 and 7")
+        return
+
+    if (
+        isinstance(low, bool)
+        or isinstance(high, bool)
+        or not isinstance(low, (int, float))
+        or not isinstance(high, (int, float))
+    ):
+        raise ValueError(f"{path}.{target_field} watt range must be numeric")
+    try:
+        low_watts = float(low)
+        high_watts = float(high)
+    except OverflowError as exc:
+        raise ValueError(f"{path}.{target_field} watt range must be finite") from exc
+    if not math.isfinite(low_watts) or not math.isfinite(high_watts):
+        raise ValueError(f"{path}.{target_field} watt range must be finite")
+    if low_watts < 0 or high_watts < 0:
+        raise ValueError(f"{path}.{target_field} watt range must be non-negative")
+    if low_watts > high_watts:
+        raise ValueError(
+            f"{path}.{target_field} power target low value cannot exceed high value"
+        )
+
+
 def _validate_target_type_step(step: dict, path: str) -> None:
     """Reject targetType id/key pairs Garmin would silently reinterpret."""
     _validate_target_type_block(step, path, 'targetType')
     _validate_target_type_block(step, path, 'secondaryTargetType')
+    _validate_power_target_values(
+        step,
+        path,
+        target_field='targetType',
+        value_one_field='targetValueOne',
+        value_two_field='targetValueTwo',
+        zone_field='zoneNumber',
+    )
+    _validate_power_target_values(
+        step,
+        path,
+        target_field='secondaryTargetType',
+        value_one_field='secondaryTargetValueOne',
+        value_two_field='secondaryTargetValueTwo',
+        zone_field='secondaryZoneNumber',
+    )
 
     for index, nested in enumerate(step.get('workoutSteps', [])):
         _validate_target_type_step(nested, f"{path}.workoutSteps[{index}]")
