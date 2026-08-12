@@ -992,6 +992,38 @@ def test_steps_patch_prepares_the_compiled_document_before_updating(monkeypatch)
     assert "estimatedDuration" not in prepared_inputs[0]
 
 
+def test_replacement_compiler_value_error_propagates_without_update(monkeypatch):
+    client = RecordingClient()
+
+    def fail_compile(_definition):
+        raise ValueError("compiler invariant sentinel")
+
+    monkeypatch.setattr(service, "compile_workout", fail_compile)
+
+    with pytest.raises(ValueError, match="compiler invariant sentinel"):
+        update_workout_service(client, 123, steps=[{"run": {"duration": "30m"}}])
+
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
+
+
+def test_replacement_preparation_value_error_propagates_without_update(monkeypatch):
+    client = RecordingClient()
+
+    def fail_prepare(_document):
+        raise ValueError("normalizer invariant sentinel")
+
+    monkeypatch.setattr(service, "prepare_workout_for_upload", fail_prepare)
+
+    with pytest.raises(ValueError, match="normalizer invariant sentinel"):
+        update_workout_service(client, 123, steps=[{"run": {"duration": "30m"}}])
+
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
+
+
 @pytest.mark.parametrize(
     ("sport", "steps", "expected_sport_type"),
     [

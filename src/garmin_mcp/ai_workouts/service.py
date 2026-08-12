@@ -359,7 +359,6 @@ def update_workout_service(
     if steps is None:
         document = deepcopy(existing)
         document["workoutName"] = effective_name
-        prepare_error_message = INVALID_EXISTING_WORKOUT_MESSAGE
     else:
         try:
             definition = validate_workout(
@@ -367,27 +366,29 @@ def update_workout_service(
                 sport if sport is not None else friendly_sport,
                 steps,
             )
-            effective_sport = definition.sport
-            document = compile_workout(definition)
         except ValueError as exc:
             return {
                 "status": "error",
                 "workout_id": normalized_id,
                 "message": str(exc),
             }
+        effective_sport = definition.sport
+        document = compile_workout(definition)
         description = existing.get("description")
         if type(description) is str and description.strip():
             document["description"] = description
-        prepare_error_message = "Workout update validation failed."
 
-    try:
+    if steps is None:
+        try:
+            prepared = prepare_workout_for_upload(document)
+        except ValueError:
+            return {
+                "status": "error",
+                "workout_id": normalized_id,
+                "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+            }
+    else:
         prepared = prepare_workout_for_upload(document)
-    except ValueError as exc:
-        return {
-            "status": "error",
-            "workout_id": normalized_id,
-            "message": prepare_error_message if steps is None else str(exc),
-        }
 
     try:
         updated = client.update_workout(normalized_id, prepared)
