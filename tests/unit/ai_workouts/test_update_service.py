@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+from garmin_mcp.ai_workouts import service
 from garmin_mcp.ai_workouts import (
     INVALID_EXISTING_WORKOUT_MESSAGE,
     INVALID_UPDATE_RESPONSE_MESSAGE,
@@ -87,7 +88,25 @@ def test_accepted_ids_are_normalized_before_read_and_rename(workout_id):
 
 @pytest.mark.parametrize(
     "workout_id",
-    [True, False, 0, -1, 1.0, "", "  ", "+1", "1.0", "1e2", "1_000", "１２３", [], {}],
+    [
+        True,
+        False,
+        0,
+        -1,
+        1.0,
+        "",
+        "  ",
+        "+1",
+        "-1",
+        "1.0",
+        "1e2",
+        "1_000",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "١٢٣",
+        "１２３",
+        [],
+        {},
+    ],
 )
 def test_invalid_ids_are_rejected_without_provider_access(workout_id):
     client = RecordingClient()
@@ -175,6 +194,134 @@ def test_hostile_nested_provider_container_is_sanitized_without_update():
     assert client.updates == []
 
 
+@pytest.mark.parametrize(
+    "mutate_existing",
+    [
+        pytest.param(
+            lambda existing: existing.update({"oversized": list(range(10_001))}),
+            id="more-than-ten-thousand-nodes",
+        ),
+        pytest.param(
+            lambda existing: existing.update({"nested": {"value": float("nan")}}),
+            id="nested-nan",
+        ),
+        pytest.param(
+            lambda existing: existing.update({"nested": {"value": float("inf")}}),
+            id="nested-infinity",
+        ),
+        pytest.param(
+            lambda existing: existing.update({"nested": {1: "not-json"}}),
+            id="nested-non-string-dict-key",
+        ),
+    ],
+)
+def test_invalid_plain_provider_json_tree_is_sanitized_without_update(mutate_existing):
+    existing = deepcopy(EXISTING_RUNNING)
+    mutate_existing(existing)
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert client.updates == []
+
+
+def test_provider_tree_deeper_than_limit_is_sanitized_without_update():
+    existing = deepcopy(EXISTING_RUNNING)
+    deeply_nested = "leaf"
+    for _ in range(21):
+        deeply_nested = {"nested": deeply_nested}
+    existing["nested"] = deeply_nested
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert client.updates == []
+
+
+@pytest.mark.parametrize("container_kind", ["root_dict", "root_list", "nested_list"])
+def test_hostile_provider_containers_never_invoke_protocols_or_echo_secrets(container_kind):
+    class ExplodingDict(dict):
+        def __bool__(self):
+            raise RuntimeError("secret: bool")
+
+        def get(self, *_args, **_kwargs):
+            raise RuntimeError("secret: get")
+
+        def items(self):
+            raise RuntimeError("secret: items")
+
+        def __iter__(self):
+            raise RuntimeError("secret: iter")
+
+    class ExplodingList(list):
+        def __bool__(self):
+            raise RuntimeError("secret: bool")
+
+        def __iter__(self):
+            raise RuntimeError("secret: iter")
+
+    existing = deepcopy(EXISTING_RUNNING)
+    if container_kind == "root_dict":
+        existing = ExplodingDict(existing)
+    elif container_kind == "root_list":
+        existing = ExplodingList([existing])
+    else:
+        existing["workoutSegments"] = ExplodingList(existing["workoutSegments"])
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "secret" not in str(result)
+    assert client.updates == []
+
+
+def test_read_exception_is_sanitized_without_update():
+    class RaisingReadClient(RecordingClient):
+        def get_workout_by_id(self, _workout_id):
+            raise RuntimeError("token=super-secret")
+
+    client = RaisingReadClient()
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "secret" not in str(result)
+    assert client.updates == []
+
+
+def test_internal_existing_validation_error_propagates(monkeypatch):
+    client = RecordingClient()
+
+    def fail_validation(*_args):
+        raise RuntimeError("internal validation sentinel")
+
+    monkeypatch.setattr(service, "_validated_existing_workout", fail_validation)
+
+    with pytest.raises(RuntimeError, match="internal validation sentinel"):
+        update_workout_service(client, 123, name="New name")
+
+    assert client.updates == []
+
+
 def test_rename_copies_complete_existing_document_without_mutation():
     existing = deepcopy(EXISTING_RUNNING)
     client = RecordingClient(existing=existing)
@@ -187,6 +334,27 @@ def test_rename_copies_complete_existing_document_without_mutation():
     assert submitted["description"] == EXISTING_RUNNING["description"]
     assert submitted["estimatedDuration"] == EXISTING_RUNNING["estimatedDuration"]
     assert submitted is not existing
+
+
+def test_rename_prepares_the_copied_document_after_applying_name(monkeypatch):
+    existing = deepcopy(EXISTING_RUNNING)
+    client = RecordingClient(existing=existing)
+    original_prepare = service.prepare_workout_for_upload
+    prepared_inputs = []
+
+    def record_prepare(document):
+        prepared_inputs.append(document)
+        return original_prepare(document)
+
+    monkeypatch.setattr(service, "prepare_workout_for_upload", record_prepare)
+
+    result = update_workout_service(client, 123, name="  Prepared rename ")
+
+    assert result["status"] == "success"
+    assert len(prepared_inputs) == 1
+    assert prepared_inputs[0]["workoutName"] == "Prepared rename"
+    assert prepared_inputs[0] is not existing
+    assert existing == EXISTING_RUNNING
 
 
 def test_update_exception_is_ambiguous_and_sanitized():
@@ -217,6 +385,43 @@ def test_untrusted_update_response_is_partial_success(response):
         "schedules_preserved": True,
         "message": INVALID_UPDATE_RESPONSE_MESSAGE,
     }
+
+
+def test_trimmed_ascii_decimal_update_response_id_confirms_success():
+    client = RecordingClient(update_response={"workoutId": " 123 "})
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result["status"] == "success"
+
+
+def test_dict_subclass_update_response_is_partial_success_without_protocol_calls():
+    class ExplodingResponse(dict):
+        def __bool__(self):
+            raise RuntimeError("secret: bool")
+
+        def get(self, *_args, **_kwargs):
+            raise RuntimeError("secret: get")
+
+        def __getitem__(self, _key):
+            raise RuntimeError("secret: item")
+
+        def __iter__(self):
+            raise RuntimeError("secret: iter")
+
+    client = RecordingClient(update_response=ExplodingResponse({"workoutId": 123}))
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "partial_success",
+        "workout_id": 123,
+        "name": "New name",
+        "sport": "running",
+        "schedules_preserved": True,
+        "message": INVALID_UPDATE_RESPONSE_MESSAGE,
+    }
+    assert "secret" not in str(result)
 
 
 def test_public_contract_exports_stable_sport_mapping():
