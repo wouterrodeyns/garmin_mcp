@@ -23,7 +23,15 @@ from .schema import (
     WorkoutStep,
     validate_workout,
 )
-from .service import create_workout_service
+from .service import (
+    INVALID_EXISTING_WORKOUT_MESSAGE,
+    INVALID_UPDATE_RESPONSE_MESSAGE,
+    INVALID_WORKOUT_ID_MESSAGE,
+    RAW_TO_FRIENDLY_SPORT,
+    UPDATE_FAILED_MESSAGE,
+    create_workout_service,
+    update_workout_service,
+)
 
 
 def configure(client):
@@ -51,6 +59,11 @@ __all__ = [
     "WorkoutDefinition",
     "WorkoutStep",
     "TARGET_COMPILERS",
+    "RAW_TO_FRIENDLY_SPORT",
+    "INVALID_EXISTING_WORKOUT_MESSAGE",
+    "INVALID_UPDATE_RESPONSE_MESSAGE",
+    "INVALID_WORKOUT_ID_MESSAGE",
+    "UPDATE_FAILED_MESSAGE",
     "compile_workout",
     "configure",
     "create_workout_service",
@@ -65,4 +78,5 @@ __all__ = [
     "parse_zone",
     "register_tools",
     "validate_workout",
+    "update_workout_service",
 ]
