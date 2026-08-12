@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 import re
 
+from garmin_mcp import TOOL_PROFILES
+
 
 ROOT = Path(__file__).parents[2]
 DOCS_PATH = ROOT / "docs/ai-training.md"
@@ -117,13 +119,42 @@ def test_docs_pin_status_boundary_error_codes_and_warning_vocabulary():
 
 def test_docs_pin_profile_and_sport_translation():
     lower = DOCS.lower()
-    assert "exactly 12 tools" in lower
+    assert "exactly 13 tools" in lower
     assert "analyze_activity" in lower
     assert "recent_activities[].sport" in lower
     assert "garmin activity type keys" in lower
     assert "trail_running" in lower
     assert "create_workout.sport" in lower
     assert "running, cycling, walking, or strength" in lower
+
+
+def test_docs_pin_exact_ai_coach_profile_and_three_high_level_roles():
+    assert "13-tool surface" in DOCS.lower() or "exactly 13 tools" in DOCS.lower()
+    for expected in (
+        "context eyes",
+        "completed-session feedback",
+        "workout hands",
+        "create_workout",
+        "update_workout",
+        "in-place",
+    ):
+        assert expected in DOCS.lower()
+    expected_profile = {
+        "get_training_context",
+        "analyze_activity",
+        "create_workout",
+        "update_workout",
+        "get_activities",
+        "get_activities_by_date",
+        "get_activity",
+        "get_workouts",
+        "get_workout_by_id",
+        "get_scheduled_workouts",
+        "schedule_workout",
+        "unschedule_workout",
+        "delete_workout",
+    }
+    assert TOOL_PROFILES["ai-coach"] == expected_profile
 
 
 def test_docs_pin_no_inference_and_deliberate_omissions():

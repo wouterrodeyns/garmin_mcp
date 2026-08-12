@@ -1,6 +1,8 @@
 from pathlib import Path
 import re
 
+from garmin_mcp import TOOL_PROFILES
+
 
 ROOT = Path(__file__).parents[2]
 SETUP_PATH = ROOT / "docs" / "setup.md"
@@ -105,6 +107,7 @@ PROFILE_TOOLS = {
     "get_training_context",
     "analyze_activity",
     "create_workout",
+    "update_workout",
     "get_activities",
     "get_activities_by_date",
     "get_activity",
@@ -142,7 +145,10 @@ def test_readme_is_ai_coach_first_and_credits_upstream_once():
 
 def test_readme_profile_and_filter_contract():
     profile = _section(_readme(), "AI-coach tool profile")
-    assert set(re.findall(r"^`([^`]+)`$", profile, re.MULTILINE)) == PROFILE_TOOLS
+    tools = re.findall(r"^`([^`]+)`$", profile, re.MULTILINE)
+    assert set(tools) == PROFILE_TOOLS
+    assert PROFILE_TOOLS == TOOL_PROFILES["ai-coach"]
+    assert tools.index("update_workout") == tools.index("create_workout") + 1
     lower = " ".join(_readme().lower().split())
     assert "garmin_tool_profile=ai-coach" in lower
     assert lower.index("garmin_enabled_tools") < lower.index("garmin_disabled_tools")
@@ -150,8 +156,31 @@ def test_readme_profile_and_filter_contract():
     assert "denylist is ignored while the explicit allowlist is active" in lower
     assert "broad upstream-compatible registration remains available" in lower
 
+
+def test_readme_pins_thirteen_tools_and_in_place_update_semantics():
+    lower = " ".join(_readme().lower().split())
+    for expected in (
+        "13-tool surface",
+        "update_workout",
+        "in-place",
+        "preserves",
+        "existing schedules",
+        "workout_id",
+        "scheduled_workout_id",
+        "read the workout before retrying",
+    ):
+        assert expected in lower
+
     setup = " ".join(_setup().lower().split())
     assert "denylist is ignored while the explicit allowlist is active" in setup
+
+
+def test_setup_doc_describes_create_and_update_as_workout_hands():
+    setup = " ".join(_setup().lower().split())
+    assert "create_workout" in setup
+    assert "update_workout" in setup
+    assert "workout creation is the coach's hands/write operation" not in setup
+    assert "workout creation and in-place update" in setup
 
 
 def test_readme_quick_start_uses_fork_preauth_and_secret_free_config():

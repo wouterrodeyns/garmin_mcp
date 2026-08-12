@@ -1,6 +1,7 @@
 # Garmin MCP for AI Coaching
 
-A purpose-built Garmin MCP for AI coaching and workout creation. This project
+A purpose-built Garmin MCP for AI coaching and workout creation, with
+in-place workout updates. This project
 is a fork of [Taxuspt's Garmin MCP](https://github.com/Taxuspt/garmin_mcp), keeps
 its maintained Garmin backend intentionally upstream-compatible, and is
 installed from
@@ -19,7 +20,7 @@ The recommended experience centers on three high-level coaching roles:
 |---|---|
 | [`get_training_context(days=14)`](docs/ai-training.md) | Context eyes: a compact, read-only factual snapshot before making a recommendation. |
 | [`analyze_activity(activity_id)`](docs/ai-activity.md) | Completed-session feedback read: bounded facts for the AI to interpret. |
-| [`create_workout(...)`](docs/ai-workouts.md) | Workout hands: validate a readable workout, upload it, and optionally schedule it as one intentional write. |
+| [`create_workout(...)`](docs/ai-workouts.md) and [`update_workout(...)`](docs/ai-workouts.md) | Workout hands: create a readable workout or apply a friendly in-place update while preserving its ID and schedules. |
 
 ```text
 User: Review my last 30 days and recommend today's run.
@@ -28,6 +29,10 @@ AI:   get_training_context(days=30) -> factual context -> conservative advice.
 User: Put that workout on Garmin for tomorrow.
 AI:   explain the proposed workout, request confirmation, then
       create_workout(..., schedule_date="YYYY-MM-DD") -> upload + schedule.
+
+User: Change that workout to five five-minute intervals.
+AI:   confirm the patch, then update_workout(workout_id=..., name="Threshold 5x5", steps=[...])
+      -> in-place update; the workout ID and existing schedules are preserved.
 ```
 
 A `null` recovery or fitness metric means it was not available in this snapshot.
@@ -80,12 +85,13 @@ Garmin Connect China, and token recovery, see the
 
 ## AI-coach tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 12-tool surface:
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 13-tool surface:
 
 ```text
 `get_training_context`
 `analyze_activity`
 `create_workout`
+`update_workout`
 `get_activities`
 `get_activities_by_date`
 `get_activity`
@@ -101,8 +107,14 @@ This profile narrows registration for the AI-facing surface; no existing
 upstream tool is removed, and broad upstream-compatible registration remains
 available when no profile is selected.
 
-The activity and coaching-context operations are reads. Workout creation,
-scheduling, unscheduling, and deletion are deliberate writes.
+The activity and coaching-context operations are reads. Workout creation and
+in-place update, scheduling, unscheduling, and deletion are deliberate writes.
+An update uses the numeric `workout_id` template ID; `scheduled_workout_id` is
+the calendar-entry ID used only for unscheduling. Updates preserve the
+underlying ID and existing schedules and make no calendar call. If an update
+reports `update_may_have_applied` or `partial_success`, read it with
+`get_workout_by_id` before retrying.
+The safe instruction is to read the workout before retrying.
 
 Tool filtering follows this precedence:
 
@@ -149,6 +161,8 @@ reference.
 - The AI generates a human-readable workout schema, not raw Garmin DTO JSON.
 - Compiled workouts still pass through Taxuspt's normalization and validation
   before upload.
+- Garmin Coach/adaptive UUID workouts and unsupported-sport updates remain
+  outside v1; moving a workout remains deferred.
 
 ## Compatibility, contributing, and license
 

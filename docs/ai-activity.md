@@ -203,8 +203,8 @@ cycling, walking, or strength.
 The intended feedback loop is: identify the completed activity → analyze it →
 the AI interprets the evidence → the user confirms → create the next workout.
 `analyze_activity` supplies the feedback read; `get_training_context` remains
-the coach's eyes for current context, while `create_workout` is the coach's
-hands/write operation.
+the coach's eyes for current context, while workout hands are
+`create_workout` for a new workout and `update_workout` for an in-place change.
 
 ## Explicit v1 exclusions
 
