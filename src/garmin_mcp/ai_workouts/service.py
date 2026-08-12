@@ -259,8 +259,10 @@ def _has_safe_workout_step_tree(segments: list[Any]) -> bool:
     return True
 
 
-def _validated_existing_workout(existing: Any, requested_id: int) -> tuple[dict[str, Any], str]:
-    """Validate the minimum whole-document shape required for a safe rename."""
+def _validated_existing_workout(
+    existing: Any, requested_id: int, validate_legacy_steps: bool
+) -> tuple[dict[str, Any], str]:
+    """Validate an existing document, with legacy-step safety needed only for rename."""
     if not _is_plain_bounded_json_tree(existing) or type(existing) is not dict:
         raise ValueError(INVALID_EXISTING_WORKOUT_MESSAGE)
 
@@ -276,7 +278,7 @@ def _validated_existing_workout(existing: Any, requested_id: int) -> tuple[dict[
         raise ValueError(INVALID_EXISTING_WORKOUT_MESSAGE)
     if type(sport_type) is not dict or type(segments) is not list or not segments:
         raise ValueError(INVALID_EXISTING_WORKOUT_MESSAGE)
-    if not _has_safe_workout_step_tree(segments):
+    if validate_legacy_steps and not _has_safe_workout_step_tree(segments):
         raise ValueError(INVALID_EXISTING_WORKOUT_MESSAGE)
 
     sport_key = sport_type.get("sportTypeKey")
@@ -336,8 +338,6 @@ def update_workout_service(
 
     try:
         existing = client.get_workout_by_id(normalized_id)
-    except AssertionError:
-        raise
     except Exception:
         return {
             "status": "error",
@@ -346,7 +346,9 @@ def update_workout_service(
         }
 
     try:
-        existing, friendly_sport = _validated_existing_workout(existing, normalized_id)
+        existing, friendly_sport = _validated_existing_workout(
+            existing, normalized_id, steps is None
+        )
     except ValueError:
         return {
             "status": "error",
@@ -392,8 +394,6 @@ def update_workout_service(
 
     try:
         updated = client.update_workout(normalized_id, prepared)
-    except AssertionError:
-        raise
     except Exception:
         return {
             "status": "error",

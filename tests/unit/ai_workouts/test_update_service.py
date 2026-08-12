@@ -306,6 +306,45 @@ def test_malformed_existing_step_tree_is_rejected_before_update(mutate_existing)
     assert client.forbidden == []
 
 
+def test_replacement_discards_legacy_step_tree_that_rename_rejects():
+    legacy = deepcopy(EXISTING_RUNNING)
+    legacy_step = legacy["workoutSegments"][0]["workoutSteps"][0]
+    legacy_step.update(
+        {
+            "stepId": 501,
+            "workoutSteps": None,
+            "providerMetadata": "legacy-tree-sentinel",
+        }
+    )
+
+    rename_client = RecordingClient(existing=deepcopy(legacy))
+    rename_result = update_workout_service(rename_client, 123, name="New name")
+
+    assert rename_result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert rename_client.calls == ["get_workout_by_id"]
+    assert rename_client.updates == []
+    assert rename_client.forbidden == []
+
+    replacement_client = RecordingClient(existing=deepcopy(legacy))
+    replacement_result = update_workout_service(
+        replacement_client,
+        123,
+        steps=[{"run": {"duration": "30m"}}],
+    )
+
+    assert replacement_result["status"] == "success"
+    assert replacement_client.calls == ["get_workout_by_id", "update_workout"]
+    payload = replacement_client.updates[0][1]
+    assert "stepId" not in str(payload)
+    assert "legacy-tree-sentinel" not in str(payload)
+    assert payload["workoutSegments"][0]["workoutSteps"][0]["endConditionValue"] == 1800.0
+    assert replacement_client.forbidden == []
+
+
 def _existing_repeat_with(end_condition_value, number_of_iterations=None):
     existing = deepcopy(EXISTING_RUNNING)
     repeat = {
@@ -664,17 +703,22 @@ def test_read_exception_is_sanitized_without_update():
     assert client.forbidden == []
 
 
-def test_read_assertion_error_propagates_without_update():
+def test_read_assertion_error_is_sanitized_without_update():
     class AssertionReadClient(RecordingClient):
         def get_workout_by_id(self, _workout_id):
             self.calls.append("get_workout_by_id")
-            raise AssertionError("internal read invariant")
+            raise AssertionError("token=read-private")
 
     client = AssertionReadClient()
 
-    with pytest.raises(AssertionError, match="internal read invariant"):
-        update_workout_service(client, 123, name="New name")
+    result = update_workout_service(client, 123, name="New name")
 
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "token=read-private" not in str(result)
     assert client.calls == ["get_workout_by_id"]
     assert client.updates == []
     assert client.forbidden == []
@@ -750,12 +794,18 @@ def test_update_exception_is_ambiguous_and_sanitized():
     assert client.forbidden == []
 
 
-def test_update_assertion_error_propagates_without_retry():
-    client = RecordingClient(update_error=AssertionError("internal update invariant"))
+def test_update_assertion_error_is_ambiguous_and_sanitized_without_retry():
+    client = RecordingClient(update_error=AssertionError("token=update-private"))
 
-    with pytest.raises(AssertionError, match="internal update invariant"):
-        update_workout_service(client, 123, name="New name")
+    result = update_workout_service(client, 123, name="New name")
 
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": UPDATE_FAILED_MESSAGE,
+        "update_may_have_applied": True,
+    }
+    assert "token=update-private" not in str(result)
     assert client.calls == ["get_workout_by_id", "update_workout"]
     assert len(client.updates) == 1
     assert client.forbidden == []
