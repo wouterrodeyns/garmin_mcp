@@ -445,6 +445,88 @@ def test_rename_rejects_none_retained_step_type():
     _invalid_retained_step_type(existing)
 
 
+def _invalid_retained_topology(existing):
+    existing["providerSecret"] = "token=retained-step-topology-secret"
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "retained-step-topology-secret" not in str(result)
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
+
+
+@pytest.mark.parametrize(
+    "mutate_repeat",
+    [
+        pytest.param(lambda repeat: repeat.pop("workoutSteps"), id="absent"),
+        pytest.param(lambda repeat: repeat.update({"workoutSteps": []}), id="empty"),
+        pytest.param(lambda repeat: repeat.update({"workoutSteps": None}), id="null"),
+    ],
+)
+def test_rename_rejects_canonical_repeat_without_nonempty_workout_steps(mutate_repeat):
+    existing = _existing_repeat_with(2.0, number_of_iterations=2)
+    mutate_repeat(existing["workoutSegments"][0]["workoutSteps"][0])
+
+    _invalid_retained_topology(existing)
+
+
+@pytest.mark.parametrize(
+    "nested_steps",
+    [
+        pytest.param(None, id="null"),
+        pytest.param([], id="empty"),
+        pytest.param(
+            [deepcopy(EXISTING_RUNNING["workoutSegments"][0]["workoutSteps"][0])],
+            id="nonempty",
+        ),
+    ],
+)
+def test_rename_rejects_explicit_executable_with_workout_steps(nested_steps):
+    existing = deepcopy(EXISTING_RUNNING)
+    existing["workoutSegments"][0]["workoutSteps"][0]["workoutSteps"] = nested_steps
+
+    _invalid_retained_topology(existing)
+
+
+def test_rename_rejects_nested_repeat_with_malformed_executable_child():
+    existing = _existing_repeat_with(2.0, number_of_iterations=2)
+    child = existing["workoutSegments"][0]["workoutSteps"][0]["workoutSteps"][0]
+    child["workoutSteps"] = []
+
+    _invalid_retained_topology(existing)
+
+
+def test_rename_accepts_valid_nested_repeat_group():
+    existing = _existing_repeat_with(2.0, number_of_iterations=2)
+    outer_repeat = existing["workoutSegments"][0]["workoutSteps"][0]
+    outer_repeat["workoutSteps"] = [
+        {
+            "type": "RepeatGroupDTO",
+            "numberOfIterations": 3,
+            "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+            "endConditionValue": 3.0,
+            "workoutSteps": [
+                deepcopy(EXISTING_RUNNING["workoutSegments"][0]["workoutSteps"][0])
+            ],
+        }
+    ]
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result["status"] == "success"
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert len(client.updates) == 1
+    assert client.forbidden == []
+
+
 @pytest.mark.parametrize(
     "step_type", [pytest.param([], id="list"), pytest.param({}, id="dict")]
 )

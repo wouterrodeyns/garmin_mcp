@@ -175,20 +175,28 @@ def _is_positive_integer_count(value: Any) -> bool:
     )
 
 
-def _has_safe_workout_step_scalars(step: dict[str, Any]) -> bool:
+_EXECUTABLE_STEP_KIND = "executable"
+_REPEAT_STEP_KIND = "repeat"
+
+
+def _resolved_workout_step_kind(step: dict[str, Any]) -> str | None:
+    """Classify supported DTO types, with missing type as a legacy executable."""
+    if "type" not in step:
+        return _EXECUTABLE_STEP_KIND
+
+    step_type = step["type"]
+    if type(step_type) is not str:
+        return None
+    if step_type == "ExecutableStepDTO":
+        return _EXECUTABLE_STEP_KIND
+    if step_type == "RepeatGroupDTO":
+        return _REPEAT_STEP_KIND
+    return None
+
+
+def _has_safe_workout_step_scalars(step: dict[str, Any], kind: str) -> bool:
     """Validate only scalar shapes consumed by Taxuspt normalization helpers."""
     end_condition = step.get("endCondition")
-    if "type" not in step:
-        if "workoutSteps" in step:
-            return False
-        step_type = "ExecutableStepDTO"
-    else:
-        step_type = step["type"]
-    if type(step_type) is not str or step_type not in {
-        "ExecutableStepDTO",
-        "RepeatGroupDTO",
-    }:
-        return False
     if type(end_condition) is not dict:
         return False
     condition_key = end_condition.get("conditionTypeKey")
@@ -199,7 +207,7 @@ def _has_safe_workout_step_scalars(step: dict[str, Any]) -> bool:
         or END_CONDITION_TYPE_IDS.get(condition_key) != condition_id
     ):
         return False
-    if step_type == "RepeatGroupDTO" and (condition_key, condition_id) != (
+    if kind == _REPEAT_STEP_KIND and (condition_key, condition_id) != (
         "iterations",
         7,
     ):
@@ -244,7 +252,7 @@ def _has_safe_workout_step_scalars(step: dict[str, Any]) -> bool:
         if value is not None and not _is_finite_number(value):
             return False
 
-    if step_type == "RepeatGroupDTO":
+    if kind == _REPEAT_STEP_KIND:
         if end_condition_value is not None and not _is_positive_integer_count(
             end_condition_value
         ):
@@ -275,18 +283,26 @@ def _has_safe_workout_step_tree(segments: list[Any]) -> bool:
 
         if type(current) is not dict:
             return False
-        if not is_segment and not _has_safe_workout_step_scalars(current):
-            return False
-        if "workoutSteps" not in current:
-            if is_segment:
+        if is_segment:
+            if "workoutSteps" not in current:
                 return False
-            continue
+            nested_steps = current["workoutSteps"]
+            if type(nested_steps) is not list or not nested_steps:
+                return False
+        else:
+            kind = _resolved_workout_step_kind(current)
+            if kind is None or not _has_safe_workout_step_scalars(current, kind):
+                return False
+            if kind == _EXECUTABLE_STEP_KIND:
+                if "workoutSteps" in current:
+                    return False
+                continue
 
-        nested_steps = current["workoutSteps"]
-        if type(nested_steps) is not list:
-            return False
-        if (is_segment or current.get("type") == "RepeatGroupDTO") and not nested_steps:
-            return False
+            if "workoutSteps" not in current:
+                return False
+            nested_steps = current["workoutSteps"]
+            if type(nested_steps) is not list or not nested_steps:
+                return False
         if len(nested_steps) > _MAX_PROVIDER_JSON_NODES - node_count - len(stack):
             return False
         for nested_step in nested_steps:
