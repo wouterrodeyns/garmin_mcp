@@ -172,6 +172,54 @@ def test_invalid_existing_response_never_updates(existing):
     assert client.updates == []
 
 
+@pytest.mark.parametrize(
+    "mutate_existing",
+    [
+        pytest.param(
+            lambda existing: existing.update({"workoutSegments": ["bad"]}),
+            id="non-dict-segment",
+        ),
+        pytest.param(
+            lambda existing: existing["workoutSegments"][0].update({"workoutSteps": None}),
+            id="none-segment-steps",
+        ),
+        pytest.param(
+            lambda existing: existing["workoutSegments"][0].update({"workoutSteps": {}}),
+            id="dict-segment-steps",
+        ),
+        pytest.param(
+            lambda existing: existing["workoutSegments"][0].update({"workoutSteps": ["bad"]}),
+            id="non-dict-step",
+        ),
+        pytest.param(
+            lambda existing: existing["workoutSegments"][0].update(
+                {"workoutSteps": [{"type": "RepeatGroupDTO", "workoutSteps": None}]}
+            ),
+            id="repeat-with-none-steps",
+        ),
+        pytest.param(
+            lambda existing: existing["workoutSegments"][0].update(
+                {"workoutSteps": [{"type": "RepeatGroupDTO", "workoutSteps": ["bad"]}]}
+            ),
+            id="repeat-with-non-dict-child",
+        ),
+    ],
+)
+def test_malformed_existing_step_tree_is_rejected_before_update(mutate_existing):
+    existing = deepcopy(EXISTING_RUNNING)
+    mutate_existing(existing)
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert client.updates == []
+
+
 def test_hostile_nested_provider_container_is_sanitized_without_update():
     class ExplodingDict(dict):
         def __bool__(self):
@@ -198,10 +246,6 @@ def test_hostile_nested_provider_container_is_sanitized_without_update():
     "mutate_existing",
     [
         pytest.param(
-            lambda existing: existing.update({"oversized": list(range(10_001))}),
-            id="more-than-ten-thousand-nodes",
-        ),
-        pytest.param(
             lambda existing: existing.update({"nested": {"value": float("nan")}}),
             id="nested-nan",
         ),
@@ -218,6 +262,21 @@ def test_hostile_nested_provider_container_is_sanitized_without_update():
 def test_invalid_plain_provider_json_tree_is_sanitized_without_update(mutate_existing):
     existing = deepcopy(EXISTING_RUNNING)
     mutate_existing(existing)
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert client.updates == []
+
+
+def test_wide_provider_tree_is_rejected_before_unbounded_pending_worklist():
+    existing = deepcopy(EXISTING_RUNNING)
+    existing["wide"] = [0] * (service._MAX_PROVIDER_JSON_NODES + 1)
     client = RecordingClient(existing=existing)
 
     result = update_workout_service(client, 123, name="New name")

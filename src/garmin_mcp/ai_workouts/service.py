@@ -136,11 +136,15 @@ def _is_plain_bounded_json_tree(value: Any) -> bool:
 
         current_type = type(current)
         if current_type is dict:
+            if len(current) > _MAX_PROVIDER_JSON_NODES - node_count - len(stack):
+                return False
             for key, child in current.items():
                 if type(key) is not str:
                     return False
                 stack.append((child, depth + 1))
         elif current_type is list:
+            if len(current) > _MAX_PROVIDER_JSON_NODES - node_count - len(stack):
+                return False
             for child in current:
                 stack.append((child, depth + 1))
         elif current_type is float:
@@ -148,6 +152,35 @@ def _is_plain_bounded_json_tree(value: Any) -> bool:
                 return False
         elif current_type not in (str, int, bool, type(None)):
             return False
+    return True
+
+
+def _has_safe_workout_step_tree(segments: list[Any]) -> bool:
+    """Reject DTO shapes Taxuspt cannot traverse safely during a rename."""
+    stack = [(segment, 3, True) for segment in segments]
+    node_count = 0
+    while stack:
+        current, depth, is_segment = stack.pop()
+        node_count += 1
+        if node_count > _MAX_PROVIDER_JSON_NODES or depth > _MAX_PROVIDER_JSON_DEPTH:
+            return False
+
+        if type(current) is not dict:
+            return False
+        if "workoutSteps" not in current:
+            if is_segment:
+                return False
+            continue
+
+        nested_steps = current["workoutSteps"]
+        if type(nested_steps) is not list:
+            return False
+        if (is_segment or current.get("type") == "RepeatGroupDTO") and not nested_steps:
+            return False
+        if len(nested_steps) > _MAX_PROVIDER_JSON_NODES - node_count - len(stack):
+            return False
+        for nested_step in nested_steps:
+            stack.append((nested_step, depth + 2, False))
     return True
 
 
@@ -167,6 +200,8 @@ def _validated_existing_workout(existing: Any, requested_id: int) -> tuple[dict[
     if existing_id != requested_id or type(workout_name) is not str or not workout_name.strip():
         raise ValueError(INVALID_EXISTING_WORKOUT_MESSAGE)
     if type(sport_type) is not dict or type(segments) is not list or not segments:
+        raise ValueError(INVALID_EXISTING_WORKOUT_MESSAGE)
+    if not _has_safe_workout_step_tree(segments):
         raise ValueError(INVALID_EXISTING_WORKOUT_MESSAGE)
 
     sport_key = sport_type.get("sportTypeKey")
