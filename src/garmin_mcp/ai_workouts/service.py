@@ -167,6 +167,8 @@ def _has_safe_workout_step_scalars(step: dict[str, Any]) -> bool:
     """Validate only scalar shapes consumed by Taxuspt normalization helpers."""
     end_condition = step.get("endCondition")
     step_type = step.get("type")
+    if type(step_type) is not str:
+        return False
     if step_type in {"ExecutableStepDTO", "RepeatGroupDTO"}:
         if type(end_condition) is not dict:
             return False

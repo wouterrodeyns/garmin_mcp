@@ -382,6 +382,30 @@ def _rename_existing_with_repeat_end_condition(end_condition):
 
 
 @pytest.mark.parametrize(
+    "step_type", [pytest.param([], id="list"), pytest.param({}, id="dict")]
+)
+def test_rename_sanitizes_unhashable_retained_step_type(step_type):
+    existing = _rename_existing_with_step_end_condition(
+        {"conditionTypeId": 2, "conditionTypeKey": "time"}
+    )
+    existing["workoutSegments"][0]["workoutSteps"][0]["type"] = step_type
+    existing["providerSecret"] = "token=unhashable-step-type-secret"
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "unhashable-step-type-secret" not in str(result)
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
+
+
+@pytest.mark.parametrize(
     "existing",
     [
         pytest.param(_rename_existing_with_step_end_condition(None), id="executable-absent"),
