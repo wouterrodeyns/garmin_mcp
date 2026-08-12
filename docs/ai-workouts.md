@@ -1,9 +1,10 @@
 # AI-friendly workouts
 
-`create_workout` is the small, user-facing seam for an AI coach. It accepts a
-readable workout description in one call, validates it, uploads it to Garmin,
-and optionally puts it on the calendar. Callers do not need to produce raw
-Garmin workout DTOs.
+`create_workout` and `update_workout` are the small, user-facing workout-hands
+seam for an AI coach. Create accepts a readable workout description in one
+call, validates it, uploads it to Garmin, and optionally puts it on the
+calendar. Update applies a friendly patch to an existing regular workout in
+place. Callers do not need to produce raw Garmin workout DTOs.
 
 ## Create one workout
 
@@ -130,20 +131,21 @@ Typical concise responses are:
 
 ## The `ai-coach` tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 12 tools:
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 13 tools:
 
 1. `get_training_context`
 2. `analyze_activity`
 3. `create_workout`
-4. `get_activities`
-5. `get_activities_by_date`
-6. `get_activity`
-7. `get_workouts`
-8. `get_workout_by_id`
-9. `get_scheduled_workouts`
-10. `schedule_workout`
-11. `unschedule_workout`
-12. `delete_workout`
+4. `update_workout`
+5. `get_activities`
+6. `get_activities_by_date`
+7. `get_activity`
+8. `get_workouts`
+9. `get_workout_by_id`
+10. `get_scheduled_workouts`
+11. `schedule_workout`
+12. `unschedule_workout`
+13. `delete_workout`
 
 Profile precedence is explicit: an explicitly configured
 `GARMIN_ENABLED_TOOLS` allowlist overrides the profile; otherwise a profile
@@ -166,14 +168,58 @@ The primary references are the [python-garminconnect 0.3.10 package on
 PyPI](https://pypi.org/project/garminconnect/0.3.10/) and its [upstream source on
 GitHub](https://github.com/cyberjunky/python-garminconnect/tree/0.3.10).
 
-## Update (deferred)
+## Update workout
 
-The pinned client now supports a whole-document `PUT` through
-`update_workout`; it preserves the existing workout ID and its schedules. An
-AI-facing update operation remains intentionally deferred until the fork adds
-friendly-schema compilation, retained scheduling behavior, and explicit
-partial-failure tests around that seam. Until then, do not present a normal
-upload as an in-place update.
+`update_workout` uses patch-style top-level fields. Supply `workout_id` and a
+new `name` to rename an existing workout, or supply friendly replacement
+`steps` (and optionally `sport`) using the same schema as `create_workout`.
+The ID must be a positive integer or an ASCII decimal string; booleans, floats,
+UUIDs, and other ID shapes are invalid. The operation has no `schedule_date`
+argument.
+The approved replacement example changes 4 x 6 minutes to 5 x 5 minutes:
+
+```json
+{
+  "workout_id": 123456789,
+  "name": "Threshold 5x5",
+  "steps": [
+    {"warmup": {"duration": "15m"}},
+    {
+      "repeat": 5,
+      "steps": [
+        {"run": {"duration": "5m", "pace": "4:20-4:30/km"}},
+        {"recovery": {"duration": "2m"}}
+      ]
+    },
+    {"cooldown": {"duration": "10m"}}
+  ]
+}
+```
+
+`workout_id` is the numeric reusable workout-template ID returned by
+`get_workouts`, `get_workout_by_id`, or `get_scheduled_workouts`.
+`scheduled_workout_id` is the calendar-entry ID used only by
+`unschedule_workout`; the two IDs are distinct. An in-place update keeps the
+same underlying `workout_id` (the workout ID) and preserves existing schedules.
+No calendar call is made, and it does not upload a replacement, move,
+unschedule, or delete.
+
+When `steps` is supplied, `sport` may be `running`, `cycling`, `walking`, or
+`strength` (`strength_training` is accepted as an alias); if omitted, the
+current supported sport is retained. `sport` is valid only with `steps`, and
+steps use the friendly units, targets, actions, and repeat limits documented
+for creation. UUID-based Garmin Coach/adaptive-plan workouts and unsupported sports
+are outside v1 and are rejected. Move semantics remain deferred.
+
+The server fetches the complete workout, applies the patch, validates the
+whole document, and uses GarminConnect's public whole-document `PUT` under the
+hood. It never automatically retries. If the result says
+`update_may_have_applied` or is `partial_success`, call
+`get_workout_by_id` to read the current state before retrying; do not blindly
+repeat the mutation. The fixed ambiguous-write guidance is: “read the workout before retrying.”
+A success response reports the effective name and sport and the matching
+workout ID returned by Garmin; `schedules_preserved` follows from retaining
+that ID and is not a separate calendar confirmation.
 
 ## Move (deferred)
 
@@ -190,8 +236,8 @@ workouts, and available recovery signals without exposing every upstream
 endpoint or returning large raw payloads. It is the coach's eyes/current
 context and is strictly read-only. [Activity analysis](ai-activity.md) is the
 separate completed-session feedback read; [AI training context](ai-training.md)
-covers current context, and `create_workout` is the coach's hands/write
-operation after confirmation.
+covers current context, and `create_workout` plus `update_workout` are the
+coach's hands/write operations after confirmation.
 
 ## Upstream compatibility
 

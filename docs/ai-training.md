@@ -2,9 +2,10 @@
 
 `get_training_context(days=14)` is a compact, read-only Garmin snapshot for an
 AI coach. It is the coach's **eyes**: it reduces a bounded set of Garmin reads
-to coaching-relevant facts. `create_workout` is the coach's **hands** when the
-athlete later asks to put a recommendation on Garmin. The context tool never
-uploads, schedules, changes, or deletes Garmin data. It does not provide coaching advice.
+to coaching-relevant facts. `create_workout` and `update_workout` are the
+coach's **hands** when the athlete later asks to put a recommendation on
+Garmin or change an existing workout in place. The context tool never uploads,
+schedules, changes, or deletes Garmin data. It does not provide coaching advice.
 
 The implementation is pinned to `garminconnect==0.3.10`. Garmin metric
 availability varies by device and account, so every recovery and fitness metric
@@ -229,11 +230,11 @@ Warnings never include raw Garmin responses, tokens, or credentials.
 
 ## AI-coach profile and workflow
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 12 tools. The three
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 13 tools. The three
 high-level coaching roles are context eyes (`get_training_context`),
 completed-session feedback (`analyze_activity`), and workout hands
-(`create_workout`). The full profile also preserves compatibility for focused
-reads and calendar operations:
+(`create_workout` plus in-place `update_workout`). The full profile also
+preserves compatibility for focused reads and calendar operations:
 
 ```text
 User: "I haven't run for two months and I'm targeting a half marathon.
@@ -250,9 +251,15 @@ aggregate; see the [activity analysis guide](ai-activity.md).
 User: "Put that workout on Garmin for tomorrow."
 
 Claude: create_workout(..., schedule_date="2026-08-10")
+
+User: "Change that workout to five five-minute intervals."
+
+Claude: update_workout(workout_id=123456789, name="Threshold 5x5", steps=[...])
+        -> preserves the workout ID and existing schedule entries
 ```
 
 The remaining profile tools preserve compatibility for focused activity and
 workout reads and explicit calendar operations. `get_training_context` itself
-remains strictly read-only. `create_workout` is the coach's hands/write
-operation after the user confirms the proposed workout.
+remains strictly read-only. `create_workout` and `update_workout` are the
+coach's hands/write operations after the user confirms the proposed workout or
+change. For update ambiguity, read with `get_workout_by_id` before retrying.

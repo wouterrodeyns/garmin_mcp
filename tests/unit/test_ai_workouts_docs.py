@@ -1,6 +1,8 @@
 from pathlib import Path
 import re
 
+from garmin_mcp import TOOL_PROFILES
+
 
 ROOT = Path(__file__).parents[2]
 README = (ROOT / "README.md").read_text()
@@ -220,12 +222,50 @@ def test_ai_workouts_docs_protects_all_statuses_and_retention_safety():
     assert "scheduling failure" in call_lower
 
 
-def test_ai_workouts_docs_marks_deferred_operations_explicitly():
-    assert {
-        "update deferred",
-        "move deferred",
-    } <= SECTIONS.keys()
-    assert "training context deferred" not in SECTIONS
+def test_ai_workouts_docs_pins_in_place_update_and_deferred_move_contract():
+    update = SECTIONS["update workout"]
+    update_lower = update.lower()
+    for expected in (
+        "patch-style",
+        "workout_id",
+        "scheduled_workout_id",
+        "name",
+        "steps",
+        "threshold 5x5",
+        "preserves",
+        "existing schedules",
+        "no calendar call",
+        "read the workout before retrying",
+        "update_may_have_applied",
+        "partial_success",
+        "running",
+        "cycling",
+        "walking",
+        "strength",
+        "uuid",
+        "adaptive",
+        "unsupported sports",
+    ):
+        assert expected in update_lower
+    assert "Update (deferred)" not in DOCS
+
+    move = SECTIONS["move deferred"].lower()
+    for expected in (
+        "scheduled_workout_id",
+        "unschedule",
+        "schedule",
+        "same `workout_id`",
+        "partial",
+        "failure",
+    ):
+        assert expected in move
+    assert "never" in move and "delete" in move and "template" in move
+
+
+def test_ai_workouts_docs_explains_success_is_not_separate_calendar_confirmation():
+    update = SECTIONS["update workout"].lower()
+    assert "matching" in update
+    assert "not a separate calendar confirmation" in update
 
 
 def test_ai_workouts_docs_describes_profile_and_unchanged_default():
@@ -235,6 +275,7 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
         "get_training_context",
         "analyze_activity",
         "create_workout",
+        "update_workout",
         "get_activities",
         "get_activities_by_date",
         "get_activity",
@@ -245,8 +286,10 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
         "unschedule_workout",
         "delete_workout",
     }
-    assert len(tools) == 12
+    assert len(tools) == 13
     assert set(tools) == expected
+    assert set(tools) == TOOL_PROFILES["ai-coach"]
+    assert tools.index("update_workout") == tools.index("create_workout") + 1
     assert "full upstream tool registration" in profile
 
     precedence = profile.lower()
@@ -271,19 +314,7 @@ def test_ai_workouts_docs_protects_pinned_ids_and_available_update_api():
     assert "no update method" not in pinned
 
 
-def test_ai_workouts_docs_protects_deferred_operation_contracts():
-    update = SECTIONS["update deferred"].lower()
+def test_ai_workouts_docs_update_uses_hidden_whole_document_put():
+    update = SECTIONS["update workout"].lower()
     for expected in ("whole-document", "put", "preserves", "workout id", "schedules"):
         assert expected in update
-
-    move = SECTIONS["move deferred"].lower()
-    for expected in (
-        "scheduled_workout_id",
-        "unschedule",
-        "schedule",
-        "same `workout_id`",
-        "partial",
-        "failure",
-    ):
-        assert expected in move
-    assert "never" in move and "delete" in move and "template" in move
