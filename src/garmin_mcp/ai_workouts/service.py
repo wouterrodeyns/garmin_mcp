@@ -155,6 +155,79 @@ def _is_plain_bounded_json_tree(value: Any) -> bool:
     return True
 
 
+def _is_finite_number(value: Any) -> bool:
+    return type(value) is int or (type(value) is float and math.isfinite(value))
+
+
+def _has_safe_workout_step_scalars(step: dict[str, Any]) -> bool:
+    """Validate only scalar shapes consumed by Taxuspt normalization helpers."""
+    end_condition = step.get("endCondition")
+    if end_condition is not None:
+        if type(end_condition) is not dict:
+            return False
+        condition_key = end_condition.get("conditionTypeKey")
+        condition_id = end_condition.get("conditionTypeId")
+        if condition_key is not None and type(condition_key) is not str:
+            return False
+        if condition_id is not None and type(condition_id) is not int:
+            return False
+
+    end_condition_value = step.get("endConditionValue")
+    if end_condition_value is not None and not _is_finite_number(end_condition_value):
+        return False
+
+    target_layouts = (
+        ("targetType", ("targetValueOne", "targetValueTwo", "zoneNumber")),
+        (
+            "secondaryTargetType",
+            ("secondaryTargetValueOne", "secondaryTargetValueTwo", "secondaryZoneNumber"),
+        ),
+    )
+    for target_field, scalar_fields in target_layouts:
+        target = step.get(target_field)
+        if target is not None:
+            if type(target) is not dict:
+                return False
+            target_key = target.get("workoutTargetTypeKey")
+            target_id = target.get("workoutTargetTypeId")
+            if target_key is not None and type(target_key) is not str:
+                return False
+            if target_id is not None and type(target_id) is not int:
+                return False
+            for scalar_field in scalar_fields:
+                nested_value = target.get(scalar_field)
+                if nested_value is not None and not _is_finite_number(nested_value):
+                    return False
+
+    for scalar_field in (
+        "targetValueOne",
+        "targetValueTwo",
+        "secondaryTargetValueOne",
+        "secondaryTargetValueTwo",
+        "zoneNumber",
+        "secondaryZoneNumber",
+    ):
+        value = step.get(scalar_field)
+        if value is not None and not _is_finite_number(value):
+            return False
+
+    if step.get("type") == "RepeatGroupDTO":
+        if "numberOfIterations" in step:
+            number_of_iterations = step["numberOfIterations"]
+            if type(number_of_iterations) is not int or number_of_iterations <= 0:
+                return False
+        elif (
+            not _is_finite_number(end_condition_value)
+            or end_condition_value <= 0
+            or (
+                type(end_condition_value) is float
+                and not end_condition_value.is_integer()
+            )
+        ):
+            return False
+    return True
+
+
 def _has_safe_workout_step_tree(segments: list[Any]) -> bool:
     """Reject DTO shapes Taxuspt cannot traverse safely during a rename."""
     stack = [(segment, 3, True) for segment in segments]
@@ -166,6 +239,8 @@ def _has_safe_workout_step_tree(segments: list[Any]) -> bool:
             return False
 
         if type(current) is not dict:
+            return False
+        if not is_segment and not _has_safe_workout_step_scalars(current):
             return False
         if "workoutSteps" not in current:
             if is_segment:

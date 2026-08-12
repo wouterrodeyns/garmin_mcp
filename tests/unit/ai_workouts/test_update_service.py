@@ -220,6 +220,189 @@ def test_malformed_existing_step_tree_is_rejected_before_update(mutate_existing)
     assert client.updates == []
 
 
+def _existing_repeat_with(end_condition_value, number_of_iterations=None):
+    existing = deepcopy(EXISTING_RUNNING)
+    repeat = {
+        "type": "RepeatGroupDTO",
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": end_condition_value,
+        "workoutSteps": existing["workoutSegments"][0]["workoutSteps"],
+    }
+    if number_of_iterations is not None:
+        repeat["numberOfIterations"] = number_of_iterations
+    existing["workoutSegments"][0]["workoutSteps"] = [repeat]
+    return existing
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        pytest.param(
+            {
+                **deepcopy(EXISTING_RUNNING),
+                "workoutSegments": [
+                    {
+                        **deepcopy(EXISTING_RUNNING["workoutSegments"][0]),
+                        "workoutSteps": [
+                            {
+                                **deepcopy(EXISTING_RUNNING["workoutSegments"][0]["workoutSteps"][0]),
+                                "targetType": {
+                                    "workoutTargetTypeId": 4,
+                                    "workoutTargetTypeKey": "heart.rate.zone",
+                                },
+                                "targetValueOne": "token=secret",
+                            }
+                        ],
+                    }
+                ],
+            },
+            id="string-heart-rate-bound",
+        ),
+        pytest.param(
+            {
+                **deepcopy(EXISTING_RUNNING),
+                "workoutSegments": [
+                    {
+                        **deepcopy(EXISTING_RUNNING["workoutSegments"][0]),
+                        "workoutSteps": [
+                            {
+                                **deepcopy(EXISTING_RUNNING["workoutSegments"][0]["workoutSteps"][0]),
+                                "endCondition": {"conditionTypeKey": []},
+                            }
+                        ],
+                    }
+                ],
+            },
+            id="unhashable-condition-key",
+        ),
+        pytest.param(
+            {
+                **deepcopy(EXISTING_RUNNING),
+                "workoutSegments": [
+                    {
+                        **deepcopy(EXISTING_RUNNING["workoutSegments"][0]),
+                        "workoutSteps": [
+                            {
+                                **deepcopy(EXISTING_RUNNING["workoutSegments"][0]["workoutSteps"][0]),
+                                "targetType": {"workoutTargetTypeKey": []},
+                            }
+                        ],
+                    }
+                ],
+            },
+            id="unhashable-target-key",
+        ),
+        pytest.param(
+            {
+                **deepcopy(EXISTING_RUNNING),
+                "workoutSegments": [
+                    {
+                        **deepcopy(EXISTING_RUNNING["workoutSegments"][0]),
+                        "workoutSteps": [
+                            {
+                                **deepcopy(EXISTING_RUNNING["workoutSegments"][0]["workoutSteps"][0]),
+                                "zoneNumber": "not-a-number",
+                            }
+                        ],
+                    }
+                ],
+            },
+            id="nonnumeric-zone",
+        ),
+        pytest.param(
+            {
+                **deepcopy(EXISTING_RUNNING),
+                "workoutSegments": [
+                    {
+                        **deepcopy(EXISTING_RUNNING["workoutSegments"][0]),
+                        "workoutSteps": [
+                            {
+                                **deepcopy(EXISTING_RUNNING["workoutSegments"][0]["workoutSteps"][0]),
+                                "targetValueOne": float("nan"),
+                            }
+                        ],
+                    }
+                ],
+            },
+            id="nan-bound",
+        ),
+        pytest.param(
+            {
+                **deepcopy(EXISTING_RUNNING),
+                "workoutSegments": [
+                    {
+                        **deepcopy(EXISTING_RUNNING["workoutSegments"][0]),
+                        "workoutSteps": [
+                            {
+                                **deepcopy(EXISTING_RUNNING["workoutSegments"][0]["workoutSteps"][0]),
+                                "secondaryZoneNumber": float("inf"),
+                            }
+                        ],
+                    }
+                ],
+            },
+            id="infinite-secondary-zone",
+        ),
+        pytest.param(_existing_repeat_with("bad"), id="repeat-string-iterations"),
+        pytest.param(_existing_repeat_with([]), id="repeat-list-iterations"),
+        pytest.param(_existing_repeat_with(float("inf")), id="repeat-infinite-iterations"),
+        pytest.param(_existing_repeat_with(1.5), id="repeat-fractional-iterations"),
+    ],
+)
+def test_malformed_existing_step_scalars_are_rejected_before_update(existing):
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "secret" not in str(result)
+    assert client.updates == []
+
+
+def test_valid_custom_heart_rate_bounds_are_accepted():
+    existing = deepcopy(EXISTING_RUNNING)
+    step = existing["workoutSegments"][0]["workoutSteps"][0]
+    step["targetType"] = {
+        "workoutTargetTypeId": 4,
+        "workoutTargetTypeKey": "heart.rate.zone",
+    }
+    step["targetValueOne"] = 105.0
+    step["targetValueTwo"] = 143.0
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result["status"] == "success"
+    assert len(client.updates) == 1
+
+
+def test_valid_repeat_group_with_numeric_iterations_is_accepted():
+    client = RecordingClient(existing=_existing_repeat_with(2.0, number_of_iterations=2))
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result["status"] == "success"
+    assert len(client.updates) == 1
+
+
+def test_unexpected_prepare_type_error_propagates(monkeypatch):
+    client = RecordingClient()
+
+    def fail_prepare(_document):
+        raise TypeError("internal normalization sentinel")
+
+    monkeypatch.setattr(service, "prepare_workout_for_upload", fail_prepare)
+
+    with pytest.raises(TypeError, match="internal normalization sentinel"):
+        update_workout_service(client, 123, name="New name")
+
+    assert client.updates == []
+
+
 def test_hostile_nested_provider_container_is_sanitized_without_update():
     class ExplodingDict(dict):
         def __bool__(self):
