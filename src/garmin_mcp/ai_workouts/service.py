@@ -302,11 +302,7 @@ def update_workout_service(
     sport: Any = None,
     steps: Any = None,
 ) -> dict[str, Any]:
-    """Apply a safe rename patch to an existing workout.
-
-    Replacement-step compilation remains outside this rename-only service;
-    callers supplying steps receive the fixed pre-write error below.
-    """
+    """Apply a safe in-place name patch or friendly step replacement."""
     try:
         normalized_id = _normalize_workout_id(workout_id)
     except ValueError:
@@ -358,24 +354,39 @@ def update_workout_service(
             "message": INVALID_EXISTING_WORKOUT_MESSAGE,
         }
 
-    # Replacement-step updates require a separate full-structure compiler.
-    if steps is not None:
-        return {
-            "status": "error",
-            "workout_id": normalized_id,
-            "message": "Replacing workout steps is not available yet",
-        }
+    effective_name = name.strip() if name is not None else existing["workoutName"].strip()
+    effective_sport = friendly_sport
+    if steps is None:
+        document = deepcopy(existing)
+        document["workoutName"] = effective_name
+        prepare_error_message = INVALID_EXISTING_WORKOUT_MESSAGE
+    else:
+        try:
+            definition = validate_workout(
+                effective_name,
+                sport if sport is not None else friendly_sport,
+                steps,
+            )
+            effective_sport = definition.sport
+            document = compile_workout(definition)
+        except ValueError as exc:
+            return {
+                "status": "error",
+                "workout_id": normalized_id,
+                "message": str(exc),
+            }
+        description = existing.get("description")
+        if type(description) is str and description.strip():
+            document["description"] = description
+        prepare_error_message = "Workout update validation failed."
 
-    effective_name = name.strip()
-    document = deepcopy(existing)
-    document["workoutName"] = effective_name
     try:
         prepared = prepare_workout_for_upload(document)
-    except ValueError:
+    except ValueError as exc:
         return {
             "status": "error",
             "workout_id": normalized_id,
-            "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+            "message": prepare_error_message if steps is None else str(exc),
         }
 
     try:
@@ -391,7 +402,7 @@ def update_workout_service(
         }
 
     if type(updated) is not dict:
-        result = _update_result("partial_success", normalized_id, effective_name, friendly_sport)
+        result = _update_result("partial_success", normalized_id, effective_name, effective_sport)
         result["message"] = INVALID_UPDATE_RESPONSE_MESSAGE
         return result
     try:
@@ -399,7 +410,7 @@ def update_workout_service(
     except (KeyError, ValueError):
         response_id = None
     if response_id != normalized_id:
-        result = _update_result("partial_success", normalized_id, effective_name, friendly_sport)
+        result = _update_result("partial_success", normalized_id, effective_name, effective_sport)
         result["message"] = INVALID_UPDATE_RESPONSE_MESSAGE
         return result
-    return _update_result("success", normalized_id, effective_name, friendly_sport)
+    return _update_result("success", normalized_id, effective_name, effective_sport)

@@ -832,3 +832,187 @@ def test_public_contract_exports_stable_sport_mapping():
         "walking": "walking",
         "strength_training": "strength",
     }
+
+
+THRESHOLD_5X5 = [
+    {"warmup": {"duration": "15m"}},
+    {
+        "repeat": 5,
+        "steps": [
+            {"run": {"duration": "5m", "pace": "4:20-4:30/km"}},
+            {"recovery": {"duration": "2m"}},
+        ],
+    },
+    {"cooldown": {"duration": "10m"}},
+]
+
+
+def test_steps_patch_inherits_name_and_sport_and_replaces_stale_document_fields():
+    client = RecordingClient(existing=deepcopy(EXISTING_RUNNING))
+    caller_steps = deepcopy(THRESHOLD_5X5)
+    existing_before = deepcopy(client.existing)
+
+    result = update_workout_service(client, 123, steps=caller_steps)
+
+    assert result == {
+        "status": "success",
+        "workout_id": 123,
+        "name": "Original aerobic run",
+        "sport": "running",
+        "schedules_preserved": True,
+    }
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    _, payload = client.updates[0]
+    assert payload["workoutName"] == "Original aerobic run"
+    assert payload["description"] == "Keep this user-written note"
+    assert payload["sportType"] == {"sportTypeId": 1, "sportTypeKey": "running"}
+    repeat = payload["workoutSegments"][0]["workoutSteps"][1]
+    assert repeat["numberOfIterations"] == 5
+    pace = repeat["workoutSteps"][0]
+    assert pace["targetValueOne"] == pytest.approx(1000 / 270)
+    assert pace["targetValueTwo"] == pytest.approx(1000 / 260)
+    for stale_field in (
+        "estimatedDuration",
+        "estimatedDistance",
+        "createdDate",
+        "updatedDate",
+        "workoutProvider",
+    ):
+        assert stale_field not in payload
+    assert "stepId" not in str(payload)
+    assert caller_steps == THRESHOLD_5X5
+    assert client.existing == existing_before
+    assert client.forbidden == []
+
+
+def test_steps_patch_can_replace_name_and_sport_with_cycling_power():
+    client = RecordingClient()
+
+    result = update_workout_service(
+        client,
+        123,
+        name="Bike tempo",
+        sport="cycling",
+        steps=[{"work": {"duration": "20m", "power": "220-250W"}}],
+    )
+
+    assert result == {
+        "status": "success",
+        "workout_id": 123,
+        "name": "Bike tempo",
+        "sport": "cycling",
+        "schedules_preserved": True,
+    }
+    _, payload = client.updates[0]
+    assert payload["sportType"] == {"sportTypeId": 2, "sportTypeKey": "cycling"}
+    step = payload["workoutSegments"][0]["workoutSteps"][0]
+    assert step["targetType"] == {
+        "workoutTargetTypeId": 2,
+        "workoutTargetTypeKey": "power.zone",
+    }
+    assert (step["targetValueOne"], step["targetValueTwo"]) == (220.0, 250.0)
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ({"heart_rate_zone": "Z3"}, {"zoneNumber": 3}),
+        (
+            {"heart_rate": "150-165bpm"},
+            {"targetValueOne": 150.0, "targetValueTwo": 165.0},
+        ),
+    ],
+)
+def test_steps_patch_compiles_named_and_custom_heart_rate_targets(target, expected):
+    client = RecordingClient()
+    step = {"duration": "20m"} | target
+
+    result = update_workout_service(client, 123, steps=[{"run": step}])
+
+    assert result["status"] == "success"
+    compiled = client.updates[0][1]["workoutSegments"][0]["workoutSteps"][0]
+    assert compiled["targetType"] == {
+        "workoutTargetTypeId": 4,
+        "workoutTargetTypeKey": "heart.rate.zone",
+    }
+    for field, value in expected.items():
+        assert compiled[field] == value
+    assert ("zoneNumber" in compiled) is ("zoneNumber" in expected)
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        [],
+        [{"run": {"duration": "broken"}}],
+        [{"repeat": 51, "steps": [{"run": {"duration": "1m"}}]}],
+    ],
+)
+def test_invalid_replacement_steps_read_once_but_never_write(steps):
+    client = RecordingClient()
+
+    result = update_workout_service(client, 123, steps=steps)
+
+    assert result["status"] == "error"
+    assert result["workout_id"] == 123
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
+
+
+def test_non_string_existing_description_is_not_copied_to_replacement():
+    existing = deepcopy(EXISTING_RUNNING)
+    existing["description"] = {"provider": "token=private"}
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, steps=[{"run": {"duration": "30m"}}])
+
+    assert result["status"] == "success"
+    payload = client.updates[0][1]
+    assert "description" not in payload
+    assert "token=private" not in str(payload)
+    assert client.existing == existing
+
+
+def test_steps_patch_prepares_the_compiled_document_before_updating(monkeypatch):
+    client = RecordingClient()
+    prepared_inputs = []
+
+    def record_prepare(document):
+        prepared_inputs.append(document)
+        return document
+
+    monkeypatch.setattr(service, "prepare_workout_for_upload", record_prepare)
+
+    result = update_workout_service(client, 123, steps=[{"run": {"duration": "30m"}}])
+
+    assert result["status"] == "success"
+    assert len(prepared_inputs) == 1
+    assert client.updates[0][1] is prepared_inputs[0]
+    assert "estimatedDuration" not in prepared_inputs[0]
+
+
+@pytest.mark.parametrize(
+    ("sport", "steps", "expected_sport_type"),
+    [
+        (
+            "walking",
+            [{"work": {"distance": "1km"}}],
+            {"sportTypeId": 12, "sportTypeKey": "walking"},
+        ),
+        (
+            "strength_training",
+            [{"work": {"reps": 12, "exercise": "Squat", "category": "legs"}}],
+            {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+        ),
+    ],
+)
+def test_steps_patch_supports_other_friendly_compiler_sports(
+    sport, steps, expected_sport_type
+):
+    client = RecordingClient()
+
+    result = update_workout_service(client, 123, sport=sport, steps=steps)
+
+    assert result["status"] == "success"
+    assert client.updates[0][1]["sportType"] == expected_sport_type
