@@ -48,6 +48,7 @@ def test_main_registers_tools_and_starts_stdio(monkeypatch):
     assert "get_devices" in run_calls[0]["tool_names"]
     assert "get_workouts" in run_calls[0]["tool_names"]
     assert "create_workout" in run_calls[0]["tool_names"]
+    assert "update_workout" in run_calls[0]["tool_names"]
 
 
 def test_main_configures_and_registers_ai_workouts(monkeypatch):
@@ -203,6 +204,24 @@ def test_main_registers_exact_ai_coach_profile(monkeypatch):
     garmin_mcp.main()
 
     assert run_calls == [garmin_mcp.TOOL_PROFILES["ai-coach"]]
+
+
+def test_ai_coach_profile_equals_actual_registered_tool_names(monkeypatch):
+    run_calls = []
+    monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai-coach")
+    monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
+    monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
+    monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
+
+    def capture_run(self, **_kwargs):
+        run_calls.append({tool.name for tool in asyncio.run(self.list_tools())})
+
+    monkeypatch.setattr(FastMCP, "run", capture_run)
+
+    garmin_mcp.main()
+
+    assert run_calls == [garmin_mcp.TOOL_PROFILES["ai-coach"]]
+    assert len(run_calls[0]) == 13
 
 
 def test_main_warns_for_unknown_tool_in_profile(monkeypatch, capsys):

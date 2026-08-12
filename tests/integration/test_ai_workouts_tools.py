@@ -5,10 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from garmin_mcp import workouts
 from garmin_mcp.ai_workouts import configure, create_workout_service, register_tools
 from garmin_mcp.ai_workouts import service
+from garmin_mcp.ai_workouts import tools
 
 
 THRESHOLD_STEPS = [
@@ -286,6 +288,112 @@ def test_ai_workouts_configure_does_not_rebind_upstream_workout_client():
     configure(ai_client)
 
     assert workouts.garmin_client is upstream_client
+
+
+@pytest.mark.asyncio
+async def test_update_workout_has_patch_schema_with_optional_fields_and_strict_id():
+    app = FastMCP("AI Workouts")
+    configure(object())
+    registered = register_tools(app)
+
+    tools_by_name = {tool.name: tool for tool in await registered.list_tools()}
+
+    assert "update_workout" in tools_by_name
+    schema = tools_by_name["update_workout"].inputSchema
+    assert schema["properties"]["workout_id"] == {
+        "anyOf": [{"type": "integer"}, {"type": "string"}],
+        "title": "Workout Id",
+    }
+    assert schema["required"] == ["workout_id"]
+    assert set(schema["properties"]) == {"workout_id", "name", "sport", "steps"}
+
+
+@pytest.mark.asyncio
+async def test_update_workout_delegates_omitted_and_explicit_patch_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = object()
+    app = FastMCP("AI Workouts")
+    configure(client)
+    register_tools(app)
+    observed: list[tuple[object, object, object, object, object]] = []
+    service_result = {"status": "success", "workout_id": 42, "name": "Easy"}
+
+    def fake_service(
+        received_client: object,
+        workout_id: object,
+        name: object = None,
+        sport: object = None,
+        steps: object = None,
+    ) -> dict[str, object]:
+        observed.append((received_client, workout_id, name, sport, steps))
+        return service_result
+
+    monkeypatch.setattr(tools, "update_workout_service", fake_service)
+
+    omitted = await app.call_tool("update_workout", {"workout_id": 42})
+    explicit_steps = [{"run": {"duration": "30m"}}]
+    explicit = await app.call_tool(
+        "update_workout",
+        {
+            "workout_id": " 42 ",
+            "name": "Easy",
+            "sport": "running",
+            "steps": explicit_steps,
+        },
+    )
+
+    assert json.loads(omitted[0][0].text) == service_result
+    assert json.loads(explicit[0][0].text) == service_result
+    assert observed == [
+        (client, 42, None, None, None),
+        (client, " 42 ", "Easy", "running", explicit_steps),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("workout_id", [True, False, 1.0])
+async def test_update_workout_rejects_json_boolean_and_float_ids_before_garmin_calls(
+    workout_id: object,
+):
+    class NoCalls:
+        def __getattr__(self, name: str) -> object:
+            raise AssertionError(f"unexpected Garmin call: {name}")
+
+    client = NoCalls()
+    app = FastMCP("AI Workouts")
+    configure(client)
+    register_tools(app)
+
+    with pytest.raises(ToolError, match="workout_id"):
+        await app.call_tool("update_workout", {"workout_id": workout_id, "name": "Easy"})
+
+
+@pytest.mark.asyncio
+async def test_update_workout_documents_patch_identity_safety_and_retry_boundary():
+    app = FastMCP("AI Workouts")
+    configure(object())
+    register_tools(app)
+    tool = next(tool for tool in await app.list_tools() if tool.name == "update_workout")
+    description = " ".join(tool.description.lower().split())
+
+    for phrase in (
+        "template workout id",
+        "not scheduled_workout_id",
+        "patch",
+        "rename",
+        "supported sports",
+        "friendly",
+        "whole-document",
+        "in-place",
+        "same id",
+        "schedules preserved",
+        "never mutates the calendar",
+        "read the workout before retrying",
+        "uuid",
+        "adaptive",
+    ):
+        assert phrase in description
 
 
 def test_idempotent_schedule_marks_success_without_extra_details(

@@ -106,6 +106,7 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
         "get_training_context",
         "analyze_activity",
         "create_workout",
+        "update_workout",
         "get_activities",
         "get_activities_by_date",
         "get_activity",
