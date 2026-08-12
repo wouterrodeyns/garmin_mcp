@@ -302,11 +302,10 @@ def update_workout_service(
     sport: Any = None,
     steps: Any = None,
 ) -> dict[str, Any]:
-    """Apply the currently-supported safe rename patch to an existing workout.
+    """Apply a safe rename patch to an existing workout.
 
-    Replacement-step compilation is deliberately left to the next layer of the
-    feature.  This service establishes strict request and existing-document
-    validation plus the in-place public-client update seam.
+    Replacement-step compilation remains outside this rename-only service;
+    callers supplying steps receive the fixed pre-write error below.
     """
     try:
         normalized_id = _normalize_workout_id(workout_id)
@@ -357,8 +356,7 @@ def update_workout_service(
             "message": INVALID_EXISTING_WORKOUT_MESSAGE,
         }
 
-    # Task 1 only needs a rename-capable skeleton.  Do not compile or replace
-    # caller-supplied steps until the dedicated replacement-step implementation.
+    # Replacement-step updates require a separate full-structure compiler.
     if steps is not None:
         return {
             "status": "error",

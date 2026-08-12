@@ -48,24 +48,96 @@ EXISTING_RUNNING = {
 
 
 _DEFAULT_RESPONSE = object()
+_DEFAULT_UPDATE_ERROR = object()
+
+
+class _RawClientTrap:
+    def __init__(self, owner):
+        self._owner = owner
+
+    def post(self, *_args, **_kwargs):
+        return self._owner._forbidden("post")
+
+    def put(self, *_args, **_kwargs):
+        return self._owner._forbidden("put")
+
+    def delete(self, *_args, **_kwargs):
+        return self._owner._forbidden("delete")
 
 
 class RecordingClient:
-    def __init__(self, existing=EXISTING_RUNNING, update_response=_DEFAULT_RESPONSE):
+    def __init__(
+        self,
+        existing=EXISTING_RUNNING,
+        update_response=_DEFAULT_RESPONSE,
+        update_error=_DEFAULT_UPDATE_ERROR,
+    ):
         self.existing = existing
         self.update_response = (
             {"workoutId": 123} if update_response is _DEFAULT_RESPONSE else update_response
         )
+        self.update_error = update_error
+        self.calls = []
+        self.forbidden = []
         self.read_ids = []
         self.updates = []
+        self.client = _RawClientTrap(self)
+
+    def _forbidden(self, name):
+        self.forbidden.append(name)
+        raise AssertionError(f"forbidden provider operation: {name}")
 
     def get_workout_by_id(self, workout_id):
+        self.calls.append("get_workout_by_id")
         self.read_ids.append(workout_id)
         return self.existing
 
     def update_workout(self, workout_id, document):
+        self.calls.append("update_workout")
         self.updates.append((workout_id, document))
+        if self.update_error is not _DEFAULT_UPDATE_ERROR:
+            raise self.update_error
         return self.update_response
+
+    def upload_workout(self, *_args, **_kwargs):
+        return self._forbidden("upload_workout")
+
+    def schedule_workout(self, *_args, **_kwargs):
+        return self._forbidden("schedule_workout")
+
+    def unschedule_workout(self, *_args, **_kwargs):
+        return self._forbidden("unschedule_workout")
+
+    def delete_workout(self, *_args, **_kwargs):
+        return self._forbidden("delete_workout")
+
+
+@pytest.mark.parametrize(
+    "forbidden_method",
+    [
+        "upload_workout",
+        "schedule_workout",
+        "unschedule_workout",
+        "delete_workout",
+    ],
+)
+def test_recording_client_traps_forbidden_public_operations(forbidden_method):
+    client = RecordingClient()
+
+    with pytest.raises(AssertionError, match="forbidden provider operation"):
+        getattr(client, forbidden_method)()
+
+    assert client.forbidden == [forbidden_method]
+
+
+@pytest.mark.parametrize("raw_method", ["post", "put", "delete"])
+def test_recording_client_traps_forbidden_raw_operations(raw_method):
+    client = RecordingClient()
+
+    with pytest.raises(AssertionError, match="forbidden provider operation"):
+        getattr(client.client, raw_method)()
+
+    assert client.forbidden == [raw_method]
 
 
 @pytest.mark.parametrize("workout_id", [123, "123", " 123 "])
@@ -82,8 +154,14 @@ def test_accepted_ids_are_normalized_before_read_and_rename(workout_id):
         "schedules_preserved": True,
     }
     assert client.read_ids == [123]
-    assert len(client.updates) == 1
+    assert client.calls == ["get_workout_by_id", "update_workout"]
     assert client.updates[0][0] == 123
+    expected_payload = deepcopy(EXISTING_RUNNING)
+    expected_payload["workoutName"] = "New name"
+    assert client.updates[0][1] == expected_payload
+    assert client.updates[0][1] is not client.existing
+    assert client.existing == EXISTING_RUNNING
+    assert client.forbidden == []
 
 
 @pytest.mark.parametrize(
@@ -116,6 +194,8 @@ def test_invalid_ids_are_rejected_without_provider_access(workout_id):
     assert result == {"status": "error", "message": INVALID_WORKOUT_ID_MESSAGE}
     assert client.read_ids == []
     assert client.updates == []
+    assert client.calls == []
+    assert client.forbidden == []
 
 
 @pytest.mark.parametrize(
@@ -136,6 +216,8 @@ def test_invalid_patch_is_rejected_before_provider_access(kwargs, message):
     assert result == {"status": "error", "workout_id": 123, "message": message}
     assert client.read_ids == []
     assert client.updates == []
+    assert client.calls == []
+    assert client.forbidden == []
 
 
 def test_missing_client_returns_sanitized_read_error():
@@ -170,6 +252,8 @@ def test_invalid_existing_response_never_updates(existing):
         "message": INVALID_EXISTING_WORKOUT_MESSAGE,
     }
     assert client.updates == []
+    assert client.calls == ["get_workout_by_id"]
+    assert client.forbidden == []
 
 
 @pytest.mark.parametrize(
@@ -218,6 +302,8 @@ def test_malformed_existing_step_tree_is_rejected_before_update(mutate_existing)
         "message": INVALID_EXISTING_WORKOUT_MESSAGE,
     }
     assert client.updates == []
+    assert client.calls == ["get_workout_by_id"]
+    assert client.forbidden == []
 
 
 def _existing_repeat_with(end_condition_value, number_of_iterations=None):
@@ -401,6 +487,29 @@ def test_unexpected_prepare_type_error_propagates(monkeypatch):
         update_workout_service(client, 123, name="New name")
 
     assert client.updates == []
+    assert client.calls == ["get_workout_by_id"]
+    assert client.forbidden == []
+
+
+def test_prepare_value_error_is_sanitized_without_update(monkeypatch):
+    client = RecordingClient()
+
+    def fail_prepare(_document):
+        raise ValueError("token=private normalization failure")
+
+    monkeypatch.setattr(service, "prepare_workout_for_upload", fail_prepare)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "private" not in str(result)
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
 
 
 def test_hostile_nested_provider_container_is_sanitized_without_update():
@@ -530,11 +639,14 @@ def test_hostile_provider_containers_never_invoke_protocols_or_echo_secrets(cont
     }
     assert "secret" not in str(result)
     assert client.updates == []
+    assert client.calls == ["get_workout_by_id"]
+    assert client.forbidden == []
 
 
 def test_read_exception_is_sanitized_without_update():
     class RaisingReadClient(RecordingClient):
         def get_workout_by_id(self, _workout_id):
+            self.calls.append("get_workout_by_id")
             raise RuntimeError("token=super-secret")
 
     client = RaisingReadClient()
@@ -548,6 +660,8 @@ def test_read_exception_is_sanitized_without_update():
     }
     assert "secret" not in str(result)
     assert client.updates == []
+    assert client.calls == ["get_workout_by_id"]
+    assert client.forbidden == []
 
 
 def test_internal_existing_validation_error_propagates(monkeypatch):
@@ -562,6 +676,8 @@ def test_internal_existing_validation_error_propagates(monkeypatch):
         update_workout_service(client, 123, name="New name")
 
     assert client.updates == []
+    assert client.calls == ["get_workout_by_id"]
+    assert client.forbidden == []
 
 
 def test_rename_copies_complete_existing_document_without_mutation():
@@ -585,8 +701,9 @@ def test_rename_prepares_the_copied_document_after_applying_name(monkeypatch):
     prepared_inputs = []
 
     def record_prepare(document):
-        prepared_inputs.append(document)
-        return original_prepare(document)
+        prepared = original_prepare(document)
+        prepared_inputs.append((document, prepared))
+        return prepared
 
     monkeypatch.setattr(service, "prepare_workout_for_upload", record_prepare)
 
@@ -594,14 +711,14 @@ def test_rename_prepares_the_copied_document_after_applying_name(monkeypatch):
 
     assert result["status"] == "success"
     assert len(prepared_inputs) == 1
-    assert prepared_inputs[0]["workoutName"] == "Prepared rename"
-    assert prepared_inputs[0] is not existing
+    assert prepared_inputs[0][0]["workoutName"] == "Prepared rename"
+    assert prepared_inputs[0][0] is not existing
+    assert client.updates[0][1] is prepared_inputs[0][1]
     assert existing == EXISTING_RUNNING
 
 
 def test_update_exception_is_ambiguous_and_sanitized():
-    client = RecordingClient()
-    client.update_workout = lambda *_args: (_ for _ in ()).throw(RuntimeError("token=secret"))
+    client = RecordingClient(update_error=RuntimeError("token=secret"))
 
     result = update_workout_service(client, 123, name="New name")
 
@@ -611,9 +728,16 @@ def test_update_exception_is_ambiguous_and_sanitized():
         "message": UPDATE_FAILED_MESSAGE,
         "update_may_have_applied": True,
     }
+    assert "secret" not in str(result)
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert len(client.updates) == 1
+    assert client.forbidden == []
 
 
-@pytest.mark.parametrize("response", [None, [], {}, {"workoutId": 999}, {"workoutId": "not-an-id"}])
+@pytest.mark.parametrize(
+    "response",
+    [None, False, 0, "", [], {}, {"workoutId": 999}, {"workoutId": "not-an-id"}],
+)
 def test_untrusted_update_response_is_partial_success(response):
     client = RecordingClient(update_response=response)
 
@@ -627,6 +751,9 @@ def test_untrusted_update_response_is_partial_success(response):
         "schedules_preserved": True,
         "message": INVALID_UPDATE_RESPONSE_MESSAGE,
     }
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert len(client.updates) == 1
+    assert client.forbidden == []
 
 
 def test_trimmed_ascii_decimal_update_response_id_confirms_success():
@@ -635,6 +762,8 @@ def test_trimmed_ascii_decimal_update_response_id_confirms_success():
     result = update_workout_service(client, 123, name="New name")
 
     assert result["status"] == "success"
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert client.forbidden == []
 
 
 def test_dict_subclass_update_response_is_partial_success_without_protocol_calls():
@@ -664,6 +793,9 @@ def test_dict_subclass_update_response_is_partial_success_without_protocol_calls
         "message": INVALID_UPDATE_RESPONSE_MESSAGE,
     }
     assert "secret" not in str(result)
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert len(client.updates) == 1
+    assert client.forbidden == []
 
 
 def test_public_contract_exports_stable_sport_mapping():
