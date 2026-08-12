@@ -13,6 +13,7 @@ from garmin_mcp.ai_workouts import (
     UPDATE_FAILED_MESSAGE,
     update_workout_service,
 )
+from tests.fixtures.garmin_responses import MOCK_WORKOUT_DETAILS
 
 
 EXISTING_RUNNING = {
@@ -379,6 +380,69 @@ def _rename_existing_with_repeat_end_condition(end_condition):
         repeat["endCondition"] = end_condition
     existing["providerSecret"] = "token=retained-end-condition-secret"
     return existing
+
+
+def _invalid_retained_step_type(existing):
+    existing["providerSecret"] = "token=retained-step-type-secret"
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "retained-step-type-secret" not in str(result)
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
+
+
+def test_rename_accepts_legacy_executable_fixture_step_without_type():
+    existing = deepcopy(MOCK_WORKOUT_DETAILS)
+    existing["workoutId"] = 123
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result["status"] == "success"
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert len(client.updates) == 1
+    assert client.forbidden == []
+
+
+def test_rename_rejects_legacy_executable_step_with_nested_workout_steps():
+    existing = _rename_existing_with_step_end_condition(
+        {"conditionTypeId": 2, "conditionTypeKey": "time"}
+    )
+    step = existing["workoutSegments"][0]["workoutSteps"][0]
+    del step["type"]
+    step["workoutSteps"] = []
+
+    _invalid_retained_step_type(existing)
+
+
+@pytest.mark.parametrize("has_end_condition", [False, True])
+def test_rename_rejects_unknown_retained_step_type(has_end_condition):
+    existing = _rename_existing_with_step_end_condition(
+        {"conditionTypeId": 2, "conditionTypeKey": "time"}
+    )
+    step = existing["workoutSegments"][0]["workoutSteps"][0]
+    step["type"] = "UnknownProviderStepDTO"
+    if not has_end_condition:
+        del step["endCondition"]
+
+    _invalid_retained_step_type(existing)
+
+
+def test_rename_rejects_none_retained_step_type():
+    existing = _rename_existing_with_step_end_condition(
+        {"conditionTypeId": 2, "conditionTypeKey": "time"}
+    )
+    existing["workoutSegments"][0]["workoutSteps"][0]["type"] = None
+
+    _invalid_retained_step_type(existing)
 
 
 @pytest.mark.parametrize(

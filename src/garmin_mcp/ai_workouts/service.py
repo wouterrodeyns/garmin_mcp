@@ -178,34 +178,32 @@ def _is_positive_integer_count(value: Any) -> bool:
 def _has_safe_workout_step_scalars(step: dict[str, Any]) -> bool:
     """Validate only scalar shapes consumed by Taxuspt normalization helpers."""
     end_condition = step.get("endCondition")
-    step_type = step.get("type")
-    if type(step_type) is not str:
+    if "type" not in step:
+        if "workoutSteps" in step:
+            return False
+        step_type = "ExecutableStepDTO"
+    else:
+        step_type = step["type"]
+    if type(step_type) is not str or step_type not in {
+        "ExecutableStepDTO",
+        "RepeatGroupDTO",
+    }:
         return False
-    if step_type in {"ExecutableStepDTO", "RepeatGroupDTO"}:
-        if type(end_condition) is not dict:
-            return False
-        condition_key = end_condition.get("conditionTypeKey")
-        condition_id = end_condition.get("conditionTypeId")
-        if (
-            type(condition_key) is not str
-            or type(condition_id) is not int
-            or END_CONDITION_TYPE_IDS.get(condition_key) != condition_id
-        ):
-            return False
-        if step_type == "RepeatGroupDTO" and (condition_key, condition_id) != (
-            "iterations",
-            7,
-        ):
-            return False
-    if end_condition is not None:
-        if type(end_condition) is not dict:
-            return False
-        condition_key = end_condition.get("conditionTypeKey")
-        condition_id = end_condition.get("conditionTypeId")
-        if condition_key is not None and type(condition_key) is not str:
-            return False
-        if condition_id is not None and type(condition_id) is not int:
-            return False
+    if type(end_condition) is not dict:
+        return False
+    condition_key = end_condition.get("conditionTypeKey")
+    condition_id = end_condition.get("conditionTypeId")
+    if (
+        type(condition_key) is not str
+        or type(condition_id) is not int
+        or END_CONDITION_TYPE_IDS.get(condition_key) != condition_id
+    ):
+        return False
+    if step_type == "RepeatGroupDTO" and (condition_key, condition_id) != (
+        "iterations",
+        7,
+    ):
+        return False
 
     end_condition_value = step.get("endConditionValue")
     if end_condition_value is not None and not _is_finite_number(end_condition_value):
