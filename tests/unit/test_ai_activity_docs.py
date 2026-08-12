@@ -24,6 +24,7 @@ PROFILE_TOOLS = {
     "get_training_context",
     "analyze_activity",
     "create_workout",
+    "update_workout",
     "get_activities",
     "get_activities_by_date",
     "get_activity",

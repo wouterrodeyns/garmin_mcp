@@ -312,6 +312,8 @@ def test_ai_workouts_docs_protects_pinned_ids_and_available_update_api():
     ):
         assert expected in pinned
     assert "no update method" not in pinned
+    assert "this fork exposes the ai-facing update tool" in pinned
+    assert "does not expose an ai-facing update tool" not in pinned
 
 
 def test_ai_workouts_docs_update_uses_hidden_whole_document_put():

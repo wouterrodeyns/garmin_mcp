@@ -160,8 +160,8 @@ tools.
 This seam targets `garminconnect==0.3.10`. That upstream client provides
 `upload_workout`, `schedule_workout`, `unschedule_workout`, and
 `delete_workout`. It also provides a whole-document `update_workout` method,
-but this fork does not expose an AI-facing update tool yet. A calendar schedule
-entry ID is distinct from the workout ID: unscheduling needs the
+and this fork exposes the AI-facing update tool. A calendar schedule entry ID
+is distinct from the workout ID: unscheduling needs the
 `scheduled_workout_id`, while deletion needs the `workout_id`.
 
 The primary references are the [python-garminconnect 0.3.10 package on
