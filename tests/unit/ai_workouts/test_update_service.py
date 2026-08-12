@@ -359,6 +359,114 @@ def _existing_repeat_with(end_condition_value, number_of_iterations=None):
     return existing
 
 
+def _rename_existing_with_step_end_condition(end_condition):
+    existing = deepcopy(EXISTING_RUNNING)
+    step = existing["workoutSegments"][0]["workoutSteps"][0]
+    if end_condition is None:
+        del step["endCondition"]
+    else:
+        step["endCondition"] = end_condition
+    existing["providerSecret"] = "token=retained-end-condition-secret"
+    return existing
+
+
+def _rename_existing_with_repeat_end_condition(end_condition):
+    existing = _existing_repeat_with(2.0, number_of_iterations=2)
+    repeat = existing["workoutSegments"][0]["workoutSteps"][0]
+    if end_condition is None:
+        del repeat["endCondition"]
+    else:
+        repeat["endCondition"] = end_condition
+    existing["providerSecret"] = "token=retained-end-condition-secret"
+    return existing
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        pytest.param(_rename_existing_with_step_end_condition(None), id="executable-absent"),
+        pytest.param(
+            _rename_existing_with_step_end_condition({"conditionTypeKey": "time"}),
+            id="executable-missing-id",
+        ),
+        pytest.param(
+            _rename_existing_with_step_end_condition({"conditionTypeId": 2}),
+            id="executable-missing-key",
+        ),
+        pytest.param(
+            _rename_existing_with_step_end_condition(
+                {"conditionTypeId": 3, "conditionTypeKey": "time"}
+            ),
+            id="executable-mismatched-pair",
+        ),
+        pytest.param(_rename_existing_with_repeat_end_condition(None), id="repeat-absent"),
+        pytest.param(
+            _rename_existing_with_repeat_end_condition({"conditionTypeKey": "iterations"}),
+            id="repeat-missing-id",
+        ),
+        pytest.param(
+            _rename_existing_with_repeat_end_condition({"conditionTypeId": 7}),
+            id="repeat-missing-key",
+        ),
+        pytest.param(
+            _rename_existing_with_repeat_end_condition(
+                {"conditionTypeId": 2, "conditionTypeKey": "time"}
+            ),
+            id="repeat-non-iterations-pair",
+        ),
+    ],
+)
+def test_rename_rejects_retained_steps_without_canonical_end_condition(existing):
+    client = RecordingClient(existing=existing)
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "retained-end-condition-secret" not in str(result)
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
+
+
+@pytest.mark.parametrize(
+    "end_condition",
+    [
+        pytest.param({"conditionTypeId": 1, "conditionTypeKey": "lap.button"}, id="lap"),
+        pytest.param({"conditionTypeId": 2, "conditionTypeKey": "time"}, id="time"),
+        pytest.param({"conditionTypeId": 3, "conditionTypeKey": "distance"}, id="distance"),
+        pytest.param({"conditionTypeId": 10, "conditionTypeKey": "reps"}, id="reps"),
+    ],
+)
+def test_rename_accepts_compiler_supported_executable_end_conditions(end_condition):
+    client = RecordingClient(existing=_rename_existing_with_step_end_condition(end_condition))
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result["status"] == "success"
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert len(client.updates) == 1
+    assert client.forbidden == []
+
+
+def test_rename_accepts_repeat_group_with_canonical_iterations_end_condition():
+    client = RecordingClient(
+        existing=_rename_existing_with_repeat_end_condition(
+            {"conditionTypeId": 7, "conditionTypeKey": "iterations"}
+        )
+    )
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result["status"] == "success"
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert len(client.updates) == 1
+    assert client.forbidden == []
+
+
 @pytest.mark.parametrize(
     "existing",
     [

@@ -6,7 +6,11 @@ from copy import deepcopy
 import math
 from typing import Any
 
-from garmin_mcp.workouts import prepare_workout_for_upload, schedule_workout_for_date
+from garmin_mcp.workouts import (
+    END_CONDITION_TYPE_IDS,
+    prepare_workout_for_upload,
+    schedule_workout_for_date,
+)
 
 from .compiler import compile_workout
 from .schema import validate_workout
@@ -162,6 +166,23 @@ def _is_finite_number(value: Any) -> bool:
 def _has_safe_workout_step_scalars(step: dict[str, Any]) -> bool:
     """Validate only scalar shapes consumed by Taxuspt normalization helpers."""
     end_condition = step.get("endCondition")
+    step_type = step.get("type")
+    if step_type in {"ExecutableStepDTO", "RepeatGroupDTO"}:
+        if type(end_condition) is not dict:
+            return False
+        condition_key = end_condition.get("conditionTypeKey")
+        condition_id = end_condition.get("conditionTypeId")
+        if (
+            type(condition_key) is not str
+            or type(condition_id) is not int
+            or END_CONDITION_TYPE_IDS.get(condition_key) != condition_id
+        ):
+            return False
+        if step_type == "RepeatGroupDTO" and (condition_key, condition_id) != (
+            "iterations",
+            7,
+        ):
+            return False
     if end_condition is not None:
         if type(end_condition) is not dict:
             return False
