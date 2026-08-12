@@ -69,6 +69,18 @@ def test_ai_workouts_docs_covers_threshold_schema_and_partial_success():
     assert "garminconnect==0.3.10" in SECTIONS["pinned api assumptions"]
 
 
+def test_ai_workouts_docs_prevents_duplicate_create_on_schedule_partial_success():
+    call = SECTIONS["what the call does"].lower()
+    for expected in (
+        "do not rerun `create_workout`",
+        "could duplicate the template",
+        "retry only `schedule_workout`",
+        "returned `workout_id`",
+        "requested_date",
+    ):
+        assert expected in call
+
+
 def test_ai_workouts_docs_protects_schema_cardinality_and_strength_limitations():
     create = SECTIONS["create one workout"]
     create_lower = create.lower()

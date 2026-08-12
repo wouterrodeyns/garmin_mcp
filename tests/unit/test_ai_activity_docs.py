@@ -328,3 +328,11 @@ def test_current_docs_describe_three_high_level_coaching_roles():
         assert phrase in readme
     assert "two high-level tools" not in readme
     assert "two flagship tools" not in training
+
+
+def test_activity_doc_describes_create_and_update_as_workout_hands():
+    activity = " ".join(_read(DOCS_PATH).lower().split())
+    assert "create_workout" in activity
+    assert "update_workout" in activity
+    assert "hands/write operation" not in activity
+    assert "workout hands" in activity or "hands/write operations" in activity

@@ -102,8 +102,11 @@ The service follows this sequence:
 Creation is intentionally non-transactional. A scheduling failure retains the
 uploaded workout and never auto-deletes it; the response is
 `partial_success` with the workout ID and scheduling error so an AI coach can
-retry or explain what happened. Partial results use `requested_date` to avoid
-claiming that Garmin scheduled the workout when the calendar operation failed.
+retry or explain what happened. Do not rerun `create_workout` after this
+response because it could duplicate the template. Retry only `schedule_workout`
+with the returned `workout_id` and `requested_date`.
+Partial results use `requested_date` to avoid claiming that Garmin scheduled
+the workout when the calendar operation failed.
 
 Typical concise responses are:
 

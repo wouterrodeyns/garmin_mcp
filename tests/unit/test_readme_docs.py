@@ -175,6 +175,14 @@ def test_readme_pins_thirteen_tools_and_in_place_update_semantics():
     assert "denylist is ignored while the explicit allowlist is active" in setup
 
 
+def test_setup_doc_describes_create_and_update_as_workout_hands():
+    setup = " ".join(_setup().lower().split())
+    assert "create_workout" in setup
+    assert "update_workout" in setup
+    assert "workout creation is the coach's hands/write operation" not in setup
+    assert "workout creation and in-place update" in setup
+
+
 def test_readme_quick_start_uses_fork_preauth_and_secret_free_config():
     quick_start = _section(_readme(), "Claude Desktop quick start")
     normalized = " ".join(quick_start.split())

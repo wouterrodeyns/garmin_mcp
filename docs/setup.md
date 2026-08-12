@@ -130,8 +130,9 @@ precedence:
 See [training context](ai-training.md), [activity analysis](ai-activity.md), and
 [AI-friendly workouts](ai-workouts.md) for the high-level coaching tools. The
 training context is the coach's eyes/current context, activity analysis is the
-completed-session feedback read, and workout creation is the coach's hands/write
-operation. Activity analysis is read-only and does not replace the low-level
+completed-session feedback read, and workout creation and in-place update
+(`create_workout` and `update_workout`) are the coach's hands/write operations.
+Activity analysis is read-only and does not replace the low-level
 `get_activity` compatibility/targeted read.
 
 Other runtime variables include:
