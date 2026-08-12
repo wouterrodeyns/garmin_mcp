@@ -163,6 +163,18 @@ def _is_finite_number(value: Any) -> bool:
     return type(value) is int or (type(value) is float and math.isfinite(value))
 
 
+def _is_positive_integer_count(value: Any) -> bool:
+    return (
+        (type(value) is int and value > 0)
+        or (
+            type(value) is float
+            and math.isfinite(value)
+            and value > 0
+            and value.is_integer()
+        )
+    )
+
+
 def _has_safe_workout_step_scalars(step: dict[str, Any]) -> bool:
     """Validate only scalar shapes consumed by Taxuspt normalization helpers."""
     end_condition = step.get("endCondition")
@@ -234,19 +246,21 @@ def _has_safe_workout_step_scalars(step: dict[str, Any]) -> bool:
         if value is not None and not _is_finite_number(value):
             return False
 
-    if step.get("type") == "RepeatGroupDTO":
+    if step_type == "RepeatGroupDTO":
+        if end_condition_value is not None and not _is_positive_integer_count(
+            end_condition_value
+        ):
+            return False
         if "numberOfIterations" in step:
             number_of_iterations = step["numberOfIterations"]
             if type(number_of_iterations) is not int or number_of_iterations <= 0:
                 return False
-        elif (
-            not _is_finite_number(end_condition_value)
-            or end_condition_value <= 0
-            or (
-                type(end_condition_value) is float
-                and not end_condition_value.is_integer()
-            )
-        ):
+            if (
+                end_condition_value is not None
+                and number_of_iterations != end_condition_value
+            ):
+                return False
+        elif not _is_positive_integer_count(end_condition_value):
             return False
     return True
 

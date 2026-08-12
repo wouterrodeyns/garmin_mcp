@@ -491,6 +491,72 @@ def test_rename_accepts_repeat_group_with_canonical_iterations_end_condition():
     assert client.forbidden == []
 
 
+def _rename_existing_with_repeat_counts(end_condition_value, number_of_iterations):
+    existing = _existing_repeat_with(end_condition_value, number_of_iterations)
+    existing["providerSecret"] = "token=retained-repeat-count-secret"
+    return existing
+
+
+@pytest.mark.parametrize(
+    ("end_condition_value", "number_of_iterations"),
+    [
+        pytest.param(2, 3, id="mismatch"),
+        pytest.param(0, 2, id="zero"),
+        pytest.param(-1, 2, id="negative"),
+        pytest.param(1.5, 2, id="fractional"),
+        pytest.param(True, 2, id="bool"),
+        pytest.param(float("inf"), 2, id="infinite"),
+    ],
+)
+def test_rename_rejects_invalid_retained_repeat_counts(
+    end_condition_value, number_of_iterations
+):
+    client = RecordingClient(
+        existing=_rename_existing_with_repeat_counts(
+            end_condition_value, number_of_iterations
+        )
+    )
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result == {
+        "status": "error",
+        "workout_id": 123,
+        "message": INVALID_EXISTING_WORKOUT_MESSAGE,
+    }
+    assert "retained-repeat-count-secret" not in str(result)
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
+
+
+@pytest.mark.parametrize(
+    "end_condition_value",
+    [pytest.param(2, id="integer"), pytest.param(2.0, id="float")],
+)
+def test_rename_accepts_equal_retained_repeat_counts(end_condition_value):
+    client = RecordingClient(existing=_existing_repeat_with(end_condition_value, 2))
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result["status"] == "success"
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert len(client.updates) == 1
+    assert client.forbidden == []
+
+
+def test_rename_accepts_retained_repeat_end_condition_value_for_taxuspt_backfill():
+    client = RecordingClient(existing=_existing_repeat_with(2.0))
+
+    result = update_workout_service(client, 123, name="New name")
+
+    assert result["status"] == "success"
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    repeat = client.updates[0][1]["workoutSegments"][0]["workoutSteps"][0]
+    assert repeat["numberOfIterations"] == 2
+    assert client.forbidden == []
+
+
 @pytest.mark.parametrize(
     "existing",
     [
