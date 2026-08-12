@@ -340,6 +340,8 @@ def update_workout_service(
 
     try:
         existing = client.get_workout_by_id(normalized_id)
+    except AssertionError:
+        raise
     except Exception:
         return {
             "status": "error",
@@ -378,6 +380,8 @@ def update_workout_service(
 
     try:
         updated = client.update_workout(normalized_id, prepared)
+    except AssertionError:
+        raise
     except Exception:
         return {
             "status": "error",

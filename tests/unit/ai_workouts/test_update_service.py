@@ -664,6 +664,22 @@ def test_read_exception_is_sanitized_without_update():
     assert client.forbidden == []
 
 
+def test_read_assertion_error_propagates_without_update():
+    class AssertionReadClient(RecordingClient):
+        def get_workout_by_id(self, _workout_id):
+            self.calls.append("get_workout_by_id")
+            raise AssertionError("internal read invariant")
+
+    client = AssertionReadClient()
+
+    with pytest.raises(AssertionError, match="internal read invariant"):
+        update_workout_service(client, 123, name="New name")
+
+    assert client.calls == ["get_workout_by_id"]
+    assert client.updates == []
+    assert client.forbidden == []
+
+
 def test_internal_existing_validation_error_propagates(monkeypatch):
     client = RecordingClient()
 
@@ -729,6 +745,17 @@ def test_update_exception_is_ambiguous_and_sanitized():
         "update_may_have_applied": True,
     }
     assert "secret" not in str(result)
+    assert client.calls == ["get_workout_by_id", "update_workout"]
+    assert len(client.updates) == 1
+    assert client.forbidden == []
+
+
+def test_update_assertion_error_propagates_without_retry():
+    client = RecordingClient(update_error=AssertionError("internal update invariant"))
+
+    with pytest.raises(AssertionError, match="internal update invariant"):
+        update_workout_service(client, 123, name="New name")
+
     assert client.calls == ["get_workout_by_id", "update_workout"]
     assert len(client.updates) == 1
     assert client.forbidden == []
