@@ -42,3 +42,10 @@ def test_lock_contains_fixed_dependency_versions() -> None:
     assert _locked_version("garminconnect") == "0.3.10"
     assert _version_tuple(_locked_version("click")) >= (8, 3, 3)
     assert _version_tuple(_locked_version("h11")) >= (0, 16, 0)
+
+
+def test_project_pins_fitdecode_without_replacing_fitparse() -> None:
+    dependencies = PYPROJECT["project"]["dependencies"]
+    assert "fitdecode==0.11.0" in dependencies
+    assert "fitparse>=1.2.0" in dependencies
+    assert _locked_version("fitdecode") == "0.11.0"
