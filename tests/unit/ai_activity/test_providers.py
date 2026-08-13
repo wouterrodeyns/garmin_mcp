@@ -177,6 +177,14 @@ def test_download_original_fit_uses_only_original_format_once() -> None:
     assert client.calls == [(42, Garmin.ActivityDownloadFormat.ORIGINAL)]
 
 
+def test_original_fit_download_is_frozen_with_exact_fields() -> None:
+    result = OriginalFitDownload(b"fit", None)
+
+    assert set(result.__dataclass_fields__) == {"archive", "failure_code"}
+    with pytest.raises(FrozenInstanceError):
+        result.archive = b"changed"
+
+
 @pytest.mark.parametrize("payload", [None, "zip", [], memoryview(b"xyz")[::2]])
 def test_download_original_fit_rejects_unsupported_payload_without_copying(
     payload: object,
@@ -192,17 +200,75 @@ def test_download_original_fit_rejects_empty_payload() -> None:
         assert result == OriginalFitDownload(None, "invalid_download_payload")
 
 
-@pytest.mark.parametrize("payload", [b"fit", bytearray(b"fit"), memoryview(b"fit")])
-def test_download_original_fit_accepts_supported_payload_forms(payload: object) -> None:
-    result = download_original_fit(DownloadOnlyClient(payload), 42)
+def test_download_original_fit_accepts_bytes_as_exact_bytes() -> None:
+    result = download_original_fit(DownloadOnlyClient(b"fit"), 42)
 
     assert result == OriginalFitDownload(b"fit", None)
+    assert type(result.archive) is bytes
+
+
+def test_download_original_fit_copies_bytearray_before_source_mutation() -> None:
+    payload = bytearray(b"fit")
+
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+    payload[:] = b"bad"
+
+    assert result == OriginalFitDownload(b"fit", None)
+    assert type(result.archive) is bytes
+
+
+def test_download_original_fit_copies_memoryview_before_source_mutation() -> None:
+    source = bytearray(b"fit")
+    payload = memoryview(source)
+
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+    source[:] = b"bad"
+
+    assert result == OriginalFitDownload(b"fit", None)
+    assert type(result.archive) is bytes
+
+
+def test_download_original_fit_rejects_released_memoryview_without_exception_text() -> None:
+    payload = memoryview(b"fit")
+    payload.release()
+
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+
+    assert result == OriginalFitDownload(None, "invalid_download_payload")
+    assert "ValueError" not in repr(result)
+
+
+class HostileBytes(bytes):
+    def __len__(self) -> int:
+        raise AssertionError("hostile bytes length hook invoked")
+
+
+class HostileBytearray(bytearray):
+    def __len__(self) -> int:
+        raise AssertionError("hostile bytearray length hook invoked")
+
+    def __bytes__(self) -> bytes:
+        raise AssertionError("hostile bytearray bytes hook invoked")
+
+
+@pytest.mark.parametrize("payload", [HostileBytes(b"fit"), HostileBytearray(b"fit")])
+def test_download_original_fit_rejects_bytes_subclasses_without_invoking_hooks(
+    payload: object,
+) -> None:
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+
+    assert result == OriginalFitDownload(None, "invalid_download_payload")
 
 
 def test_download_original_fit_rejects_before_copying_an_oversized_mutable_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(providers, "MAX_ORIGINAL_DOWNLOAD_BYTES", 3)
+    monkeypatch.setattr(
+        providers,
+        "_archive_bytes",
+        lambda _payload: (_ for _ in ()).throw(AssertionError("copy invoked")),
+    )
     payload = bytearray(b"1234")
 
     result = download_original_fit(DownloadOnlyClient(payload), 42)

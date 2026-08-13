@@ -39,8 +39,21 @@ def _archive_bytes(payload: Any) -> bytes | None:
         return payload
     if type(payload) is bytearray:
         return bytes(payload)
-    if type(payload) is memoryview and payload.contiguous and payload.itemsize == 1:
-        return payload.tobytes()
+    if type(payload) is memoryview:
+        try:
+            if payload.contiguous and payload.itemsize == 1:
+                return payload.tobytes()
+        except ValueError:
+            return None
+    return None
+
+
+def _memoryview_size(payload: memoryview) -> int | None:
+    try:
+        if payload.contiguous and payload.itemsize == 1:
+            return payload.nbytes
+    except ValueError:
+        return None
     return None
 
 
@@ -58,8 +71,10 @@ def download_original_fit(client: Any, activity_id: int) -> OriginalFitDownload:
         payload_size = len(payload)
     elif type(payload) is bytearray:
         payload_size = len(payload)
-    elif type(payload) is memoryview and payload.contiguous and payload.itemsize == 1:
-        payload_size = payload.nbytes
+    elif type(payload) is memoryview:
+        payload_size = _memoryview_size(payload)
+        if payload_size is None:
+            return OriginalFitDownload(None, "invalid_download_payload")
     else:
         return OriginalFitDownload(None, "invalid_download_payload")
 
