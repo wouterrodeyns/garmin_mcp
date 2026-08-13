@@ -245,11 +245,8 @@ def _validate_member_integrity(archive: bytes, entry: _ValidatedLocalEntry, outp
     if member.uncompressed_size > output_limit:
         return False
     if member.name.endswith("/"):
-        return (
-            member.compressed_size == 0
-            and member.uncompressed_size == 0
-            and entry.crc == 0
-        )
+        if member.uncompressed_size != 0 or entry.crc != 0:
+            return False
     if member.compression == zipfile.ZIP_STORED:
         if member.compressed_size != member.uncompressed_size:
             return False

@@ -637,6 +637,14 @@ def test_unix_regular_files_and_slash_marked_directories_are_allowed():
     assert _result(buffer.getvalue()).failure_code == "fit_parse_failed"
 
 
+def test_python_deflated_empty_directory_is_a_valid_auxiliary_member():
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("activity.fit", b"x")
+        archive.writestr("folder/", b"")
+    assert _result(buffer.getvalue()).failure_code == "fit_parse_failed"
+
+
 @pytest.mark.parametrize(
     "error_type",
     [RuntimeError, OSError, EOFError, NotImplementedError, zlib.error],
