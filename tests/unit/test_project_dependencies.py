@@ -37,6 +37,13 @@ def test_project_uses_standard_development_dependency_group() -> None:
     assert "dev-dependencies" not in PYPROJECT.get("tool", {}).get("uv", {})
 
 
+def test_hatch_build_excludes_tests_from_sdist_only() -> None:
+    build_targets = PYPROJECT["tool"]["hatch"]["build"]["targets"]
+
+    assert "/tests" in build_targets["sdist"]["exclude"]
+    assert build_targets["wheel"]["packages"] == ["src/garmin_mcp"]
+
+
 def test_lock_contains_fixed_dependency_versions() -> None:
     assert LOCK["requires-python"] == ">=3.12"
     assert _locked_version("garminconnect") == "0.3.10"
