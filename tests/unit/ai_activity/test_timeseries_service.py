@@ -15,6 +15,8 @@ from garmin_mcp.ai_activity.timeseries import FIT_EPOCH, ParseResult, RecordFact
 
 MAX_ACTIVITY_ID = 9_007_199_254_740_991
 MAX_FIT_ELAPSED_SECONDS = 4_026_531_838
+MAX_RECORD_MESSAGES = 100_000
+MAX_RETURNED_POINTS = 600
 
 
 ERRORS = {
@@ -146,6 +148,29 @@ def _empty_window_result(*, next_start_seconds: int | None = None) -> WindowResu
         series=_empty_series(),
         next_start_seconds=next_start_seconds,
     )
+
+
+def _one_point_window_result(*, next_start_seconds: int | None = None) -> WindowResult:
+    result = _empty_window_result(next_start_seconds=next_start_seconds)
+    result.sampling.update(
+        {
+            "source_records": 1,
+            "returned_points": 1,
+            "observed_median_interval_seconds": 1.0,
+            "irregular": False,
+        }
+    )
+    result.series["elapsed_seconds"] = [0]
+    result.series["timestamp"] = ["1998-07-03T21:24:16.000000Z"]
+    result.series["sample_count"] = [1]
+    result.series["heart_rate_bpm"] = {"average": [120.0], "minimum": [120], "maximum": [120]}
+    result.series["speed_mps"] = {"average": [2.0]}
+    result.series["pace_seconds_per_km"] = {"average": [500], "fastest": [500], "slowest": [500]}
+    result.series["cadence_rpm"] = {"average": [90.0]}
+    result.series["power_w"] = {"average": [200.0]}
+    result.series["altitude_m"] = {"average": [10.0]}
+    result.series["grade_pct"] = {"average": [1.0]}
+    return result
 
 
 def _expected_empty(
@@ -914,6 +939,221 @@ def test_corrupt_trusted_window_result_is_a_visible_contract_failure(
 ):
     _, _, _, reduced = recorded_success_seams
     reduced.series["elapsed_seconds"] = [corruption]
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    with pytest.raises((TypeError, ValueError)):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "next_start_seconds",
+    [float("nan"), True, 1.0, "1", -1, MAX_FIT_ELAPSED_SECONDS + 1],
+)
+def test_corrupt_trusted_cursor_values_are_visible_contract_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    service_module,
+    recorded_success_seams,
+    next_start_seconds: object,
+):
+    monkeypatch.setattr(
+        service_module,
+        "reduce_records",
+        lambda records, start, duration, resolution: _one_point_window_result(
+            next_start_seconds=next_start_seconds  # type: ignore[arg-type]
+        ),
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+
+@pytest.mark.parametrize("next_start_seconds", [None, 0, MAX_FIT_ELAPSED_SECONDS])
+def test_trusted_cursor_accepts_only_none_or_exact_fit_elapsed_range(
+    monkeypatch: pytest.MonkeyPatch,
+    service_module,
+    recorded_success_seams,
+    next_start_seconds: int | None,
+):
+    monkeypatch.setattr(
+        service_module,
+        "reduce_records",
+        lambda records, start, duration, resolution: _one_point_window_result(
+            next_start_seconds=next_start_seconds
+        ),
+    )
+
+    response = service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+    if next_start_seconds is None:
+        assert "next_start_seconds" not in response["window"]
+    else:
+        assert response["window"]["next_start_seconds"] == next_start_seconds
+        assert type(response["window"]["next_start_seconds"]) is int
+
+
+@pytest.mark.parametrize("malformed_record_count", [True, 1.0, "1", object(), -1, MAX_RECORD_MESSAGES + 1])
+def test_invalid_trusted_malformed_record_counts_fail_before_reduction_or_warning_copy(
+    monkeypatch: pytest.MonkeyPatch,
+    service_module,
+    recorded_success_seams,
+    malformed_record_count: object,
+):
+    calls, _, _, _ = recorded_success_seams
+
+    def parse(payload: bytes) -> ParseResult:
+        calls.append(("parse", (payload,)))
+        return ParseResult((object(),), malformed_record_count, None)  # type: ignore[arg-type]
+
+    def reduce(records: tuple[object, ...], start: int, duration: int, resolution: int) -> WindowResult:
+        calls.append(("reduce", (records, start, duration, resolution)))
+        return _one_point_window_result()
+
+    monkeypatch.setattr(service_module, "parse_original_fit", parse)
+    monkeypatch.setattr(service_module, "reduce_records", reduce)
+
+    with pytest.raises((TypeError, ValueError)):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+    assert [name for name, _ in calls] == ["download", "parse"]
+
+
+def test_valid_malformed_record_count_is_copied_to_the_warning_as_an_exact_int(
+    monkeypatch: pytest.MonkeyPatch, service_module, recorded_success_seams
+):
+    monkeypatch.setattr(service_module, "parse_original_fit", lambda archive: ParseResult((object(),), 3, None))
+    monkeypatch.setattr(
+        service_module,
+        "reduce_records",
+        lambda records, start, duration, resolution: _one_point_window_result(),
+    )
+
+    response = service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+    assert response["warnings"][0]["count"] == 3
+    assert type(response["warnings"][0]["count"]) is int
+
+
+@pytest.mark.parametrize(
+    ("sampling_key", "value"),
+    [
+        ("source_records", True),
+        ("source_records", 1.0),
+        ("source_records", "1"),
+        ("source_records", -1),
+        ("returned_points", True),
+        ("returned_points", 1.0),
+        ("returned_points", "1"),
+        ("returned_points", -1),
+        ("returned_points", MAX_RETURNED_POINTS + 1),
+    ],
+)
+def test_trusted_sampling_counts_must_be_exact_nonnegative_bounded_ints(
+    monkeypatch: pytest.MonkeyPatch,
+    service_module,
+    recorded_success_seams,
+    sampling_key: str,
+    value: object,
+):
+    reduced = _one_point_window_result()
+    reduced.sampling[sampling_key] = value
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    with pytest.raises((TypeError, ValueError)):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("elapsed_seconds",),
+        ("timestamp",),
+        ("sample_count",),
+        ("heart_rate_bpm", "average"),
+        ("heart_rate_bpm", "minimum"),
+        ("heart_rate_bpm", "maximum"),
+        ("speed_mps", "average"),
+        ("pace_seconds_per_km", "average"),
+        ("pace_seconds_per_km", "fastest"),
+        ("pace_seconds_per_km", "slowest"),
+        ("cadence_rpm", "average"),
+        ("power_w", "average"),
+        ("altitude_m", "average"),
+        ("grade_pct", "average"),
+    ],
+)
+def test_every_trusted_series_leaf_array_must_match_returned_point_count(
+    monkeypatch: pytest.MonkeyPatch,
+    service_module,
+    recorded_success_seams,
+    path: tuple[str, ...],
+):
+    reduced = _one_point_window_result()
+    leaf: Any = reduced.series
+    for key in path:
+        leaf = leaf[key]
+    leaf.clear()
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    with pytest.raises(ValueError):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+
+def test_trusted_series_rejects_a_601_item_array_even_when_returned_points_is_bounded(
+    monkeypatch: pytest.MonkeyPatch, service_module, recorded_success_seams
+):
+    reduced = _one_point_window_result()
+    reduced.sampling["returned_points"] = MAX_RETURNED_POINTS
+    reduced.series["elapsed_seconds"] = list(range(MAX_RETURNED_POINTS + 1))
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    with pytest.raises(ValueError):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("sampling_key", "value"),
+    [
+        ("irregular", 1),
+        ("observed_median_interval_seconds", True),
+        ("observed_median_interval_seconds", "1"),
+        ("observed_median_interval_seconds", -1),
+        ("observed_median_interval_seconds", -1.0),
+        ("observed_median_interval_seconds", float("nan")),
+    ],
+)
+def test_trusted_sampling_booleans_and_median_interval_have_exact_bounded_types(
+    monkeypatch: pytest.MonkeyPatch,
+    service_module,
+    recorded_success_seams,
+    sampling_key: str,
+    value: object,
+):
+    reduced = _one_point_window_result()
+    reduced.sampling[sampling_key] = value
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    with pytest.raises((TypeError, ValueError)):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+
+@pytest.mark.parametrize("median", [None, 0, 0.0, 1, 1.0])
+def test_trusted_sampling_median_accepts_none_or_finite_nonnegative_exact_numbers(
+    monkeypatch: pytest.MonkeyPatch, service_module, recorded_success_seams, median: int | float | None
+):
+    reduced = _one_point_window_result()
+    reduced.sampling["observed_median_interval_seconds"] = median
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    response = service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+    assert response["sampling"]["observed_median_interval_seconds"] == median
+    assert type(response["sampling"]["observed_median_interval_seconds"]) is type(median)
+
+
+def test_trusted_availability_values_must_be_exact_bools(
+    monkeypatch: pytest.MonkeyPatch, service_module, recorded_success_seams
+):
+    reduced = _one_point_window_result()
+    reduced.availability["heart_rate_bpm"] = 1
     monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
 
     with pytest.raises(TypeError):
