@@ -684,7 +684,6 @@ def _is_compressed_timestamp(field: object, time_offset: object) -> bool:
         and field.field_def is None
         and field.field is fitdecode.profile.FIELD_TYPE_TIMESTAMP
         and field.parent_field is None
-        and field.is_expanded is False
     )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import fitdecode
@@ -69,7 +70,7 @@ def compressed_timestamp(raw_value, value=None, **overrides):
         field_def=overrides.pop("field_def", None),
         field=overrides.pop("field", fitdecode.profile.FIELD_TYPE_TIMESTAMP),
         parent_field=overrides.pop("parent_field", None),
-        is_expanded=overrides.pop("is_expanded", False),
+        is_expanded=overrides.pop("is_expanded", True),
         raw_value=raw_value,
         value=value,
         **overrides,
@@ -384,12 +385,31 @@ def test_compressed_timestamp_is_accepted_only_via_exact_public_identity_path(mo
     assert result.records[0].raw_timestamp_seconds == 0x10000000
 
 
+def test_compressed_timestamp_fake_matches_fitdecode_public_field_data_shape():
+    raw_timestamp = 0x10000000
+    actual = fitdecode.types.FieldData(
+        None,
+        fitdecode.profile.FIELD_TYPE_TIMESTAMP,
+        None,
+        fitdecode.profile.FIELD_TYPE_TIMESTAMP.render(raw_timestamp),
+        raw_timestamp,
+    )
+    fitdecode.processors.DefaultDataProcessor().on_process_type(None, actual)
+    fake = compressed_timestamp(raw_timestamp)
+
+    assert actual.field_def is fake.field_def is None
+    assert actual.field is fake.field is fitdecode.profile.FIELD_TYPE_TIMESTAMP
+    assert actual.parent_field is fake.parent_field is None
+    assert actual.is_expanded is fake.is_expanded is True
+    assert actual.raw_value == fake.raw_value == raw_timestamp
+    assert actual.value == fake.value == FIT_EPOCH + timedelta(seconds=raw_timestamp)
+
+
 @pytest.mark.parametrize(
     "field,time_offset",
     [
         (compressed_timestamp(0x10000000, field=object()), 0),
         (compressed_timestamp(0x10000000, parent_field=object()), 0),
-        (compressed_timestamp(0x10000000, is_expanded=True), 0),
         (compressed_timestamp(0x10000000, field_def=FakeFieldDef(1, FakeBaseType(0x86), 4)), 0),
         (compressed_timestamp(0x10000000), None),
     ],
@@ -474,13 +494,31 @@ def test_unknown_frame_type_is_safely_rejected(monkeypatch, fit_archive):
 
 def test_frame_limit_counts_all_known_frame_types_before_filtering(monkeypatch, fit_archive):
     monkeypatch.setattr(timeseries, "MAX_FIT_FRAMES", 4, raising=False)
+    consumed: list[int] = []
+
+    def frames():
+        for index in range(5):
+            consumed.append(index)
+            if index == 0:
+                yield header()
+            elif index == 1:
+                yield definition()
+            elif index == 2:
+                yield crc()
+            elif index == 3:
+                yield fake_record([], global_mesg_num=19)
+            else:
+                yield crc()
+        raise AssertionError("reader advanced after the over-limit frame")
+
     result, _reader = _parse(
         monkeypatch,
         fit_archive,
-        [header(), definition(), crc(), fake_record([], global_mesg_num=19), crc()],
+        frames(),
     )
 
     assert result == timeseries.ParseResult((), 0, "frame_limit_exceeded")
+    assert consumed == [0, 1, 2, 3, 4]
 
 
 def test_second_header_discards_collected_facts_as_chained_fit(monkeypatch, fit_archive):
@@ -506,21 +544,200 @@ def test_definition_field_limit_counts_standard_and_developer_defs(monkeypatch, 
 
 def test_record_limit_counts_every_record_message_before_extraction(monkeypatch, fit_archive):
     monkeypatch.setattr(timeseries, "MAX_RECORD_MESSAGES", 2, raising=False)
+    consumed: list[int] = []
+
+    def frames():
+        yield header()
+        for index in range(3):
+            consumed.append(index)
+            if index == 0:
+                yield fake_record([])
+            elif index == 1:
+                yield fake_record([direct_timestamp(0x10000000), direct_timestamp(0x10000000)])
+            else:
+                yield fake_record([direct_timestamp(0x10000001)])
+        raise AssertionError("reader advanced after the over-limit record")
+
     result, _reader = _parse(
         monkeypatch,
         fit_archive,
-        [
-            header(),
-            fake_record([]),
-            fake_record([direct_timestamp(0x10000000), direct_timestamp(0x10000000)]),
-            fake_record([direct_timestamp(0x10000001)]),
-        ],
+        frames(),
     )
 
     assert result == timeseries.ParseResult((), 0, "record_limit_exceeded")
+    assert consumed == [0, 1, 2]
 
 
 def test_production_decoder_limits_are_pinned():
     assert timeseries.MAX_FIT_FRAMES == 200_000
     assert timeseries.MAX_RECORD_MESSAGES == 100_000
     assert timeseries.MAX_FIELDS_PER_DEFINITION == 128
+
+
+@pytest.mark.parametrize(
+    "field_name,def_num,base_identifier,size,wrong_part",
+    [
+        ("timestamp", 253, 0x86, 4, "def_num"),
+        ("timestamp", 253, 0x86, 4, "base_identifier"),
+        ("timestamp", 253, 0x86, 4, "size"),
+        ("heart_rate_bpm", 3, 0x02, 1, "def_num"),
+        ("heart_rate_bpm", 3, 0x02, 1, "base_identifier"),
+        ("heart_rate_bpm", 3, 0x02, 1, "size"),
+        ("speed_mps", 6, 0x84, 2, "def_num"),
+        ("speed_mps", 6, 0x84, 2, "base_identifier"),
+        ("speed_mps", 6, 0x84, 2, "size"),
+        ("cadence_rpm", 4, 0x02, 1, "def_num"),
+        ("cadence_rpm", 4, 0x02, 1, "base_identifier"),
+        ("cadence_rpm", 4, 0x02, 1, "size"),
+        ("power_w", 7, 0x84, 2, "def_num"),
+        ("power_w", 7, 0x84, 2, "base_identifier"),
+        ("power_w", 7, 0x84, 2, "size"),
+        ("altitude_m", 2, 0x84, 2, "def_num"),
+        ("altitude_m", 2, 0x84, 2, "base_identifier"),
+        ("altitude_m", 2, 0x84, 2, "size"),
+        ("grade_pct", 9, 0x83, 2, "def_num"),
+        ("grade_pct", 9, 0x83, 2, "base_identifier"),
+        ("grade_pct", 9, 0x83, 2, "size"),
+    ],
+)
+def test_every_standard_tuple_part_must_match_exactly(
+    monkeypatch, fit_archive, field_name, def_num, base_identifier, size, wrong_part
+):
+    incorrect = {
+        "def_num": (def_num + 1000, base_identifier, size),
+        "base_identifier": (def_num, 0x00, size),
+        "size": (def_num, base_identifier, size + 10),
+    }[wrong_part]
+    wrong_field = direct_field(
+        *incorrect,
+        raw_value=0x10000000 if field_name == "timestamp" else 5,
+        value=FIT_EPOCH + timedelta(seconds=0x10000000) if field_name == "timestamp" else 5.0,
+    )
+    fields = [wrong_field] if field_name == "timestamp" else [direct_timestamp(0x10000000), wrong_field]
+
+    result, _reader = _parse(monkeypatch, fit_archive, [header(), fake_record(fields)])
+
+    if field_name == "timestamp":
+        assert result == timeseries.ParseResult((), 1, "no_timestamped_records")
+    else:
+        assert result.failure_code is None
+        assert getattr(result.records[0], field_name) is None
+
+
+@pytest.mark.parametrize(
+    "field_name,def_num,base_identifier,size,low,high",
+    [
+        ("heart_rate_bpm", 3, 0x02, 1, 1, 300.0),
+        ("speed_mps", 6, 0x84, 2, 0, 100.0),
+        ("cadence_rpm", 4, 0x02, 1, 0, 300.0),
+        ("power_w", 7, 0x84, 2, 0, 3000.0),
+        ("altitude_m", 2, 0x84, 2, -1000, 10000.0),
+        ("grade_pct", 9, 0x83, 2, -100, 100.0),
+    ],
+)
+@pytest.mark.parametrize("value", [pytest.param(0, id="low-int"), pytest.param(1.0, id="high-float")])
+def test_every_metric_accepts_its_hard_coded_inclusive_bounds(
+    monkeypatch, fit_archive, field_name, def_num, base_identifier, size, low, high, value
+):
+    accepted_value = low if value == 0 else high
+    result, _reader = _parse(
+        monkeypatch,
+        fit_archive,
+        [header(), fake_record([direct_timestamp(0x10000000), direct_field(def_num, base_identifier, size, accepted_value, accepted_value)])],
+    )
+
+    assert result.failure_code is None
+    record = result.records[0]
+    assert getattr(record, field_name) == float(accepted_value)
+    assert all(getattr(record, name) is None for name in (
+        "heart_rate_bpm", "speed_mps", "cadence_rpm", "power_w", "altitude_m", "grade_pct"
+    ) if name != field_name)
+
+
+@pytest.mark.parametrize(
+    "field_name,def_num,base_identifier,size,low,high",
+    [
+        ("heart_rate_bpm", 3, 0x02, 1, 1, 300),
+        ("speed_mps", 6, 0x84, 2, 0, 100),
+        ("cadence_rpm", 4, 0x02, 1, 0, 300),
+        ("power_w", 7, 0x84, 2, 0, 3000),
+        ("altitude_m", 2, 0x84, 2, -1000, 10000),
+        ("grade_pct", 9, 0x83, 2, -100, 100),
+    ],
+)
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("below", id="below"),
+        pytest.param("above", id="above"),
+        pytest.param(True, id="bool"),
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+        pytest.param("12", id="string"),
+        pytest.param(object(), id="object"),
+    ],
+)
+def test_every_metric_rejects_invalid_type_and_range_values(
+    monkeypatch, fit_archive, field_name, def_num, base_identifier, size, low, high, value
+):
+    invalid_value = {"below": low - 0.5, "above": high + 0.5}.get(value, value)
+    result, _reader = _parse(
+        monkeypatch,
+        fit_archive,
+        [header(), fake_record([direct_timestamp(0x10000000), direct_field(def_num, base_identifier, size, invalid_value, invalid_value)])],
+    )
+
+    assert result.failure_code is None
+    record = result.records[0]
+    assert getattr(record, field_name) is None
+    assert all(getattr(record, name) is None for name in (
+        "heart_rate_bpm", "speed_mps", "cadence_rpm", "power_w", "altitude_m", "grade_pct"
+    ))
+
+
+def test_definition_field_limit_counts_a_standard_and_developer_definition_at_production_limit(
+    monkeypatch, fit_archive
+):
+    result, _reader = _parse(
+        monkeypatch,
+        fit_archive,
+        [header(), definition(field_defs=[object()] * 128, dev_field_defs=[object()])],
+    )
+
+    assert result == timeseries.ParseResult((), 0, "definition_field_limit_exceeded")
+
+
+def test_privacy_source_and_record_fact_surface_are_allowlisted_only():
+    source = Path(timeseries.__file__).read_text(encoding="utf-8")
+    forbidden_source_identifiers = (
+        "get_value",
+        "get_raw_value",
+        "get_field",
+        "all_field_defs",
+        "position_",
+        "latitude",
+        "longitude",
+        "coordinate",
+        "polyline",
+    )
+    assert all(identifier not in source for identifier in forbidden_source_identifiers)
+
+    fields = tuple(timeseries.RecordFact.__dataclass_fields__)
+    assert fields == (
+        "raw_timestamp_seconds",
+        "timestamp_utc",
+        "encounter_index",
+        "heart_rate_bpm",
+        "speed_mps",
+        "cadence_rpm",
+        "power_w",
+        "altitude_m",
+        "grade_pct",
+    )
+    assert all(key == "raw_timestamp_seconds" or not key.startswith("raw_") for key in fields)
+    assert all(
+        forbidden not in key.lower()
+        for key in fields
+        for forbidden in ("source", "frame", "message", "field", "gps")
+    )
