@@ -107,7 +107,8 @@ def _display_number(value: float, places: int) -> int | float:
     rounded = Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP)
     if places == 0:
         return int(rounded)
-    return float(rounded)
+    displayed = float(rounded)
+    return 0.0 if displayed == 0.0 else displayed
 
 
 def _display_finite_or_none(value: float, places: int) -> int | float | None:

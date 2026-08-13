@@ -307,6 +307,43 @@ def test_json_number_types_are_stable_for_means_extrema_and_pace():
     assert missing.series["pace_seconds_per_km"]["average"][0] is None
 
 
+def test_one_decimal_negative_zero_is_normalized_to_positive_zero():
+    result = reduce_records(
+        [fact(BASE, 0, altitude_m=-0.04, grade_pct=-0.04)],
+        0,
+        1,
+        1,
+    )
+
+    altitude = result.series["altitude_m"]["average"][0]
+    grade = result.series["grade_pct"]["average"][0]
+    assert altitude == grade == 0.0
+    assert type(altitude) is float
+    assert type(grade) is float
+    assert math.copysign(1.0, altitude) == 1.0
+    assert math.copysign(1.0, grade) == 1.0
+
+
+def test_maximum_fit_timestamp_anchor_formats_without_overflow():
+    result = reduce_records([fact(0xFFFFFFFE, 0)], 0, 1, 1)
+
+    assert result.series["timestamp"] == ["2126-02-06T06:28:14.000000Z"]
+
+
+def test_empty_selected_window_cursor_requires_global_later_proof():
+    records = [fact(BASE, 0), fact(BASE + 100, 1)]
+
+    early_empty = reduce_records(records, 50, 10, 1)
+    late_empty = reduce_records(records, 200, 10, 1)
+
+    assert early_empty.sampling["source_records"] == 0
+    assert early_empty.sampling["returned_points"] == 0
+    assert early_empty.next_start_seconds == 60
+    assert late_empty.sampling["source_records"] == 0
+    assert late_empty.sampling["returned_points"] == 0
+    assert late_empty.next_start_seconds is None
+
+
 def test_all_metric_means_and_extrema_use_fixed_precision():
     result = reduce_records(
         [
