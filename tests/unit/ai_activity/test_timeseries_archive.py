@@ -63,6 +63,24 @@ def _descriptor_archive(*, signature: bool, padding: bytes = b"", crc: int | Non
     return bytes(changed)
 
 
+def _archive_with_declared_compressed_junk(compression: int) -> bytes:
+    payload = make_zip({"activity.fit": b"fit-content" * 20}, compression)
+    central = _central_offset(payload)
+    eocd = eocd_offset(payload)
+    local_name_size = int.from_bytes(payload[26:28], "little")
+    local_extra_size = int.from_bytes(payload[28:30], "little")
+    data_start = 30 + local_name_size + local_extra_size
+    original_compressed_size = int.from_bytes(payload[18:22], "little")
+    junk = b"TRAILING-JUNK"
+    changed = payload[: data_start + original_compressed_size] + junk + payload[central:]
+    central += len(junk)
+    eocd += len(junk)
+    changed = mutate_u32(changed, 18, original_compressed_size + len(junk))
+    changed = mutate_u32(changed, central + 20, original_compressed_size + len(junk))
+    changed = mutate_u32(changed, eocd + 16, central)
+    return changed
+
+
 @pytest.mark.parametrize("payload", [b"", b"not-a-zip", b".FIT\x10\x00", b"\x1f\x8b\x08gzip"])
 def test_non_classic_zip_payloads_are_invalid_fit_payload(payload: bytes):
     assert _result(payload).failure_code == "invalid_fit_payload"
@@ -176,6 +194,58 @@ def test_strong_encryption_is_rejected_before_zipfile_construction(monkeypatch):
     assert constructed is False
 
 
+@pytest.mark.parametrize("compression", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_declared_compressed_extent_cannot_include_trailing_junk(monkeypatch, compression: int):
+    from garmin_mcp.ai_activity import timeseries
+
+    constructed = False
+
+    def fail_if_constructed(*args, **kwargs):
+        nonlocal constructed
+        constructed = True
+        raise AssertionError("compressed integrity must be checked before ZipFile")
+
+    monkeypatch.setattr(timeseries.zipfile, "ZipFile", fail_if_constructed)
+    assert timeseries.parse_original_fit(
+        _archive_with_declared_compressed_junk(compression)
+    ).failure_code == "unsafe_fit_archive"
+    assert constructed is False
+
+
+@pytest.mark.parametrize("flag", [0x0001, 0x0010, 0x0040, 0x2000, 0x4000, 0x8000])
+def test_unsupported_general_purpose_flags_are_rejected_before_zipfile_construction(monkeypatch, flag: int):
+    from garmin_mcp.ai_activity import timeseries
+
+    payload = make_zip({"activity.fit": b"x"})
+    central = _central_offset(payload)
+    payload = mutate_u16(payload, 6, flag)
+    payload = mutate_u16(payload, central + 8, flag)
+    constructed = False
+
+    def fail_if_constructed(*args, **kwargs):
+        nonlocal constructed
+        constructed = True
+        raise AssertionError("ZipFile construction is forbidden for unsupported flags")
+
+    monkeypatch.setattr(timeseries.zipfile, "ZipFile", fail_if_constructed)
+    assert timeseries.parse_original_fit(payload).failure_code == "unsafe_fit_archive"
+    assert constructed is False
+
+
+def test_deflate_options_are_allowed_only_for_deflated_members():
+    stored = make_zip({"activity.fit": b"x"})
+    stored_central = _central_offset(stored)
+    stored = mutate_u16(stored, 6, 0x0006)
+    stored = mutate_u16(stored, stored_central + 8, 0x0006)
+    assert _result(stored).failure_code == "unsafe_fit_archive"
+
+    deflated = make_zip({"activity.fit": b"x"}, zipfile.ZIP_DEFLATED)
+    deflated_central = _central_offset(deflated)
+    deflated = mutate_u16(deflated, 6, 0x0006)
+    deflated = mutate_u16(deflated, deflated_central + 8, 0x0006)
+    assert _result(deflated).failure_code == "fit_parse_failed"
+
+
 @pytest.mark.parametrize(
     "name",
     ["/activity.fit", "../activity.fit", "a/../activity.fit", "a\\activity.fit", "C:/activity.fit", "./activity.fit", "a//activity.fit"],
@@ -278,6 +348,63 @@ def test_limited_reader_caps_every_request_and_detects_reduced_limit(monkeypatch
         reader.read(1_000_000)
     assert source.requested_sizes == [65_536]
     assert source.supplied_sizes == [10]
+
+
+@pytest.mark.parametrize("requested", [0, None, -1, 1_000_000])
+def test_limited_reader_bounds_zero_none_negative_and_huge_requests(requested):
+    from garmin_mcp.ai_activity import timeseries
+
+    class RecordingSource:
+        def __init__(self) -> None:
+            self.requests: list[int | None] = []
+
+        def read(self, size=-1):
+            self.requests.append(size)
+            return b"" if size == 0 else b"ok"
+
+    source = RecordingSource()
+    result = timeseries.LimitedReader(source).read(requested)
+    assert result == (b"" if requested == 0 else b"ok")
+    assert source.requests == [0 if requested == 0 else 65_536]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        None,
+        "text",
+        bytearray(b"bytes"),
+        type("BytesSubclass", (bytes,), {})(b"bytes"),
+        lambda requested: b"x" * (requested + 1),
+    ],
+)
+def test_limited_reader_rejects_hostile_read_return_values_without_details(response):
+    from garmin_mcp.ai_activity import timeseries
+
+    class HostileSource:
+        def __init__(self) -> None:
+            self.requests: list[int] = []
+
+        def read(self, size=-1):
+            self.requests.append(size)
+            return response(size) if callable(response) else response
+
+    source = HostileSource()
+    with pytest.raises(timeseries._FitMemberReadFailed) as raised:
+        timeseries.LimitedReader(source).read(1_000_000)
+    assert str(raised.value) == ""
+    assert source.requests == [65_536]
+
+
+def test_limited_reader_requires_empty_bytes_for_a_zero_request():
+    from garmin_mcp.ai_activity import timeseries
+
+    class NonemptyZeroSource:
+        def read(self, _size=-1):
+            return b"unexpected"
+
+    with pytest.raises(timeseries._FitMemberReadFailed):
+        timeseries.LimitedReader(NonemptyZeroSource()).read(0)
 
 
 def test_parse_maps_stream_overflow_to_fit_member_too_large(monkeypatch):

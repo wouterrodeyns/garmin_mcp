@@ -27,8 +27,9 @@ _LOCAL_SIGNATURE = b"PK\x03\x04"
 _ZIP64_EOCD_SIGNATURE = b"PK\x06\x06"
 _ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
 _DATA_DESCRIPTOR_FLAG = 0x08
-_ENCRYPTED_FLAG_MASK = 0x41
 _UTF8_FLAG = 0x800
+_COMMON_ALLOWED_FLAG_MASK = _DATA_DESCRIPTOR_FLAG | _UTF8_FLAG
+_DEFLATE_OPTION_FLAG_MASK = 0x0006
 _ZIP64_EXTRA_TAG = 0x0001
 _EOCD_STRUCT = struct.Struct("<4s4H2LH")
 _CENTRAL_STRUCT = struct.Struct("<4s6H3L5H2L")
@@ -67,6 +68,7 @@ class PreflightResult:
 @dataclass(frozen=True)
 class _ValidatedLocalEntry:
     metadata: FitMemberMetadata
+    data_start: int
     data_end: int
     crc: int
     has_data_descriptor: bool
@@ -94,10 +96,13 @@ class LimitedReader:
 
     def read(self, size: int = -1) -> bytes:
         requested = FIT_STREAM_READ_CHUNK_BYTES if size is None or size < 0 else size
+        bounded_request = min(requested, FIT_STREAM_READ_CHUNK_BYTES)
         try:
-            chunk = self._source.read(min(requested, FIT_STREAM_READ_CHUNK_BYTES))
+            chunk = self._source.read(bounded_request)
         except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, NotImplementedError, EOFError, zlib.error):
             raise _FitMemberReadFailed from None
+        if type(chunk) is not bytes or len(chunk) > bounded_request:
+            raise _FitMemberReadFailed
         self.bytes_read += len(chunk)
         if self.bytes_read > MAX_FIT_MEMBER_BYTES:
             raise _MemberLimitExceeded
@@ -160,6 +165,57 @@ def _has_safe_unix_file_type(
         return not is_directory
     if file_type == stat.S_IFDIR:
         return is_directory
+    return False
+
+
+def _has_supported_flags(flags: int, compression: int) -> bool:
+    allowed = _COMMON_ALLOWED_FLAG_MASK
+    if compression == zipfile.ZIP_DEFLATED:
+        allowed |= _DEFLATE_OPTION_FLAG_MASK
+    return flags & ~allowed == 0
+
+
+def _valid_deflated_extent(
+    archive: bytes,
+    data_start: int,
+    compressed_size: int,
+    uncompressed_size: int,
+    output_limit: int,
+) -> bool:
+    """Validate exactly one raw DEFLATE member without retaining output."""
+    if uncompressed_size > output_limit:
+        return False
+    decompressor = zlib.decompressobj(-zlib.MAX_WBITS)
+    data_end = data_start + compressed_size
+    position = data_start
+    produced_total = 0
+    try:
+        while position < data_end:
+            next_position = min(position + FIT_STREAM_READ_CHUNK_BYTES, data_end)
+            pending = archive[position:next_position]
+            position = next_position
+            while pending:
+                output_budget = min(
+                    FIT_STREAM_READ_CHUNK_BYTES,
+                    max(1, uncompressed_size - produced_total),
+                )
+                before = pending
+                output = decompressor.decompress(pending, output_budget)
+                if len(output) > uncompressed_size - produced_total:
+                    return False
+                produced_total += len(output)
+                pending = decompressor.unconsumed_tail
+                if decompressor.eof:
+                    return (
+                        not pending
+                        and not decompressor.unused_data
+                        and position == data_end
+                        and produced_total == uncompressed_size
+                    )
+                if pending and len(pending) == len(before) and not output:
+                    return False
+    except zlib.error:
+        return False
     return False
 
 
@@ -258,7 +314,7 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
             or not _is_safe_name(safe_name)
             or not _has_safe_unix_file_type(version_made_by, external_attributes, is_directory)
             or start_disk != 0
-            or flags & _ENCRYPTED_FLAG_MASK
+            or not _has_supported_flags(flags, compression)
             or compression not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
         ):
             return _unsafe()
@@ -313,6 +369,7 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
                     uncompressed_size=uncompressed_size,
                     local_offset=local_offset,
                 ),
+                data_start=data_start,
                 data_end=data_end,
                 crc=crc,
                 has_data_descriptor=bool(flags & _DATA_DESCRIPTOR_FLAG),
@@ -322,6 +379,26 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
 
     if cursor != central_end:
         return _unsafe()
+
+    for entry in local_entries:
+        is_directory = entry.metadata.name.endswith("/")
+        if is_directory:
+            continue
+        if entry.metadata.compression == zipfile.ZIP_STORED:
+            if entry.metadata.compressed_size != entry.metadata.uncompressed_size:
+                return _unsafe()
+        elif not _valid_deflated_extent(
+            archive,
+            entry.data_start,
+            entry.metadata.compressed_size,
+            entry.metadata.uncompressed_size,
+            (
+                MAX_FIT_MEMBER_BYTES
+                if entry.metadata.name.lower().endswith(".fit")
+                else MAX_AUXILIARY_ENTRY_BYTES
+            ),
+        ):
+            return _unsafe()
 
     ordered_local_entries = sorted(local_entries, key=lambda entry: entry.metadata.local_offset)
     ranges: list[tuple[int, int]] = []
