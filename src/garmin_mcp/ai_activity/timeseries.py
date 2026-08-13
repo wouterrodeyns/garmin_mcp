@@ -8,6 +8,7 @@ from io import BytesIO
 import ntpath
 import stat
 import struct
+import sys
 from typing import BinaryIO, Iterator
 import zipfile
 import zlib
@@ -26,7 +27,7 @@ _LOCAL_SIGNATURE = b"PK\x03\x04"
 _ZIP64_EOCD_SIGNATURE = b"PK\x06\x06"
 _ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
 _DATA_DESCRIPTOR_FLAG = 0x08
-_ENCRYPTED_FLAG = 0x01
+_ENCRYPTED_FLAG_MASK = 0x41
 _UTF8_FLAG = 0x800
 _ZIP64_EXTRA_TAG = 0x0001
 _EOCD_STRUCT = struct.Struct("<4s4H2LH")
@@ -61,6 +62,14 @@ class PreflightResult:
 
     selected: FitMemberMetadata | None
     failure_code: str | None
+
+
+@dataclass(frozen=True)
+class _ValidatedLocalEntry:
+    metadata: FitMemberMetadata
+    data_end: int
+    crc: int
+    has_data_descriptor: bool
 
 
 class _ArchiveFailure(Exception):
@@ -131,9 +140,20 @@ def _is_safe_name(name: str) -> bool:
     return all(component not in {"", ".", ".."} for component in components)
 
 
-def _is_symlink(version_made_by: int, external_attributes: int) -> bool:
-    unix_host = (version_made_by >> 8) == 3
-    return unix_host and stat.S_IFMT(external_attributes >> 16) == stat.S_IFLNK
+def _has_safe_unix_file_type(
+    version_made_by: int, external_attributes: int, is_directory: bool
+) -> bool:
+    """Accept only ordinary Unix files/directories when a type is recorded."""
+    if (version_made_by >> 8) != 3:
+        return True
+    file_type = stat.S_IFMT(external_attributes >> 16)
+    if file_type == 0:
+        return True
+    if file_type == stat.S_IFREG:
+        return not is_directory
+    if file_type == stat.S_IFDIR:
+        return is_directory
+    return False
 
 
 def _preflight_classic_zip(archive: bytes) -> PreflightResult:
@@ -188,7 +208,7 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
     ):
         return _unsafe()
 
-    entries: list[FitMemberMetadata] = []
+    local_entries: list[_ValidatedLocalEntry] = []
     cursor = central_offset
     for _ in range(total_entries):
         if not _in_bounds(cursor, _CENTRAL_STRUCT.size, central_end):
@@ -229,9 +249,9 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
         if (
             name is None
             or not _is_safe_name(safe_name)
-            or _is_symlink(version_made_by, external_attributes)
+            or not _has_safe_unix_file_type(version_made_by, external_attributes, is_directory)
             or start_disk != 0
-            or flags & _ENCRYPTED_FLAG
+            or flags & _ENCRYPTED_FLAG_MASK
             or compression not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
         ):
             return _unsafe()
@@ -269,20 +289,6 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
         if flags & _DATA_DESCRIPTOR_FLAG:
             if local_crc != 0 or local_compressed_size != 0 or local_uncompressed_size != 0:
                 return _unsafe()
-            descriptor_offset = data_end
-            if archive[descriptor_offset : descriptor_offset + 4] == b"PK\x07\x08":
-                descriptor_offset += 4
-            if not _in_bounds(descriptor_offset, 12, central_offset):
-                return _unsafe()
-            descriptor_crc, descriptor_compressed, descriptor_uncompressed = struct.unpack_from(
-                "<3L", archive, descriptor_offset
-            )
-            if (
-                descriptor_crc != crc
-                or descriptor_compressed != compressed_size
-                or descriptor_uncompressed != uncompressed_size
-            ):
-                return _unsafe()
         elif (
             local_crc != crc
             or local_compressed_size != compressed_size
@@ -290,14 +296,19 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
         ):
             return _unsafe()
 
-        entries.append(
-            FitMemberMetadata(
-                name=name,
-                flags=flags,
-                compression=compression,
-                compressed_size=compressed_size,
-                uncompressed_size=uncompressed_size,
-                local_offset=local_offset,
+        local_entries.append(
+            _ValidatedLocalEntry(
+                metadata=FitMemberMetadata(
+                    name=name,
+                    flags=flags,
+                    compression=compression,
+                    compressed_size=compressed_size,
+                    uncompressed_size=uncompressed_size,
+                    local_offset=local_offset,
+                ),
+                data_end=data_end,
+                crc=crc,
+                has_data_descriptor=bool(flags & _DATA_DESCRIPTOR_FLAG),
             )
         )
         cursor = variable_start + variable_size
@@ -305,6 +316,45 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
     if cursor != central_end:
         return _unsafe()
 
+    ordered_local_entries = sorted(local_entries, key=lambda entry: entry.metadata.local_offset)
+    ranges: list[tuple[int, int]] = []
+    for index, entry in enumerate(ordered_local_entries):
+        next_local_offset = (
+            ordered_local_entries[index + 1].metadata.local_offset
+            if index + 1 < len(ordered_local_entries)
+            else central_offset
+        )
+        if next_local_offset <= entry.metadata.local_offset or entry.data_end > next_local_offset:
+            return _unsafe()
+        local_end = entry.data_end
+        if entry.has_data_descriptor:
+            descriptor_size = next_local_offset - entry.data_end
+            if descriptor_size not in {12, 16}:
+                return _unsafe()
+            descriptor_offset = entry.data_end
+            if descriptor_size == 16:
+                if archive[descriptor_offset : descriptor_offset + 4] != b"PK\x07\x08":
+                    return _unsafe()
+                descriptor_offset += 4
+            descriptor_crc, descriptor_compressed, descriptor_uncompressed = struct.unpack_from(
+                "<3L", archive, descriptor_offset
+            )
+            if (
+                descriptor_crc != entry.crc
+                or descriptor_compressed != entry.metadata.compressed_size
+                or descriptor_uncompressed != entry.metadata.uncompressed_size
+            ):
+                return _unsafe()
+            local_end = next_local_offset
+        ranges.append((entry.metadata.local_offset, local_end))
+
+    previous_end = -1
+    for local_start, local_end in ranges:
+        if local_start < previous_end:
+            return _unsafe()
+        previous_end = local_end
+
+    entries = [entry.metadata for entry in local_entries]
     selected = [
         entry
         for entry in entries
@@ -334,27 +384,96 @@ def _zip_info_matches(info: zipfile.ZipInfo, member: FitMemberMetadata) -> bool:
     )
 
 
-@contextmanager
-def _open_fit_member(archive: bytes) -> Iterator[LimitedReader]:
+@dataclass
+class _OpenedFitMember:
+    zip_archive: zipfile.ZipFile
+    source: BinaryIO
+    reader: LimitedReader
+
+    def close(self) -> None:
+        try:
+            try:
+                self.source.close()
+            finally:
+                self.zip_archive.close()
+        except (
+            zipfile.BadZipFile,
+            zipfile.LargeZipFile,
+            OSError,
+            RuntimeError,
+            NotImplementedError,
+            EOFError,
+            zlib.error,
+        ) as error:
+            raise _ArchiveFailure("unsafe_fit_archive") from error
+
+
+def _discard_open_member(zip_archive: zipfile.ZipFile | None, source: BinaryIO | None) -> None:
+    try:
+        try:
+            if source is not None:
+                source.close()
+        finally:
+            if zip_archive is not None:
+                zip_archive.close()
+    except (
+        zipfile.BadZipFile,
+        zipfile.LargeZipFile,
+        OSError,
+        RuntimeError,
+        NotImplementedError,
+        EOFError,
+        zlib.error,
+    ):
+        pass
+
+
+def _construct_fit_member(archive: bytes) -> _OpenedFitMember:
     preflight = _preflight_classic_zip(archive)
     if preflight.failure_code is not None:
         raise _ArchiveFailure(preflight.failure_code)
     assert preflight.selected is not None
+    zip_archive: zipfile.ZipFile | None = None
+    source: BinaryIO | None = None
     try:
-        with zipfile.ZipFile(BytesIO(archive)) as zip_archive:
-            matching = [
-                info
-                for info in zip_archive.infolist()
-                if info.header_offset == preflight.selected.local_offset
-            ]
-            if len(matching) != 1 or not _zip_info_matches(matching[0], preflight.selected):
-                raise _ArchiveFailure("unsafe_fit_archive")
-            with zip_archive.open(matching[0], "r") as source:
-                yield LimitedReader(source)
+        zip_archive = zipfile.ZipFile(BytesIO(archive))
+        matching = [
+            info
+            for info in zip_archive.infolist()
+            if info.header_offset == preflight.selected.local_offset
+        ]
+        if len(matching) != 1 or not _zip_info_matches(matching[0], preflight.selected):
+            raise _ArchiveFailure("unsafe_fit_archive")
+        source = zip_archive.open(matching[0], "r")
+        return _OpenedFitMember(zip_archive, source, LimitedReader(source))
     except _ArchiveFailure:
+        _discard_open_member(zip_archive, source)
         raise
-    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, RuntimeError, NotImplementedError, EOFError, zlib.error) as error:
+    except (
+        zipfile.BadZipFile,
+        zipfile.LargeZipFile,
+        OSError,
+        RuntimeError,
+        NotImplementedError,
+        EOFError,
+        zlib.error,
+    ) as error:
+        _discard_open_member(zip_archive, source)
         raise _ArchiveFailure("unsafe_fit_archive") from error
+
+
+@contextmanager
+def _open_fit_member(archive: bytes) -> Iterator[LimitedReader]:
+    opened = _construct_fit_member(archive)
+    try:
+        yield opened.reader
+    finally:
+        caller_failed = sys.exc_info()[0] is not None
+        try:
+            opened.close()
+        except _ArchiveFailure:
+            if not caller_failed:
+                raise
 
 
 def _decode_fit_stream(stream: LimitedReader) -> ParseResult:
@@ -371,7 +490,7 @@ def parse_original_fit(archive: bytes) -> ParseResult:
         return ParseResult((), 0, "fit_member_too_large")
     except _ArchiveFailure as error:
         return ParseResult((), 0, error.failure_code)
-    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, RuntimeError, NotImplementedError, EOFError, zlib.error):
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, NotImplementedError, EOFError, zlib.error):
         return ParseResult((), 0, "unsafe_fit_archive")
 
 

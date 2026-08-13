@@ -26,6 +26,41 @@ def _result(payload: bytes):
     return parse_original_fit(payload)
 
 
+def _central_record_offsets(payload: bytes) -> list[int]:
+    offsets: list[int] = []
+    cursor = _central_offset(payload)
+    entries = int.from_bytes(payload[eocd_offset(payload) + 10 : eocd_offset(payload) + 12], "little")
+    for _ in range(entries):
+        offsets.append(cursor)
+        name_size = int.from_bytes(payload[cursor + 28 : cursor + 30], "little")
+        extra_size = int.from_bytes(payload[cursor + 30 : cursor + 32], "little")
+        comment_size = int.from_bytes(payload[cursor + 32 : cursor + 34], "little")
+        cursor += 46 + name_size + extra_size + comment_size
+    return offsets
+
+
+def _descriptor_archive(*, signature: bool, padding: bytes = b"", crc: int | None = None) -> bytes:
+    payload = make_zip({"activity.fit": b"x"})
+    central = _central_offset(payload)
+    eocd = eocd_offset(payload)
+    local_name_size = int.from_bytes(payload[26:28], "little")
+    local_extra_size = int.from_bytes(payload[28:30], "little")
+    data_end = 30 + local_name_size + local_extra_size + 1
+    descriptor_crc = int.from_bytes(payload[14:18], "little") if crc is None else crc
+    descriptor = (b"PK\x07\x08" if signature else b"") + descriptor_crc.to_bytes(4, "little") + payload[18:26]
+    changed = bytearray(payload[:data_end] + descriptor + padding + payload[data_end:])
+    changed = bytearray(mutate_u16(bytes(changed), 6, 8))
+    changed = bytearray(mutate_u32(bytes(changed), 14, 0))
+    changed = bytearray(mutate_u32(bytes(changed), 18, 0))
+    changed = bytearray(mutate_u32(bytes(changed), 22, 0))
+    central += len(descriptor) + len(padding)
+    eocd += len(descriptor) + len(padding)
+    changed = bytearray(mutate_u16(bytes(changed), central + 8, 8))
+    changed = bytearray(mutate_u32(bytes(changed), central + 16, descriptor_crc))
+    changed = bytearray(mutate_u32(bytes(changed), eocd + 16, central))
+    return bytes(changed)
+
+
 @pytest.mark.parametrize("payload", [b"", b"not-a-zip", b".FIT\x10\x00", b"\x1f\x8b\x08gzip"])
 def test_non_classic_zip_payloads_are_invalid_fit_payload(payload: bytes):
     assert _result(payload).failure_code == "invalid_fit_payload"
@@ -118,6 +153,25 @@ def test_malformed_or_truncated_central_and_local_headers_are_unsafe(mutator):
 )
 def test_encryption_and_unsupported_compression_are_unsafe(mutator):
     assert _result(mutator(make_zip({"activity.fit": b"x"}))).failure_code == "unsafe_fit_archive"
+
+
+def test_strong_encryption_is_rejected_before_zipfile_construction(monkeypatch):
+    from garmin_mcp.ai_activity import timeseries
+
+    payload = make_zip({"activity.fit": b"x"})
+    central = _central_offset(payload)
+    payload = mutate_u16(payload, 6, 0x40)
+    payload = mutate_u16(payload, central + 8, 0x40)
+    constructed = False
+
+    def fail_if_constructed(*args, **kwargs):
+        nonlocal constructed
+        constructed = True
+        raise AssertionError("ZipFile construction is forbidden for strong encryption")
+
+    monkeypatch.setattr(timeseries.zipfile, "ZipFile", fail_if_constructed)
+    assert timeseries.parse_original_fit(payload).failure_code == "unsafe_fit_archive"
+    assert constructed is False
 
 
 @pytest.mark.parametrize(
@@ -271,6 +325,141 @@ def test_standard_data_descriptor_member_reaches_decoder_stub():
     changed = bytearray(mutate_u16(bytes(changed), central + 8, 8))
     changed = bytearray(mutate_u32(bytes(changed), eocd + 16, central))
     assert _result(bytes(changed)).failure_code == "fit_parse_failed"
+
+
+@pytest.mark.parametrize("signature", [False, True])
+def test_exact_12_and_16_byte_data_descriptors_are_accepted(signature: bool):
+    from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
+
+    assert _preflight_classic_zip(_descriptor_archive(signature=signature)).failure_code is None
+
+
+def test_unsigned_descriptor_whose_crc_starts_with_signature_is_not_misclassified():
+    from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
+
+    assert _preflight_classic_zip(
+        _descriptor_archive(signature=False, crc=0x08074B50)
+    ).failure_code is None
+
+
+@pytest.mark.parametrize("padding", [b"\x00", b"unexpected"])
+def test_data_descriptor_cannot_have_trailing_gap_before_central_directory(padding: bytes):
+    from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
+
+    assert _preflight_classic_zip(
+        _descriptor_archive(signature=True, padding=padding)
+    ).failure_code == "unsafe_fit_archive"
+
+
+def test_truncated_data_descriptor_is_unsafe():
+    from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
+
+    payload = _descriptor_archive(signature=True)
+    central = _central_offset(payload)
+    assert _preflight_classic_zip(payload[:central - 1] + payload[central:]).failure_code == "unsafe_fit_archive"
+
+
+def test_data_descriptor_can_end_exactly_at_an_adjacent_local_header():
+    from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
+
+    payload = make_zip({"activity.fit": b"x", "notes.txt": b"y"})
+    first_central, second_central = _central_record_offsets(payload)
+    eocd = eocd_offset(payload)
+    second_local = int.from_bytes(payload[second_central + 42 : second_central + 46], "little")
+    descriptor = b"PK\x07\x08" + payload[14:26]
+    changed = payload[:second_local] + descriptor + payload[second_local:]
+    first_central += len(descriptor)
+    second_central += len(descriptor)
+    eocd += len(descriptor)
+    changed = mutate_u16(changed, 6, 8)
+    changed = mutate_u32(changed, 14, 0)
+    changed = mutate_u32(changed, 18, 0)
+    changed = mutate_u32(changed, 22, 0)
+    changed = mutate_u16(changed, first_central + 8, 8)
+    changed = mutate_u32(changed, second_central + 42, second_local + len(descriptor))
+    changed = mutate_u32(changed, eocd + 16, first_central)
+    assert _preflight_classic_zip(changed).failure_code is None
+
+
+def test_adjacent_local_entries_do_not_trigger_overlap_rejection():
+    from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
+
+    assert _preflight_classic_zip(make_zip({"activity.fit": b"x", "notes.txt": b"safe"})).failure_code is None
+
+
+def test_exact_duplicate_local_ranges_are_rejected_before_missing_fit_classification():
+    from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
+
+    payload = make_zip({"notes.txt": b"safe"})
+    central = _central_offset(payload)
+    eocd = eocd_offset(payload)
+    duplicated_record = payload[central:eocd]
+    changed = payload[:eocd] + duplicated_record + payload[eocd:]
+    new_eocd = eocd + len(duplicated_record)
+    changed = mutate_u16(changed, new_eocd + 8, 2)
+    changed = mutate_u16(changed, new_eocd + 10, 2)
+    changed = mutate_u32(changed, new_eocd + 12, len(duplicated_record) * 2)
+    assert _preflight_classic_zip(changed).failure_code == "unsafe_fit_archive"
+
+
+def test_partially_overlapping_local_ranges_are_rejected_during_preflight():
+    from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
+
+    payload = make_zip({"activity.fit": b"A" * 100, "notes.txt": b"B"})
+    first_central, second_central = _central_record_offsets(payload)
+    second_local = int.from_bytes(payload[second_central + 42 : second_central + 46], "little")
+    first_data_start = 30 + int.from_bytes(payload[26:28], "little") + int.from_bytes(payload[28:30], "little")
+    overlap_offset = first_data_start + 20
+    changed = bytearray(payload)
+    changed[overlap_offset : overlap_offset + (first_central - second_local)] = payload[second_local:first_central]
+    changed = bytearray(mutate_u32(bytes(changed), second_central + 42, overlap_offset))
+    assert _preflight_classic_zip(bytes(changed)).failure_code == "unsafe_fit_archive"
+
+
+@pytest.mark.parametrize("mode", [0o010000, 0o060000, 0o020000])
+def test_unix_fifo_socket_and_device_members_are_unsafe(mode: int):
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        info = zipfile.ZipInfo("activity.fit")
+        info.create_system = 3
+        info.external_attr = (mode | 0o644) << 16
+        archive.writestr(info, b"x")
+    assert _result(buffer.getvalue()).failure_code == "unsafe_fit_archive"
+
+
+def test_unix_directory_mode_requires_a_trailing_slash():
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        info = zipfile.ZipInfo("directory.fit")
+        info.create_system = 3
+        info.external_attr = 0o40755 << 16
+        archive.writestr(info, b"")
+    assert _result(buffer.getvalue()).failure_code == "unsafe_fit_archive"
+
+
+def test_unix_regular_files_and_slash_marked_directories_are_allowed():
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        fit = zipfile.ZipInfo("activity.fit")
+        fit.create_system = 3
+        fit.external_attr = 0o100644 << 16
+        archive.writestr(fit, b"x")
+        directory = zipfile.ZipInfo("data/")
+        directory.create_system = 3
+        directory.external_attr = 0o40755 << 16
+        archive.writestr(directory, b"")
+    assert _result(buffer.getvalue()).failure_code == "fit_parse_failed"
+
+
+def test_decoder_runtime_error_is_not_normalized_as_zip_failure(monkeypatch):
+    from garmin_mcp.ai_activity import timeseries
+
+    def programmer_defect(_stream):
+        raise RuntimeError("programmer defect")
+
+    monkeypatch.setattr(timeseries, "_decode_fit_stream", programmer_defect)
+    with pytest.raises(RuntimeError, match="programmer defect"):
+        timeseries.parse_original_fit(make_zip({"activity.fit": b"x"}))
 
 
 def test_zipinfo_mismatch_after_preflight_is_unsafe(monkeypatch):
