@@ -20,8 +20,21 @@ get_activity_timeseries only for concrete short interval evidence.
 
 ## Arguments and paging
 
-The required `activity_id` is a positive integer or an ASCII decimal string.
-Optional integer arguments have these defaults:
+`activity_id` accepts a strict integer or ASCII decimal string, normalized to a
+positive value from 1 through 9007199254740991; other strings are rejected.
+activity_id positive integer or ASCII decimal string from 1 through
+9007199254740991 is the accepted identifier form.
+The window arguments are exact integers (not booleans, floats, or numeric
+strings), and their bounds are `start_seconds` 0 through 4026531838,
+`duration_seconds` 1 through 86400, and `resolution_seconds` 1 through 300.
+FastMCP rejects booleans and floats, and rejects numeric strings for all three
+window arguments before the service runs. Numeric strings for window arguments
+are rejected. Optional integer arguments have these
+defaults:
+
+Bounds contract: start_seconds exact integer from 0 through 4026531838;
+duration_seconds exact integer from 1 through 86400; resolution_seconds exact
+integer from 1 through 300.
 
 - `start_seconds=0`
 - `duration_seconds=600`
@@ -29,7 +42,7 @@ Optional integer arguments have these defaults:
 
 The requested interval is half-open: `[start_seconds,
 start_seconds+duration_seconds)`. A bin is anchored at its elapsed-second
-start. `ceil(duration_seconds / resolution_seconds)` must be at most 600, so a
+start. `ceil(duration_seconds / resolution_seconds) <= 600` must hold, so a
 request for 600 non-empty bins is the largest one at one-second resolution.
 The service does not manufacture empty bins to reach that count.
 
@@ -49,7 +62,15 @@ records were discarded, and `error` for a rejected request, unavailable
 client/download, unsafe archive, or parse failure. Errors use fixed provider,
 code, and message fields; an unexpected internal failure uses the fixed generic
 message `Activity time series is temporarily unavailable.` and exposes no raw
-exception details.
+exception details; internal_error is the error code for that fixed response.
+
+partial_success is a status, never a warning code. When selected records
+exist and malformed activity-global records were discarded, `warnings` contains
+the exact object `{"provider":"fit","code":"malformed_records_discarded","message":"Malformed FIT record messages were discarded.","count":N}`.
+Its fields are provider: fit, code: malformed_records_discarded, message:
+Malformed FIT record messages were discarded., and count: N. This is the
+malformed warning for that partial result.
+Empty selected window returns success and suppresses the warning.
 
 The one primary response example below is intentionally small. All series
 arrays have the same length as `sampling.returned_points`. `source_records`
@@ -120,12 +141,18 @@ source.
 
 Timestamps are canonical UTC Z bin anchors, not exact device sample claims.
 Sparse bins and gaps remain sparse: there is no fill and no interpolation, and
-the source is not exactly 1Hz. Units are elapsed seconds, heart rate in bpm,
-speed in m/s to 3 decimals, pace in seconds/km to an integer, cadence in rpm,
-power in W, altitude in m, and grade in %. Means to 1 decimal; heart-rate
-extrema and pace values are rounded to integer
-seconds (heart-rate extrema and pace values to integer seconds). A missing
-value is `null` (missing is null); recorded zero remains 0.
+the source is not exactly 1Hz. Heart rate in bpm is represented in the
+heart-rate series. Units are elapsed seconds; speed in m/s to 3 decimals;
+heart-rate average is one decimal bpm; heart-rate minimum and maximum
+are whole integer bpm; pace average, fastest, and slowest are whole integers in
+seconds/km; cadence in rpm, power in W, altitude in m, and grade in % are means
+rounded to one decimal in their units. A missing value is `null` (missing is null); recorded zero remains
+0.
+
+Rounding contract: heart-rate average to one decimal bpm; heart-rate minimum
+and maximum to whole integer bpm; pace average, fastest, and slowest in
+seconds/km to whole integers; and other means (cadence, power, altitude, and
+grade) to one decimal.
 
 `availability` is returned-window only: it describes evidence in the returned
 window only. It does not describe device or account capability (not device or account capability).
@@ -144,10 +171,12 @@ The parser enforces these limits before exposing evidence: archive/member
 25MB, entries 16, a cd/read chunk 65536 bytes, auxiliary 65536 bytes,
 frames 200000, records 100000, definition fields 128, and
 returned points 600. Strict classic ZIP, CRC, and chained-FIT violations are
-fatal (strict classic ZIP/CRC/chained fatal). Malformed records may be discarded with a malformed warning and fixed warning code
-`partial_success`; other malformed or unsafe inputs remain fixed `error`
-responses. The parser is pinned to fitdecode 0.11 (`fitdecode==0.11`) for this read. The
-existing fitparse analyze path unchanged.
+fatal (strict classic ZIP/CRC/chained fatal). Malformed records may be
+discarded with the fixed warning `malformed_records_discarded` while the status
+is `partial_success`; `partial_success` is never a warning code. Other
+malformed or unsafe inputs remain fixed `error` responses. The parser is pinned
+to fitdecode 0.11 (`fitdecode==0.11`) for this read. The existing fitparse
+analyze path unchanged.
 
 ## Limits and exclusions
 

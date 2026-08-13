@@ -34,6 +34,73 @@ def _normalized() -> str:
     return " ".join(_docs().lower().split())
 
 
+TOP_KEYS = (
+    "status",
+    "error",
+    "activity_id",
+    "window",
+    "sampling",
+    "availability",
+    "series",
+    "warnings",
+)
+WINDOW_KEYS = (
+    "requested_start_seconds",
+    "actual_end_seconds",
+    "resolution_seconds",
+    "next_start_seconds",
+)
+SAMPLING_KEYS = (
+    "source_records",
+    "returned_points",
+    "observed_median_interval_seconds",
+    "irregular",
+)
+AVAILABILITY_KEYS = (
+    "heart_rate_bpm",
+    "speed_mps",
+    "pace_seconds_per_km",
+    "cadence_rpm",
+    "power_w",
+    "altitude_m",
+    "grade_pct",
+)
+SERIES_KEYS = (
+    "elapsed_seconds",
+    "timestamp",
+    "sample_count",
+    "heart_rate_bpm",
+    "speed_mps",
+    "pace_seconds_per_km",
+    "cadence_rpm",
+    "power_w",
+    "altitude_m",
+    "grade_pct",
+)
+
+
+def _assert_json_native(value: object) -> None:
+    if isinstance(value, dict):
+        assert all(type(key) is str for key in value)
+        for key, child in value.items():
+            assert key not in {"gps", "location", "coordinates", "polyline", "raw_fit"}
+            _assert_json_native(child)
+    elif isinstance(value, list):
+        for child in value:
+            _assert_json_native(child)
+    else:
+        assert value is None or type(value) in {str, int, float, bool}
+
+
+def _assert_exact_types(values: list[object], expected: tuple[type | None, ...]) -> None:
+    assert len(values) == len(expected)
+    for value, expected_type in zip(values, expected):
+        if expected_type is None:
+            assert value is None
+        else:
+            assert type(value) is expected_type
+
+
 def test_guide_has_findable_sections_for_tool_choice_and_boundaries():
     docs = _docs()
     for heading in (
@@ -75,12 +142,7 @@ def test_guide_example_has_exact_ordered_envelope_and_aligned_series():
         "altitude_m",
         "grade_pct",
     ]
-    assert set(example["sampling"]) == {
-        "source_records",
-        "returned_points",
-        "observed_median_interval_seconds",
-        "irregular",
-    }
+    assert tuple(example["sampling"]) == SAMPLING_KEYS
     series = example["series"]
     assert list(series) == [
         "elapsed_seconds",
@@ -94,15 +156,15 @@ def test_guide_example_has_exact_ordered_envelope_and_aligned_series():
         "altitude_m",
         "grade_pct",
     ]
-    assert set(series["heart_rate_bpm"]) == {"average", "minimum", "maximum"}
-    assert set(series["speed_mps"]) == {"average"}
-    assert set(series["pace_seconds_per_km"]) == {
+    assert tuple(series["heart_rate_bpm"]) == ("average", "minimum", "maximum")
+    assert tuple(series["speed_mps"]) == ("average",)
+    assert tuple(series["pace_seconds_per_km"]) == (
         "average",
         "fastest",
         "slowest",
-    }
+    )
     for metric in ("cadence_rpm", "power_w", "altitude_m", "grade_pct"):
-        assert set(series[metric]) == {"average"}
+        assert tuple(series[metric]) == ("average",)
     returned_points = example["sampling"]["returned_points"]
     assert returned_points == 2
     arrays = [
@@ -122,6 +184,56 @@ def test_guide_example_has_exact_ordered_envelope_and_aligned_series():
         series["grade_pct"]["average"],
     ]
     assert all(len(array) == returned_points for array in arrays)
+
+
+def test_guide_example_has_hardcoded_order_and_exact_json_value_types():
+    example = _example()
+    _assert_json_native(example)
+    assert tuple(example) == TOP_KEYS
+    assert tuple(example["window"]) == WINDOW_KEYS
+    assert tuple(example["availability"]) == AVAILABILITY_KEYS
+    assert tuple(example["series"]) == SERIES_KEYS
+    assert type(example["status"]) is str
+    assert example["error"] is None
+    assert type(example["activity_id"]) is int
+    assert all(type(value) is int for value in example["window"].values())
+    sampling = example["sampling"]
+    assert type(sampling["source_records"]) is int
+    assert type(sampling["returned_points"]) is int
+    assert type(sampling["observed_median_interval_seconds"]) is int
+    assert type(sampling["irregular"]) is bool
+    assert all(type(value) is bool for value in example["availability"].values())
+    series = example["series"]
+    returned_points = example["sampling"]["returned_points"]
+    assert type(returned_points) is int
+    _assert_exact_types(series["elapsed_seconds"], (int, int))
+    _assert_exact_types(series["timestamp"], (str, str))
+    _assert_exact_types(series["sample_count"], (int, int))
+    _assert_exact_types(series["heart_rate_bpm"]["average"], (float, float))
+    _assert_exact_types(series["heart_rate_bpm"]["minimum"], (int, int))
+    _assert_exact_types(series["heart_rate_bpm"]["maximum"], (int, int))
+    _assert_exact_types(series["speed_mps"]["average"], (float, float))
+    for key in ("average", "fastest", "slowest"):
+        _assert_exact_types(series["pace_seconds_per_km"][key], (int, int))
+    for metric in ("cadence_rpm", "power_w", "altitude_m"):
+        _assert_exact_types(series[metric]["average"], (float, float))
+    _assert_exact_types(series["grade_pct"]["average"], (float, None))
+    leaf_arrays = [
+        series["elapsed_seconds"],
+        series["timestamp"],
+        series["sample_count"],
+        *series["heart_rate_bpm"].values(),
+        *series["speed_mps"].values(),
+        *series["pace_seconds_per_km"].values(),
+        *series["cadence_rpm"].values(),
+        *series["power_w"].values(),
+        *series["altitude_m"].values(),
+        *series["grade_pct"].values(),
+    ]
+    assert len(leaf_arrays) == 14
+    assert all(len(array) == returned_points for array in leaf_arrays)
+    assert sampling["source_records"] >= returned_points
+    assert json.dumps(example).lower().count("gps") == 0
 
 
 def test_guide_example_uses_safe_plausible_values_and_utc_bin_anchors():
@@ -160,6 +272,12 @@ def test_guide_pins_workflow_arguments_and_exact_pagination_recipe():
         "start_seconds=0",
         "duration_seconds=600",
         "resolution_seconds=1",
+        "activity_id positive integer or ascii decimal string from 1 through 9007199254740991",
+        "start_seconds exact integer from 0 through 4026531838",
+        "duration_seconds exact integer from 1 through 86400",
+        "resolution_seconds exact integer from 1 through 300",
+        "booleans and floats",
+        "numeric strings for window arguments are rejected",
         "positive integer",
         "ascii decimal string",
         "half-open",
@@ -189,19 +307,21 @@ def test_guide_pins_sparse_sampling_units_rounding_and_availability_scope():
         "elapsed seconds",
         "heart rate in bpm",
         "speed in m/s to 3 decimals",
-        "pace in seconds/km to an integer",
+        "pace average, fastest, and slowest in seconds/km to whole integers",
         "cadence in rpm",
         "power in w",
         "altitude in m",
         "grade in %",
-        "means to 1 decimal",
-        "heart-rate extrema and pace values to integer seconds",
+        "heart-rate average to one decimal bpm",
+        "heart-rate minimum and maximum to whole integer bpm",
+        "other means (cadence, power, altitude, and grade) to one decimal",
         "missing is null",
         "recorded zero remains 0",
         "returned-window only",
         "not device or account capability",
     ):
         assert phrase in lower
+    assert "heart-rate extrema and pace values to integer seconds" not in lower
 
 
 def test_guide_pins_download_privacy_errors_and_safety_limits():
@@ -231,6 +351,20 @@ def test_guide_pins_download_privacy_errors_and_safety_limits():
     ):
         assert phrase in lower
     assert "existing fitparse analyze path unchanged" in lower
+
+
+def test_guide_distinguishes_partial_status_from_exact_malformed_warning():
+    lower = _normalized()
+    for phrase in (
+        "partial_success is a status, never a warning code",
+        "provider: fit",
+        "code: malformed_records_discarded",
+        "message: malformed fit record messages were discarded.",
+        "count: n",
+        "empty selected window returns success and suppresses the warning",
+        "internal_error is the error code",
+    ):
+        assert phrase in lower
 
 
 def test_guide_excludes_coaching_mutation_and_unsafe_follow_ups():
