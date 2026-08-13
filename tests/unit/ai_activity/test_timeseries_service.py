@@ -14,6 +14,7 @@ from garmin_mcp.ai_activity.timeseries import FIT_EPOCH, ParseResult, RecordFact
 
 
 MAX_ACTIVITY_ID = 9_007_199_254_740_991
+MAX_ACTIVITY_ID_TEXT_LENGTH = 64
 MAX_FIT_ELAPSED_SECONDS = 4_026_531_838
 MAX_RECORD_MESSAGES = 100_000
 MAX_RETURNED_POINTS = 600
@@ -356,6 +357,48 @@ def test_activity_id_rejects_non_exact_or_out_of_range_values_without_seams(
 
     assert result == _expected_empty(code="invalid_activity_id")
     assert recorded_success_seams[0] == []
+
+
+@pytest.mark.parametrize(
+    ("case", "raw_length"),
+    [
+        ("sixty-five", 65),
+        ("ten-thousand", 10_000),
+        ("twenty-million", 20_000_001),
+    ],
+)
+def test_activity_id_text_over_the_raw_length_cap_is_rejected_without_any_seam_calls(
+    service_module,
+    recorded_success_seams,
+    case: str,
+    raw_length: int,
+):
+    activity_id = "0" * (raw_length - 1) + "1"
+
+    assert case
+    assert len(activity_id) == raw_length
+    result = service_module.get_activity_timeseries_service(object(), activity_id, 0, 1, 1)
+
+    assert result == _expected_empty(code="invalid_activity_id")
+    assert recorded_success_seams[0] == []
+
+
+def test_activity_id_text_at_64_characters_can_normalize_but_65_characters_cannot(
+    service_module, recorded_success_seams
+):
+    accepted = " " + "0" * 47 + str(MAX_ACTIVITY_ID)
+    rejected = "0" * 64 + "1"
+
+    assert len(accepted) == MAX_ACTIVITY_ID_TEXT_LENGTH
+    assert len(rejected) == MAX_ACTIVITY_ID_TEXT_LENGTH + 1
+
+    accepted_result = service_module.get_activity_timeseries_service(object(), accepted, 0, 1, 1)
+    rejected_result = service_module.get_activity_timeseries_service(object(), rejected, 0, 1, 1)
+
+    assert accepted_result["activity_id"] == MAX_ACTIVITY_ID
+    assert accepted_result["status"] == "success"
+    assert rejected_result == _expected_empty(code="invalid_activity_id")
+    assert [name for name, _ in recorded_success_seams[0]] == ["download", "parse", "reduce"]
 
 
 @pytest.mark.parametrize(
@@ -1311,5 +1354,6 @@ def test_package_reexports_service_and_documented_limits():
     from garmin_mcp import ai_activity
 
     assert ai_activity.MAX_ACTIVITY_ID == MAX_ACTIVITY_ID
+    assert ai_activity.MAX_ACTIVITY_ID_TEXT_LENGTH == MAX_ACTIVITY_ID_TEXT_LENGTH
     assert ai_activity.MAX_FIT_ELAPSED_SECONDS == MAX_FIT_ELAPSED_SECONDS
     assert ai_activity.get_activity_timeseries_service is not None

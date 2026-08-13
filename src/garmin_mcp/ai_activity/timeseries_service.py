@@ -16,6 +16,7 @@ from .timeseries import (
 
 
 MAX_ACTIVITY_ID = 9_007_199_254_740_991
+MAX_ACTIVITY_ID_TEXT_LENGTH = 64
 MAX_DURATION_SECONDS = 86_400
 MAX_RESOLUTION_SECONDS = 300
 MAX_RETURNED_POINTS = 600
@@ -164,6 +165,8 @@ def _activity_id(value: Any) -> int | None:
     if type(value) is int:
         return value if 1 <= value <= MAX_ACTIVITY_ID else None
     if type(value) is not str:
+        return None
+    if len(value) > MAX_ACTIVITY_ID_TEXT_LENGTH:
         return None
     text = value.strip()
     if not text or not text.isascii() or not text.isdecimal():
@@ -442,6 +445,7 @@ def get_activity_timeseries_service(
 
 __all__ = [
     "MAX_ACTIVITY_ID",
+    "MAX_ACTIVITY_ID_TEXT_LENGTH",
     "MAX_DURATION_SECONDS",
     "MAX_FIT_ELAPSED_SECONDS",
     "MAX_RESOLUTION_SECONDS",

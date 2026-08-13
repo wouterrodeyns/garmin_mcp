@@ -3,6 +3,7 @@
 from .service import analyze_activity_service
 from .timeseries_service import (
     MAX_ACTIVITY_ID,
+    MAX_ACTIVITY_ID_TEXT_LENGTH,
     MAX_FIT_ELAPSED_SECONDS,
     get_activity_timeseries_service,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "analyze_activity_service",
     "get_activity_timeseries_service",
     "MAX_ACTIVITY_ID",
+    "MAX_ACTIVITY_ID_TEXT_LENGTH",
     "MAX_FIT_ELAPSED_SECONDS",
     "configure",
     "download_original_fit",
