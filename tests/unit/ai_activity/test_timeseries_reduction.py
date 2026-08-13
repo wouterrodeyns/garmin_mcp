@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
+import json
+import math
 
 from garmin_mcp.ai_activity.timeseries import (
     FIT_EPOCH,
@@ -165,6 +167,144 @@ def test_half_up_fsum_rounding_is_used_for_display_values():
     assert result.series["speed_mps"]["average"] == [0.002]
     assert result.series["altitude_m"]["average"] == [0.2]
     assert Decimal("0.002") == Decimal(str(result.series["speed_mps"]["average"][0]))
+
+
+def test_mean_uses_fsum_before_half_up_rounding_not_builtin_sum():
+    grade_values = [-100, 0.05, 0.15, 100]
+    result = reduce_records(
+        [fact(BASE + offset, offset, grade_pct=value) for offset, value in enumerate(grade_values)],
+        0,
+        5,
+        5,
+    )
+
+    expected = Decimal(str(math.fsum(grade_values) / len(grade_values))).quantize(
+        Decimal("0.1"), rounding=ROUND_HALF_UP
+    )
+    naive_sum = Decimal(str(sum(grade_values) / len(grade_values))).quantize(
+        Decimal("0.1"), rounding=ROUND_HALF_UP
+    )
+    assert expected == Decimal("0.1")
+    assert naive_sum == Decimal("0.0")
+    assert result.series["grade_pct"]["average"] == [float(expected)]
+
+
+def test_mean_sums_raw_values_before_rounding_each_sample():
+    result = reduce_records(
+        [fact(BASE, 0, cadence_rpm=1.04), fact(BASE + 1, 1, cadence_rpm=1.05)],
+        0,
+        2,
+        2,
+    )
+
+    assert result.series["cadence_rpm"]["average"] == [1.0]
+
+
+def test_permutations_are_equal_and_input_lists_and_facts_are_unchanged():
+    records = [
+        fact(BASE + 5, 8, heart_rate_bpm=130),
+        fact(BASE, 4, heart_rate_bpm=100),
+        fact(BASE + 5, 2, heart_rate_bpm=110),
+        fact(BASE + 2, 6, heart_rate_bpm=120),
+    ]
+    original_order = list(records)
+    original_ids = [id(record) for record in records]
+
+    first = reduce_records(records, 0, 10, 5)
+    second = reduce_records(list(reversed(records)), 0, 10, 5)
+    third = reduce_records([records[2], records[0], records[3], records[1]], 0, 10, 5)
+
+    assert first == second == third
+    assert records == original_order
+    assert [id(record) for record in records] == original_ids
+
+
+def test_reduction_has_exact_public_shape_and_no_private_keys():
+    result = reduce_records(
+        [fact(BASE, 0, heart_rate_bpm=140, speed_mps=2.0, cadence_rpm=90.0)],
+        0,
+        1,
+        1,
+    )
+
+    assert tuple(result.availability) == (
+        "heart_rate_bpm",
+        "speed_mps",
+        "pace_seconds_per_km",
+        "cadence_rpm",
+        "power_w",
+        "altitude_m",
+        "grade_pct",
+    )
+    assert tuple(result.series) == (
+        "elapsed_seconds",
+        "timestamp",
+        "sample_count",
+        "heart_rate_bpm",
+        "speed_mps",
+        "pace_seconds_per_km",
+        "cadence_rpm",
+        "power_w",
+        "altitude_m",
+        "grade_pct",
+    )
+    assert tuple(result.series["heart_rate_bpm"]) == ("average", "minimum", "maximum")
+    assert tuple(result.series["speed_mps"]) == ("average",)
+    assert tuple(result.series["pace_seconds_per_km"]) == ("average", "fastest", "slowest")
+    assert tuple(result.series["cadence_rpm"]) == ("average",)
+    assert tuple(result.series["power_w"]) == ("average",)
+    assert tuple(result.series["altitude_m"]) == ("average",)
+    assert tuple(result.series["grade_pct"]) == ("average",)
+
+    forbidden = {
+        "raw", "frame", "message", "field", "gps", "latitude", "longitude",
+        "coordinate", "coordinates", "location", "source_object",
+    }
+
+    def assert_public(value: object) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                assert key not in forbidden
+                assert_public(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                assert_public(nested)
+
+    assert_public(result.sampling)
+    assert_public(result.availability)
+    assert_public(result.series)
+    json.loads(json.dumps({"sampling": result.sampling, "availability": result.availability, "series": result.series}))
+
+
+def test_json_number_types_are_stable_for_means_extrema_and_pace():
+    result = reduce_records(
+        [
+            fact(
+                BASE,
+                0,
+                heart_rate_bpm=140,
+                speed_mps=2,
+                cadence_rpm=90,
+                power_w=200,
+                altitude_m=5,
+                grade_pct=1,
+            )
+        ],
+        0,
+        1,
+        1,
+    )
+
+    for metric in ("heart_rate_bpm", "speed_mps", "cadence_rpm", "power_w", "altitude_m", "grade_pct"):
+        assert type(result.series[metric]["average"][0]) is float
+    assert type(result.series["heart_rate_bpm"]["minimum"][0]) is int
+    assert type(result.series["heart_rate_bpm"]["maximum"][0]) is int
+    for key in ("average", "fastest", "slowest"):
+        assert type(result.series["pace_seconds_per_km"][key][0]) is int
+
+    missing = reduce_records([fact(BASE, 0)], 0, 1, 1)
+    assert missing.series["speed_mps"]["average"][0] is None
+    assert missing.series["pace_seconds_per_km"]["average"][0] is None
 
 
 def test_all_metric_means_and_extrema_use_fixed_precision():
