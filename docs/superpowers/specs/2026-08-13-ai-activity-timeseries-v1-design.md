@@ -439,12 +439,13 @@ of these outcomes may silently truncate a stream.
 Malformed records are the only non-fatal FIT-message condition. A `record`
 message is discarded and counted as malformed when its timestamp cannot be
 obtained without an exception, is not a timezone-aware UTC `datetime`, cannot
-participate in safe arithmetic/UTC serialization, or yields a negative elapsed time after
-sorting (the last condition is defensive and should not occur). Missing or
-invalid optional measurement fields do **not** make the record malformed; they
-produce null metrics as described above. An exception while obtaining an
-optional allowlisted measurement is handled the same way as an invalid optional
-value: that metric is null, while the timestamped record remains usable.
+participate in safe arithmetic/UTC serialization, or yields a negative elapsed
+time after sorting (the last condition is defensive and should not occur).
+Missing or invalid optional measurement fields do **not** make the record
+malformed; they produce null metrics as described above. An exception while
+obtaining an optional allowlisted measurement is handled the same way as an
+invalid optional value: that metric is null, while the timestamped record
+remains usable.
 Out-of-order and duplicate valid timestamps are valid, sorted records. Other
 fitdecode/file failures are fatal.
 
@@ -549,7 +550,7 @@ Package `__init__.py` exports the new service and retains the existing lazy
 `configure`/`register_tools` pattern.
 
 The implementation pins `fitdecode==0.11.0` in `pyproject.toml` and `uv.lock`
-for this streaming parser. Existing `fitparse>=1.2.0` remains pinned and is
+for this streaming parser. Existing `fitparse>=1.2.0` remains declared and is
 used unchanged by the existing `activity_analysis.py` tool; it is not imported
 by `timeseries.py`.
 
