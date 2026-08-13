@@ -5,12 +5,13 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 import math
 import ntpath
 import stat
 import struct
-from typing import BinaryIO, Iterator
+from typing import Any, BinaryIO, Iterator, Sequence
 import zipfile
 import zlib
 
@@ -49,6 +50,7 @@ _METRIC_RANGES = {
 _METRIC_NAMES = tuple(_METRIC_RANGES)
 _TIMESTAMP_MIN_SECONDS = 0x10000000
 _TIMESTAMP_MAX_SECONDS = 0xFFFFFFFE
+MAX_FIT_ELAPSED_SECONDS = _TIMESTAMP_MAX_SECONDS - _TIMESTAMP_MIN_SECONDS
 
 _EOCD_SIGNATURE = b"PK\x05\x06"
 _CENTRAL_SIGNATURE = b"PK\x01\x02"
@@ -87,6 +89,193 @@ class RecordFact:
     power_w: float | None
     altitude_m: float | None
     grade_pct: float | None
+
+
+@dataclass(frozen=True)
+class WindowResult:
+    """Deterministic, bounded reduction of timestamped record facts."""
+
+    sampling: dict[str, Any]
+    availability: dict[str, bool]
+    series: dict[str, Any]
+    next_start_seconds: int | None
+
+
+def _display_number(value: float, places: int) -> int | float:
+    """Round only the final display value using decimal half-up semantics."""
+    quantum = Decimal(1).scaleb(-places)
+    rounded = Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP)
+    if places == 0:
+        return int(rounded)
+    return float(rounded)
+
+
+def _display_finite_or_none(value: float, places: int) -> int | float | None:
+    if not math.isfinite(value):
+        return None
+    return _display_number(value, places)
+
+
+def _finite_metric_values(records: Sequence[RecordFact], metric: str) -> list[float]:
+    values: list[float] = []
+    for record in records:
+        value = getattr(record, metric)
+        if type(value) in (int, float) and math.isfinite(float(value)):
+            values.append(float(value))
+    return values
+
+
+def _timestamp_text(t0_raw: int, anchor: int) -> str:
+    instant = FIT_EPOCH + timedelta(seconds=t0_raw + anchor)
+    return instant.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _empty_series() -> dict[str, Any]:
+    return {
+        "elapsed_seconds": [],
+        "timestamp": [],
+        "sample_count": [],
+        "heart_rate_bpm": {"average": [], "minimum": [], "maximum": []},
+        "speed_mps": {"average": []},
+        "pace_seconds_per_km": {"average": [], "fastest": [], "slowest": []},
+        "cadence_rpm": {"average": []},
+        "power_w": {"average": []},
+        "altitude_m": {"average": []},
+        "grade_pct": {"average": []},
+    }
+
+
+def reduce_records(
+    records: Sequence[RecordFact],
+    start_seconds: int,
+    duration_seconds: int,
+    resolution_seconds: int,
+) -> WindowResult:
+    """Sort, select, bin, and reduce validated FIT record facts."""
+    ordered = sorted(records, key=lambda record: (record.raw_timestamp_seconds, record.encounter_index))
+    series = _empty_series()
+    availability = {metric: False for metric in (
+        "heart_rate_bpm",
+        "speed_mps",
+        "pace_seconds_per_km",
+        "cadence_rpm",
+        "power_w",
+        "altitude_m",
+        "grade_pct",
+    )}
+
+    if not ordered:
+        return WindowResult(
+            sampling={
+                "source_records": 0,
+                "returned_points": 0,
+                "observed_median_interval_seconds": None,
+                "irregular": False,
+            },
+            availability=availability,
+            series=series,
+            next_start_seconds=None,
+        )
+
+    t0_raw = ordered[0].raw_timestamp_seconds
+    window_end = start_seconds + duration_seconds
+    selected: list[RecordFact] = []
+    bins: dict[int, list[RecordFact]] = {}
+    for record in ordered:
+        elapsed = record.raw_timestamp_seconds - t0_raw
+        if start_seconds <= elapsed < window_end:
+            selected.append(record)
+            anchor = start_seconds + ((elapsed - start_seconds) // resolution_seconds) * resolution_seconds
+            bins.setdefault(anchor, []).append(record)
+
+    positive_deltas = [
+        later.raw_timestamp_seconds - earlier.raw_timestamp_seconds
+        for earlier, later in zip(selected, selected[1:])
+        if later.raw_timestamp_seconds - earlier.raw_timestamp_seconds > 0
+    ]
+    if positive_deltas:
+        sorted_deltas = sorted(positive_deltas)
+        middle = len(sorted_deltas) // 2
+        if len(sorted_deltas) % 2:
+            median = float(sorted_deltas[middle])
+        else:
+            median = (sorted_deltas[middle - 1] + sorted_deltas[middle]) / 2
+        observed_median: float | None = _display_number(median, 3)  # type: ignore[assignment]
+    else:
+        observed_median = None
+    irregular = len(positive_deltas) >= 2 and len(set(positive_deltas)) > 1
+
+    for anchor in sorted(bins):
+        bucket = bins[anchor]
+        series["elapsed_seconds"].append(anchor)
+        series["timestamp"].append(_timestamp_text(t0_raw, anchor))
+        series["sample_count"].append(len(bucket))
+
+        heart_rate = _finite_metric_values(bucket, "heart_rate_bpm")
+        if heart_rate:
+            availability["heart_rate_bpm"] = True
+            series["heart_rate_bpm"]["average"].append(_display_number(math.fsum(heart_rate) / len(heart_rate), 1))
+            series["heart_rate_bpm"]["minimum"].append(_display_number(min(heart_rate), 0))
+            series["heart_rate_bpm"]["maximum"].append(_display_number(max(heart_rate), 0))
+        else:
+            series["heart_rate_bpm"]["average"].append(None)
+            series["heart_rate_bpm"]["minimum"].append(None)
+            series["heart_rate_bpm"]["maximum"].append(None)
+
+        speed = _finite_metric_values(bucket, "speed_mps")
+        if speed:
+            availability["speed_mps"] = True
+            series["speed_mps"]["average"].append(_display_number(math.fsum(speed) / len(speed), 3))
+        else:
+            series["speed_mps"]["average"].append(None)
+        positive_speed = [value for value in speed if value > 0]
+        if positive_speed:
+            availability["pace_seconds_per_km"] = True
+            series["pace_seconds_per_km"]["average"].append(
+                _display_finite_or_none(1000 / (math.fsum(positive_speed) / len(positive_speed)), 0)
+            )
+            series["pace_seconds_per_km"]["fastest"].append(
+                _display_finite_or_none(1000 / max(positive_speed), 0)
+            )
+            series["pace_seconds_per_km"]["slowest"].append(
+                _display_finite_or_none(1000 / min(positive_speed), 0)
+            )
+        else:
+            series["pace_seconds_per_km"]["average"].append(None)
+            series["pace_seconds_per_km"]["fastest"].append(None)
+            series["pace_seconds_per_km"]["slowest"].append(None)
+
+        for metric, places in (
+            ("cadence_rpm", 1),
+            ("power_w", 1),
+            ("altitude_m", 1),
+            ("grade_pct", 1),
+        ):
+            values = _finite_metric_values(bucket, metric)
+            if values:
+                availability[metric] = True
+                series[metric]["average"].append(_display_number(math.fsum(values) / len(values), places))
+            else:
+                series[metric]["average"].append(None)
+
+    has_later_record = any(
+        type(record.raw_timestamp_seconds) is int
+        and _TIMESTAMP_MIN_SECONDS <= record.raw_timestamp_seconds <= _TIMESTAMP_MAX_SECONDS
+        and record.raw_timestamp_seconds - t0_raw >= window_end
+        for record in ordered
+    )
+    next_start = window_end if window_end <= MAX_FIT_ELAPSED_SECONDS and has_later_record else None
+    return WindowResult(
+        sampling={
+            "source_records": len(selected),
+            "returned_points": len(bins),
+            "observed_median_interval_seconds": observed_median,
+            "irregular": irregular,
+        },
+        availability=availability,
+        series=series,
+        next_start_seconds=next_start,
+    )
 
 
 @dataclass(frozen=True)
