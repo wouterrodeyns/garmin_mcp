@@ -180,43 +180,99 @@ def _valid_deflated_extent(
     data_start: int,
     compressed_size: int,
     uncompressed_size: int,
+    declared_crc: int,
     output_limit: int,
 ) -> bool:
-    """Validate exactly one raw DEFLATE member without retaining output."""
+    """Validate one exact raw-DEFLATE extent without retaining output."""
     if uncompressed_size > output_limit:
         return False
     decompressor = zlib.decompressobj(-zlib.MAX_WBITS)
     data_end = data_start + compressed_size
     position = data_start
     produced_total = 0
+    crc = 0
+
+    def output_budget() -> int:
+        return min(FIT_STREAM_READ_CHUNK_BYTES, uncompressed_size - produced_total + 1)
+
+    def consume_output(input_bytes: bytes) -> tuple[bytes, bytes] | None:
+        nonlocal produced_total, crc
+        output = decompressor.decompress(input_bytes, output_budget())
+        if len(output) > uncompressed_size - produced_total:
+            return None
+        produced_total += len(output)
+        crc = zlib.crc32(output, crc)
+        return output, decompressor.unconsumed_tail
+
     try:
         while position < data_end:
             next_position = min(position + FIT_STREAM_READ_CHUNK_BYTES, data_end)
             pending = archive[position:next_position]
             position = next_position
             while pending:
-                output_budget = min(
-                    FIT_STREAM_READ_CHUNK_BYTES,
-                    max(1, uncompressed_size - produced_total),
-                )
-                before = pending
-                output = decompressor.decompress(pending, output_budget)
-                if len(output) > uncompressed_size - produced_total:
+                result = consume_output(pending)
+                if result is None:
                     return False
-                produced_total += len(output)
-                pending = decompressor.unconsumed_tail
+                output, next_pending = result
                 if decompressor.eof:
                     return (
-                        not pending
+                        not next_pending
                         and not decompressor.unused_data
                         and position == data_end
                         and produced_total == uncompressed_size
+                        and crc & 0xFFFFFFFF == declared_crc
                     )
-                if pending and len(pending) == len(before) and not output:
+                if next_pending and len(next_pending) == len(pending) and not output:
                     return False
+                pending = next_pending
+        while not decompressor.eof:
+            result = consume_output(b"")
+            if result is None:
+                return False
+            output, pending = result
+            if pending or decompressor.unused_data:
+                return False
+            if not output and not decompressor.eof:
+                return False
     except zlib.error:
         return False
-    return False
+    return produced_total == uncompressed_size and crc & 0xFFFFFFFF == declared_crc
+
+
+def _validate_member_integrity(archive: bytes, entry: _ValidatedLocalEntry, output_limit: int) -> bool:
+    """Stream-check a constrained ordinary member's exact bytes and CRC."""
+    member = entry.metadata
+    if member.uncompressed_size > output_limit:
+        return False
+    if member.name.endswith("/"):
+        return (
+            member.compressed_size == 0
+            and member.uncompressed_size == 0
+            and entry.crc == 0
+        )
+    if member.compression == zipfile.ZIP_STORED:
+        if member.compressed_size != member.uncompressed_size:
+            return False
+        position = entry.data_start
+        remaining = member.compressed_size
+        crc = 0
+        total = 0
+        while remaining:
+            size = min(remaining, FIT_STREAM_READ_CHUNK_BYTES)
+            chunk = archive[position : position + size]
+            crc = zlib.crc32(chunk, crc)
+            total += len(chunk)
+            position += size
+            remaining -= size
+        return total == member.uncompressed_size and crc & 0xFFFFFFFF == entry.crc
+    return _valid_deflated_extent(
+        archive,
+        entry.data_start,
+        member.compressed_size,
+        member.uncompressed_size,
+        entry.crc,
+        output_limit,
+    )
 
 
 def _preflight_classic_zip(archive: bytes) -> PreflightResult:
@@ -380,26 +436,6 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
     if cursor != central_end:
         return _unsafe()
 
-    for entry in local_entries:
-        is_directory = entry.metadata.name.endswith("/")
-        if is_directory:
-            continue
-        if entry.metadata.compression == zipfile.ZIP_STORED:
-            if entry.metadata.compressed_size != entry.metadata.uncompressed_size:
-                return _unsafe()
-        elif not _valid_deflated_extent(
-            archive,
-            entry.data_start,
-            entry.metadata.compressed_size,
-            entry.metadata.uncompressed_size,
-            (
-                MAX_FIT_MEMBER_BYTES
-                if entry.metadata.name.lower().endswith(".fit")
-                else MAX_AUXILIARY_ENTRY_BYTES
-            ),
-        ):
-            return _unsafe()
-
     ordered_local_entries = sorted(local_entries, key=lambda entry: entry.metadata.local_offset)
     ranges: list[tuple[int, int]] = []
     for index, entry in enumerate(ordered_local_entries):
@@ -454,6 +490,14 @@ def _preflight_classic_zip(archive: bytes) -> PreflightResult:
     fit_member = selected[0]
     if fit_member.uncompressed_size > MAX_FIT_MEMBER_BYTES:
         return _unsafe()
+    for entry in local_entries:
+        output_limit = (
+            MAX_FIT_MEMBER_BYTES
+            if entry.metadata is fit_member
+            else MAX_AUXILIARY_ENTRY_BYTES
+        )
+        if not _validate_member_integrity(archive, entry, output_limit):
+            return _unsafe()
     return PreflightResult(fit_member, None)
 
 

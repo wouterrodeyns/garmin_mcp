@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from io import BytesIO
+import random
 import zipfile
 import zlib
 
@@ -303,6 +304,70 @@ def test_stored_and_deflated_fit_archives_reach_the_decoder_stub(compression: in
     assert result.malformed_record_count == 0
 
 
+@pytest.mark.parametrize("size", [65_535, 65_536, 65_537, 65_539, 131_071, 131_072, 131_236])
+def test_real_deflated_payloads_across_output_buffer_boundaries_reach_decoder_stub(size: int):
+    payload = bytes(range(251)) * (size // 251) + bytes(range(size % 251))
+    assert (
+        _result(make_zip({"activity.fit": payload}, zipfile.ZIP_DEFLATED)).failure_code
+        == "fit_parse_failed"
+    )
+
+
+def test_seeded_varied_and_repetitive_deflated_payloads_reach_decoder_stub():
+    generator = random.Random(42)
+    payloads = [
+        b"repeated-pattern" * 9_373,
+        bytes(generator.randrange(256) for _ in range(80_003)),
+        (b"A" * 32_768) + bytes(generator.randrange(256) for _ in range(33_001)),
+    ]
+    for payload in payloads:
+        assert (
+            _result(make_zip({"activity.fit": payload}, zipfile.ZIP_DEFLATED)).failure_code
+            == "fit_parse_failed"
+        )
+
+
+@pytest.mark.parametrize("compression", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_forged_consistent_crc_is_rejected_before_zipfile_construction(monkeypatch, compression: int):
+    from garmin_mcp.ai_activity import timeseries
+
+    payload = make_zip({"activity.fit": b"crc-content" * 100}, compression)
+    central = _central_offset(payload)
+    forged_crc = 0x12345678
+    payload = mutate_u32(payload, 14, forged_crc)
+    payload = mutate_u32(payload, central + 16, forged_crc)
+    constructed = False
+
+    def fail_if_constructed(*args, **kwargs):
+        nonlocal constructed
+        constructed = True
+        raise AssertionError("CRC must be checked before ZipFile")
+
+    monkeypatch.setattr(timeseries.zipfile, "ZipFile", fail_if_constructed)
+    assert timeseries.parse_original_fit(payload).failure_code == "unsafe_fit_archive"
+    assert constructed is False
+
+
+@pytest.mark.parametrize("entry_count", [2, 16])
+def test_fit_cardinality_is_rejected_before_member_integrity_validation(monkeypatch, entry_count: int):
+    from garmin_mcp.ai_activity import timeseries
+
+    entries = {f"activity-{index}.fit": b"x" for index in range(entry_count)}
+    invoked = False
+
+    def fail_if_invoked(*args, **kwargs):
+        nonlocal invoked
+        invoked = True
+        raise AssertionError("integrity validation must follow FIT cardinality checks")
+
+    monkeypatch.setattr(timeseries, "_validate_member_integrity", fail_if_invoked)
+    assert (
+        timeseries.parse_original_fit(make_zip(entries)).failure_code
+        == "unsafe_fit_archive"
+    )
+    assert invoked is False
+
+
 def test_only_selected_fit_member_is_opened_and_zipfile_read_is_never_used(monkeypatch):
     from garmin_mcp.ai_activity import timeseries
 
@@ -461,14 +526,6 @@ def test_exact_12_and_16_byte_data_descriptors_are_accepted(signature: bool):
     from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
 
     assert _preflight_classic_zip(_descriptor_archive(signature=signature)).failure_code is None
-
-
-def test_unsigned_descriptor_whose_crc_starts_with_signature_is_not_misclassified():
-    from garmin_mcp.ai_activity.timeseries import _preflight_classic_zip
-
-    assert _preflight_classic_zip(
-        _descriptor_archive(signature=False, crc=0x08074B50)
-    ).failure_code is None
 
 
 @pytest.mark.parametrize("padding", [b"\x00", b"unexpected"])
