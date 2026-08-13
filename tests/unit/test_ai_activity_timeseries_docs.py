@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 DOCS_PATH = ROOT / "docs" / "ai-activity-timeseries.md"
+TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
 
 
 def _docs() -> str:
@@ -200,7 +201,7 @@ def test_guide_example_has_hardcoded_order_and_exact_json_value_types():
     sampling = example["sampling"]
     assert type(sampling["source_records"]) is int
     assert type(sampling["returned_points"]) is int
-    assert type(sampling["observed_median_interval_seconds"]) is int
+    assert type(sampling["observed_median_interval_seconds"]) is float
     assert type(sampling["irregular"]) is bool
     assert all(type(value) is bool for value in example["availability"].values())
     series = example["series"]
@@ -208,6 +209,7 @@ def test_guide_example_has_hardcoded_order_and_exact_json_value_types():
     assert type(returned_points) is int
     _assert_exact_types(series["elapsed_seconds"], (int, int))
     _assert_exact_types(series["timestamp"], (str, str))
+    assert all(TIMESTAMP_RE.fullmatch(value) for value in series["timestamp"])
     _assert_exact_types(series["sample_count"], (int, int))
     _assert_exact_types(series["heart_rate_bpm"]["average"], (float, float))
     _assert_exact_types(series["heart_rate_bpm"]["minimum"], (int, int))
@@ -259,9 +261,23 @@ def test_guide_example_uses_safe_plausible_values_and_utc_bin_anchors():
         "next_start_seconds": 600,
     }
     assert example["sampling"]["source_records"] >= example["sampling"]["returned_points"]
-    assert example["sampling"]["observed_median_interval_seconds"] == 1
+    assert example["sampling"]["observed_median_interval_seconds"] == 1.0
     assert example["sampling"]["irregular"] is True
-    assert all(value.endswith("Z") for value in example["series"]["timestamp"])
+    assert all(TIMESTAMP_RE.fullmatch(value) for value in example["series"]["timestamp"])
+
+
+def test_guide_pins_activity_id_string_normalization_and_rejections():
+    lower = _normalized()
+    for phrase in (
+        "activity_id strings are strip()ped first",
+        "leading/trailing whitespace around ascii digits is accepted",
+        "internal whitespace is rejected",
+        "signs are rejected",
+        "exponents are rejected",
+        "unicode digits are rejected",
+    ):
+        assert phrase in lower
+    assert "other strings are rejected" not in lower
 
 
 def test_guide_pins_workflow_arguments_and_exact_pagination_recipe():

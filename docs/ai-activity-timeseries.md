@@ -20,10 +20,13 @@ get_activity_timeseries only for concrete short interval evidence.
 
 ## Arguments and paging
 
-`activity_id` accepts a strict integer or ASCII decimal string, normalized to a
-positive value from 1 through 9007199254740991; other strings are rejected.
-activity_id positive integer or ASCII decimal string from 1 through
-9007199254740991 is the accepted identifier form.
+`activity_id` accepts a strict integer or string. activity_id strings are
+strip()ped first; after trimming, a nonempty ASCII decimal string is validated
+and range checked from 1 through 9007199254740991. Leading/trailing whitespace
+around ASCII digits is accepted. Internal whitespace is rejected, signs are
+rejected, exponents are rejected, and Unicode digits are rejected. An integer
+value must be positive and within the same range. activity_id positive integer
+or ASCII decimal string from 1 through 9007199254740991 is the accepted form.
 The window arguments are exact integers (not booleans, floats, or numeric
 strings), and their bounds are `start_seconds` 0 through 4026531838,
 `duration_seconds` 1 through 86400, and `resolution_seconds` 1 through 300.
@@ -93,7 +96,7 @@ source.
   "sampling": {
     "source_records": 4,
     "returned_points": 2,
-    "observed_median_interval_seconds": 1,
+    "observed_median_interval_seconds": 1.0,
     "irregular": true
   },
   "availability": {
@@ -107,7 +110,7 @@ source.
   },
   "series": {
     "elapsed_seconds": [0, 1],
-    "timestamp": ["2026-08-13T06:30:00Z", "2026-08-13T06:30:01Z"],
+    "timestamp": ["2026-08-13T06:30:00.000000Z", "2026-08-13T06:30:01.000000Z"],
     "sample_count": [2, 2],
     "heart_rate_bpm": {
       "average": [142.5, 143.0],
