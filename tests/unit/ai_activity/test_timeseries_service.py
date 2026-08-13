@@ -241,6 +241,17 @@ def _expected_empty(
     }
 
 
+def _expected_internal_error() -> dict[str, Any]:
+    response = _expected_empty()
+    response["status"] = "error"
+    response["error"] = {
+        "provider": "internal",
+        "code": "internal_error",
+        "message": "Activity time series is temporarily unavailable.",
+    }
+    return response
+
+
 @pytest.fixture
 def service_module():
     from garmin_mcp.ai_activity import timeseries_service
@@ -532,6 +543,27 @@ def test_empty_error_envelopes_have_exact_stable_order_and_no_partial_series(ser
         "resolution_seconds",
     )
     assert recorded_success_seams[0] == []
+
+
+def test_unexpected_error_envelopes_are_fresh_exact_and_json_safe(service_module):
+    first = service_module._unexpected_error_envelope()
+    second = service_module._unexpected_error_envelope()
+
+    assert first == _expected_internal_error()
+    _assert_complete_ordered_shape(first)
+    assert json.loads(json.dumps(first, allow_nan=False)) == first
+    assert first is not second
+    assert first["error"] is not second["error"]
+    assert first["window"] is not second["window"]
+    assert first["sampling"] is not second["sampling"]
+    assert first["availability"] is not second["availability"]
+    assert first["series"] is not second["series"]
+    assert first["warnings"] is not second["warnings"]
+
+    first["error"]["code"] = "mutated"  # type: ignore[index]
+    first["series"]["elapsed_seconds"].append(1)  # type: ignore[index]
+
+    assert second == _expected_internal_error()
 
 
 def _assert_complete_ordered_shape(result: dict[str, Any]) -> None:

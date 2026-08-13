@@ -8,7 +8,10 @@ from typing import Any
 from pydantic import StrictInt, StrictStr
 
 from .service import analyze_activity_service
-from .timeseries_service import get_activity_timeseries_service
+from .timeseries_service import (
+    _unexpected_error_envelope,
+    get_activity_timeseries_service,
+)
 
 
 garmin_client: Any = None
@@ -53,13 +56,16 @@ def register_tools(app: Any) -> Any:
         can have gaps, never imply one-Hz sampling, and never include GPS or raw FIT data.
         Availability describes this returned window, not account or device capability.
         """
-        result = get_activity_timeseries_service(
-            garmin_client,
-            activity_id,
-            start_seconds,
-            duration_seconds,
-            resolution_seconds,
-        )
+        try:
+            result = get_activity_timeseries_service(
+                garmin_client,
+                activity_id,
+                start_seconds,
+                duration_seconds,
+                resolution_seconds,
+            )
+        except Exception:
+            result = _unexpected_error_envelope()
         return json.dumps(result, indent=2)
 
     return app

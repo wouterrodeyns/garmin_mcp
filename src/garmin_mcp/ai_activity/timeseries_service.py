@@ -149,6 +149,17 @@ def _error(envelope: dict[str, Any], code: str) -> dict[str, Any]:
     return envelope
 
 
+def _unexpected_error_envelope() -> dict[str, Any]:
+    """Return the stable public response for an unexpected adapter failure."""
+    envelope = _empty_envelope()
+    envelope["error"] = {
+        "provider": "internal",
+        "code": "internal_error",
+        "message": "Activity time series is temporarily unavailable.",
+    }
+    return envelope
+
+
 def _activity_id(value: Any) -> int | None:
     if type(value) is int:
         return value if 1 <= value <= MAX_ACTIVITY_ID else None

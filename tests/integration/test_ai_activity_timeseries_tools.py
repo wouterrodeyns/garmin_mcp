@@ -34,6 +34,51 @@ def registered_app(client: object | None) -> FastMCP:
     return ai_activity.register_tools(app)
 
 
+def internal_error_envelope() -> dict[str, object]:
+    return {
+        "status": "error",
+        "error": {
+            "provider": "internal",
+            "code": "internal_error",
+            "message": "Activity time series is temporarily unavailable.",
+        },
+        "activity_id": None,
+        "window": {
+            "requested_start_seconds": None,
+            "actual_end_seconds": None,
+            "resolution_seconds": None,
+        },
+        "sampling": {
+            "source_records": 0,
+            "returned_points": 0,
+            "observed_median_interval_seconds": None,
+            "irregular": False,
+        },
+        "availability": {
+            "heart_rate_bpm": False,
+            "speed_mps": False,
+            "pace_seconds_per_km": False,
+            "cadence_rpm": False,
+            "power_w": False,
+            "altitude_m": False,
+            "grade_pct": False,
+        },
+        "series": {
+            "elapsed_seconds": [],
+            "timestamp": [],
+            "sample_count": [],
+            "heart_rate_bpm": {"average": [], "minimum": [], "maximum": []},
+            "speed_mps": {"average": []},
+            "pace_seconds_per_km": {"average": [], "fastest": [], "slowest": []},
+            "cadence_rpm": {"average": []},
+            "power_w": {"average": []},
+            "altitude_m": {"average": []},
+            "grade_pct": {"average": []},
+        },
+        "warnings": [],
+    }
+
+
 @pytest.mark.asyncio
 async def test_get_activity_timeseries_schema_uses_strict_id_and_window_types():
     app = registered_app(object())
@@ -172,18 +217,47 @@ async def test_get_activity_timeseries_ignores_undeclared_arguments(
 
 
 @pytest.mark.asyncio
-async def test_get_activity_timeseries_wraps_service_runtime_errors_as_tool_errors(
+async def test_get_activity_timeseries_sanitizes_service_runtime_errors_at_the_public_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    app = registered_app(object())
+    client = object()
+    app = registered_app(client)
+    service = Mock(
+        side_effect=RuntimeError(
+            "token=private https://example.invalid Authorization request_id path"
+        )
+    )
+    monkeypatch.setattr(tools, "get_activity_timeseries_service", service)
 
-    def raise_runtime_error(*_args: object) -> dict[str, object]:
-        raise RuntimeError("service failed")
+    response = await app.call_tool("get_activity_timeseries", {"activity_id": 42})
+    expected = internal_error_envelope()
+    text = response_text(response)
 
-    monkeypatch.setattr(tools, "get_activity_timeseries_service", raise_runtime_error)
+    service.assert_called_once_with(client, 42, 0, 600, 1)
+    assert text == json.dumps(expected, indent=2)
+    payload = json.loads(text)
+    assert payload == expected
 
-    with pytest.raises(ToolError, match="service failed"):
-        await app.call_tool("get_activity_timeseries", {"activity_id": 42})
+    def values(value: object):
+        if type(value) is dict:
+            for nested in value.values():
+                yield from values(nested)
+        elif type(value) is list:
+            for nested in value:
+                yield from values(nested)
+        else:
+            yield value
+
+    rendered = " ".join(str(value).lower() for value in values(payload))
+    for secret_fragment in (
+        "token=private",
+        "https://",
+        "authorization",
+        "request_id",
+        "path",
+        "runtimeerror",
+    ):
+        assert secret_fragment not in rendered
 
 
 @pytest.mark.asyncio
