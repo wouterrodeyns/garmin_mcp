@@ -10,7 +10,6 @@ import math
 import ntpath
 import stat
 import struct
-import sys
 from typing import BinaryIO, Iterator
 import zipfile
 import zlib
@@ -130,6 +129,19 @@ class _MemberLimitExceeded(Exception):
 
 class _FitMemberReadFailed(Exception):
     pass
+
+
+_FOREIGN_CLEANUP_ERRORS = (
+    _ArchiveFailure,
+    zipfile.BadZipFile,
+    zipfile.LargeZipFile,
+    OSError,
+    RuntimeError,
+    NotImplementedError,
+    EOFError,
+    ValueError,
+    zlib.error,
+)
 
 
 @dataclass
@@ -648,12 +660,10 @@ def _open_fit_member(archive: bytes) -> Iterator[LimitedReader]:
     try:
         yield opened.reader
     finally:
-        caller_failed = sys.exc_info()[0] is not None
         try:
             opened.close()
-        except _ArchiveFailure:
-            if not caller_failed:
-                raise
+        except _FOREIGN_CLEANUP_ERRORS:
+            pass
 
 
 def _standard_field_name(field: object) -> str | None:
@@ -837,12 +847,10 @@ def _decode_fit_stream(stream: LimitedReader) -> ParseResult:
             else:
                 result = ParseResult(tuple(state.facts), state.malformed_record_count, None)
     finally:
-        caller_failed = sys.exc_info()[0] is not None
         try:
             reader.close()
-        except Exception:
-            if not caller_failed:
-                result = ParseResult((), 0, "fit_parse_failed")
+        except _FOREIGN_CLEANUP_ERRORS:
+            pass
 
     assert result is not None
     return result

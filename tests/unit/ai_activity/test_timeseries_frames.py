@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
+from struct import pack
 from types import SimpleNamespace
 
 import fitdecode
@@ -42,6 +44,11 @@ def _parse(monkeypatch, fit_archive: bytes, frames):
     return timeseries.parse_original_fit(fit_archive), reader
 
 
+def _parse_with_reader(monkeypatch, fit_archive: bytes, reader):
+    _install_reader(monkeypatch, reader)
+    return timeseries.parse_original_fit(fit_archive)
+
+
 def direct_field(def_num, base_identifier, size, raw_value, value, **overrides):
     field_def = overrides.pop(
         "field_def", FakeFieldDef(def_num, FakeBaseType(base_identifier), size, overrides.pop("is_dev", False))
@@ -75,6 +82,71 @@ def compressed_timestamp(raw_value, value=None, **overrides):
         value=value,
         **overrides,
     )
+
+
+_FIT_CRC_NIBBLE_TABLE = (
+    0x0000,
+    0xCC01,
+    0xD801,
+    0x1400,
+    0xF001,
+    0x3C00,
+    0x2800,
+    0xE401,
+    0xA001,
+    0x6C00,
+    0x7800,
+    0xB401,
+    0x5000,
+    0x9C01,
+    0x8801,
+    0x4400,
+)
+
+
+def _fit_crc(payload: bytes) -> int:
+    crc = 0
+    for byte in payload:
+        low = _FIT_CRC_NIBBLE_TABLE[crc & 0x0F]
+        crc = (crc >> 4) & 0x0FFF
+        crc ^= low ^ _FIT_CRC_NIBBLE_TABLE[byte & 0x0F]
+        low = _FIT_CRC_NIBBLE_TABLE[crc & 0x0F]
+        crc = (crc >> 4) & 0x0FFF
+        crc ^= low ^ _FIT_CRC_NIBBLE_TABLE[(byte >> 4) & 0x0F]
+    return crc
+
+
+def _fit_file(body: bytes) -> bytes:
+    header_without_crc = bytes([14, 0x20]) + pack("<H", 100) + pack("<I", len(body)) + b".FIT"
+    header = header_without_crc + pack("<H", _fit_crc(header_without_crc))
+    return header + body + pack("<H", _fit_crc(header + body))
+
+
+def _definition(global_message_number: int, fields: tuple[tuple[int, int, int], ...]) -> bytes:
+    return (
+        bytes([0x40, 0, 0])
+        + pack("<H", global_message_number)
+        + bytes([len(fields)])
+        + b"".join(bytes(field) for field in fields)
+    )
+
+
+def _direct_data(payload: bytes) -> bytes:
+    return bytes([0]) + payload
+
+
+def _compressed_data(time_offset: int, payload: bytes) -> bytes:
+    return bytes([0x80 | time_offset]) + payload
+
+
+class _CloseFailingMember:
+    def __init__(self) -> None:
+        self.reader = timeseries.LimitedReader(BytesIO())
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        raise timeseries._ArchiveFailure("unsafe_fit_archive")
 
 
 def test_standard_numeric_tuples_produce_only_normalized_record_facts(monkeypatch, fit_archive):
@@ -469,6 +541,176 @@ def test_local_frame_consumer_errors_propagate_without_being_sanitized(monkeypat
     with pytest.raises(RuntimeError, match="local decoder defect"):
         timeseries.parse_original_fit(fit_archive)
     assert reader.close_calls == 1
+
+
+def test_reader_close_error_preserves_a_successful_record_result(monkeypatch, fit_archive):
+    reader = fake_reader(
+        [header(), fake_record([direct_timestamp(0x10000000), direct_field(3, 0x02, 1, 171, 171)])],
+        close_error=ValueError("foreign close failure"),
+    )
+
+    result = _parse_with_reader(monkeypatch, fit_archive, reader)
+
+    assert result.failure_code is None
+    assert result.records[0].raw_timestamp_seconds == 0x10000000
+    assert result.records[0].heart_rate_bpm == 171.0
+    assert reader.close_calls == 1
+
+
+def test_reader_close_error_preserves_no_timestamped_records(monkeypatch, fit_archive):
+    reader = fake_reader([header(), crc()], close_error=ValueError("foreign close failure"))
+
+    result = _parse_with_reader(monkeypatch, fit_archive, reader)
+
+    assert result == timeseries.ParseResult((), 0, "no_timestamped_records")
+    assert reader.close_calls == 1
+
+
+def test_reader_close_error_preserves_frame_limit_result(monkeypatch, fit_archive):
+    monkeypatch.setattr(timeseries, "MAX_FIT_FRAMES", 1)
+    reader = fake_reader([header(), crc()], close_error=ValueError("foreign close failure"))
+
+    result = _parse_with_reader(monkeypatch, fit_archive, reader)
+
+    assert result == timeseries.ParseResult((), 0, "frame_limit_exceeded")
+    assert reader.close_calls == 1
+
+
+def test_reader_close_error_preserves_chained_fit_result(monkeypatch, fit_archive):
+    reader = fake_reader(
+        [header(), fake_record([direct_timestamp(0x10000000)]), header()],
+        close_error=ValueError("foreign close failure"),
+    )
+
+    result = _parse_with_reader(monkeypatch, fit_archive, reader)
+
+    assert result == timeseries.ParseResult((), 0, "chained_fit_unsupported")
+    assert reader.close_calls == 1
+
+
+def test_member_cleanup_error_preserves_a_successful_record_result(monkeypatch):
+    member = _CloseFailingMember()
+    reader = fake_reader([header(), fake_record([direct_timestamp(0x10000000)])])
+    monkeypatch.setattr(timeseries, "_construct_fit_member", lambda _archive: member)
+    _install_reader(monkeypatch, reader)
+
+    result = timeseries.parse_original_fit(b"already-opened-by-fake")
+
+    assert result.failure_code is None
+    assert result.records[0].raw_timestamp_seconds == 0x10000000
+    assert member.close_calls == 1
+
+
+def test_cleanup_errors_do_not_mask_a_local_frame_consumer_defect(monkeypatch):
+    member = _CloseFailingMember()
+    reader = fake_reader([header()], close_error=ValueError("foreign close failure"))
+    monkeypatch.setattr(timeseries, "_construct_fit_member", lambda _archive: member)
+    _install_reader(monkeypatch, reader)
+
+    def defect(*_args, **_kwargs):
+        raise RuntimeError("local decoder defect")
+
+    monkeypatch.setattr(timeseries, "_consume_frame", defect)
+    with pytest.raises(RuntimeError, match="local decoder defect"):
+        timeseries.parse_original_fit(b"already-opened-by-fake")
+    assert reader.close_calls == 1
+    assert member.close_calls == 1
+
+
+def test_member_cleanup_error_preserves_fit_parse_failed_from_reader_construction(monkeypatch):
+    member = _CloseFailingMember()
+    monkeypatch.setattr(timeseries, "_construct_fit_member", lambda _archive: member)
+    monkeypatch.setattr(timeseries.fitdecode, "FitReader", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("foreign")))
+
+    result = timeseries.parse_original_fit(b"already-opened-by-fake")
+
+    assert result == timeseries.ParseResult((), 0, "fit_parse_failed")
+    assert member.close_calls == 1
+
+
+def test_member_cleanup_error_preserves_fit_parse_failed_from_first_reader_iteration(monkeypatch):
+    member = _CloseFailingMember()
+    reader = fake_reader([header()], next_error=ValueError("foreign"))
+    monkeypatch.setattr(timeseries, "_construct_fit_member", lambda _archive: member)
+    _install_reader(monkeypatch, reader)
+
+    result = timeseries.parse_original_fit(b"already-opened-by-fake")
+
+    assert result == timeseries.ParseResult((), 0, "fit_parse_failed")
+    assert member.close_calls == 1
+
+
+def test_member_read_failure_before_a_decoder_result_remains_unsafe(monkeypatch):
+    class FailingReadable:
+        def read(self, _size=-1):
+            raise OSError("foreign member read failure")
+
+    class OpenedMember:
+        def __init__(self) -> None:
+            self.reader = timeseries.LimitedReader(FailingReadable())
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(timeseries, "_construct_fit_member", lambda _archive: OpenedMember())
+
+    result = timeseries.parse_original_fit(b"already-opened-by-fake")
+
+    assert result == timeseries.ParseResult((), 0, "unsafe_fit_archive")
+
+
+def test_actual_fitdecode_decodes_a_crc_valid_direct_record_through_the_archive_path():
+    raw_timestamp = 0x10000000
+    body = _definition(20, ((253, 4, 0x86), (3, 1, 0x02)))
+    body += _direct_data(pack("<I", raw_timestamp) + bytes([171]))
+
+    result = timeseries.parse_original_fit(make_zip({"activity.fit": _fit_file(body)}))
+
+    assert result == timeseries.ParseResult(
+        (
+            timeseries.RecordFact(
+                raw_timestamp_seconds=raw_timestamp,
+                timestamp_utc=FIT_EPOCH + timedelta(seconds=raw_timestamp),
+                encounter_index=0,
+                heart_rate_bpm=171.0,
+                speed_mps=None,
+                cadence_rpm=None,
+                power_w=None,
+                altitude_m=None,
+                grade_pct=None,
+            ),
+        ),
+        0,
+        None,
+    )
+
+
+def test_actual_fitdecode_decodes_a_crc_valid_compressed_timestamp_record_through_the_archive_path():
+    raw_timestamp = 0x10000000
+    body = _definition(18, ((253, 4, 0x86),))
+    body += _direct_data(pack("<I", raw_timestamp))
+    body += _definition(20, ((3, 1, 0x02),))
+    body += _compressed_data(5, bytes([171]))
+
+    result = timeseries.parse_original_fit(make_zip({"activity.fit": _fit_file(body)}))
+
+    assert result == timeseries.ParseResult(
+        (
+            timeseries.RecordFact(
+                raw_timestamp_seconds=raw_timestamp + 5,
+                timestamp_utc=FIT_EPOCH + timedelta(seconds=raw_timestamp + 5),
+                encounter_index=0,
+                heart_rate_bpm=171.0,
+                speed_mps=None,
+                cadence_rpm=None,
+                power_w=None,
+                altitude_m=None,
+                grade_pct=None,
+            ),
+        ),
+        0,
+        None,
+    )
 
 
 def test_reader_state_is_fresh_for_each_parse_call(monkeypatch, fit_archive):
