@@ -81,6 +81,10 @@ class _MemberLimitExceeded(Exception):
     pass
 
 
+class _FitMemberReadFailed(Exception):
+    pass
+
+
 class LimitedReader:
     """Bound individual reads and total decompressed bytes from one member."""
 
@@ -90,7 +94,10 @@ class LimitedReader:
 
     def read(self, size: int = -1) -> bytes:
         requested = FIT_STREAM_READ_CHUNK_BYTES if size is None or size < 0 else size
-        chunk = self._source.read(min(requested, FIT_STREAM_READ_CHUNK_BYTES))
+        try:
+            chunk = self._source.read(min(requested, FIT_STREAM_READ_CHUNK_BYTES))
+        except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, NotImplementedError, EOFError, zlib.error):
+            raise _FitMemberReadFailed from None
         self.bytes_read += len(chunk)
         if self.bytes_read > MAX_FIT_MEMBER_BYTES:
             raise _MemberLimitExceeded
@@ -488,10 +495,10 @@ def parse_original_fit(archive: bytes) -> ParseResult:
             return _decode_fit_stream(stream)
     except _MemberLimitExceeded:
         return ParseResult((), 0, "fit_member_too_large")
+    except _FitMemberReadFailed:
+        return ParseResult((), 0, "unsafe_fit_archive")
     except _ArchiveFailure as error:
         return ParseResult((), 0, error.failure_code)
-    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, NotImplementedError, EOFError, zlib.error):
-        return ParseResult((), 0, "unsafe_fit_archive")
 
 
 __all__ = [

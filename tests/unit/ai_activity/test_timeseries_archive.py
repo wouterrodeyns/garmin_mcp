@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from io import BytesIO
 import zipfile
+import zlib
 
 import pytest
 
@@ -451,15 +453,44 @@ def test_unix_regular_files_and_slash_marked_directories_are_allowed():
     assert _result(buffer.getvalue()).failure_code == "fit_parse_failed"
 
 
-def test_decoder_runtime_error_is_not_normalized_as_zip_failure(monkeypatch):
+@pytest.mark.parametrize(
+    "error_type",
+    [RuntimeError, OSError, EOFError, NotImplementedError, zlib.error],
+)
+def test_decoder_defects_are_not_normalized_as_member_read_failures(monkeypatch, error_type):
     from garmin_mcp.ai_activity import timeseries
 
     def programmer_defect(_stream):
-        raise RuntimeError("programmer defect")
+        raise error_type("programmer defect")
 
     monkeypatch.setattr(timeseries, "_decode_fit_stream", programmer_defect)
-    with pytest.raises(RuntimeError, match="programmer defect"):
+    with pytest.raises(error_type, match="programmer defect"):
         timeseries.parse_original_fit(make_zip({"activity.fit": b"x"}))
+
+
+@pytest.mark.parametrize("error_type", [OSError, EOFError, NotImplementedError, zlib.error])
+def test_member_read_failures_are_normalized_at_limited_reader_boundary(monkeypatch, error_type):
+    from garmin_mcp.ai_activity import timeseries
+
+    class FailingReadable:
+        def read(self, _size=-1):
+            raise error_type("foreign member read failure")
+
+    with pytest.raises(timeseries._FitMemberReadFailed):
+        timeseries.LimitedReader(FailingReadable()).read()
+
+    @contextmanager
+    def open_failing_member(_archive):
+        yield timeseries.LimitedReader(FailingReadable())
+
+    def consume(stream):
+        stream.read()
+        return timeseries.ParseResult((), 0, None)
+
+    monkeypatch.setattr(timeseries, "_open_fit_member", open_failing_member)
+    monkeypatch.setattr(timeseries, "_decode_fit_stream", consume)
+    result = timeseries.parse_original_fit(b"already-preflighted-in-this-fixture")
+    assert result == timeseries.ParseResult((), 0, "unsafe_fit_archive")
 
 
 def test_zipinfo_mismatch_after_preflight_is_unsafe(monkeypatch):
