@@ -77,11 +77,14 @@ service. The reader is constructed exactly with
 `keep_raw_chunks=False`. CRC or malformed-FIT failures are therefore fatal and
 raw frame chunks are never retained.
 
-`fitdecode` 0.11's default data processor converts FIT `date_time` values to
-timezone-aware UTC Python `datetime` objects. A record timestamp must be such
-an aware UTC instant; the tool never interprets it as device-local time. The
-public serializer writes canonical UTC RFC 3339 with a `Z` suffix, for example
-`2026-08-13T06:00:01.250000Z`. It does not expose a local timestamp field.
+`fitdecode` 0.11's default data processor converts usable FIT `date_time`
+values to timezone-aware UTC Python `datetime` objects. This tool treats the
+underlying FIT `raw_value`, not that rendered datetime, as the timestamp
+authority for sorting, elapsed-time arithmetic, window selection, and binning.
+The rendered UTC datetime is a required cross-check and is used only to
+serialize an accepted timestamp. The public serializer writes canonical UTC
+RFC 3339 with a `Z` suffix, for example `2026-08-13T06:00:01.000000Z`; it does
+not expose a local timestamp field.
 
 The existing `activity_analysis._parse_fit` is deliberately not reused. It
 reads position fields and serves an unrestricted tool with unrelated cycling
@@ -120,7 +123,7 @@ boundary. Its normalization rules are exact:
 | Argument | Accepted and normalized form | Constraint |
 | --- | --- | --- |
 | `activity_id` | `type(value) is int`, or `type(value) is str` after `strip()` when it is non-empty ASCII decimal digits only; normalize to `int` | `1..9007199254740991` inclusive |
-| `start_seconds` | `type(value) is int` only | `0..604800` inclusive |
+| `start_seconds` | `type(value) is int` only | `0..4026531838` inclusive |
 | `duration_seconds` | `type(value) is int` only | `1..86400` inclusive |
 | `resolution_seconds` | `type(value) is int` only | `1..300` inclusive |
 
@@ -130,8 +133,9 @@ ASCII or Unicode whitespace only because `strip()` is applied before the
 ASCII-decimal check; the accepted remaining characters are still ASCII `0-9`.
 The normalized ID is not allowed to be zero or exceed
 `MAX_ACTIVITY_ID = 9007199254740991`, the largest JSON-safe integer. The
-normalized start is capped at `MAX_START_SECONDS = 604800` (seven days).
-These are v1 service safety bounds, not Garmin activity-ID or activity-duration
+normalized start is capped at
+`MAX_FIT_ELAPSED_SECONDS = 0xEFFFFFFE = 4026531838`. This and the JSON-safe ID
+cap are v1 service safety bounds, not Garmin activity-ID or activity-duration
 limits.
 
 The request is also invalid unless:
@@ -143,8 +147,12 @@ ceil(duration_seconds / resolution_seconds) <= 600
 Arguments are rejected rather than clamped. The service performs zero Garmin
 calls for every invalid argument or unavailable client. It performs no envelope
 end arithmetic until both the bounded start and duration have passed their
-checks; their maximum possible sum is 691200, so `actual_end_seconds` cannot
-become an unbounded Python integer.
+checks; their maximum possible sum is `4026531838 + 86400 = 4026618238`, well
+within the JSON-safe integer range, so `actual_end_seconds` cannot become an
+unbounded Python integer. The computed end may exceed
+`MAX_FIT_ELAPSED_SECONDS`; this is valid as a half-open request bound, while
+the cursor rule below guarantees every emitted next input remains within that
+v1 bound.
 
 Validation stops at the first failure in this order: `activity_id`,
 `start_seconds`, `duration_seconds`, `resolution_seconds`, then the point
@@ -159,11 +167,10 @@ values. No later validation or Garmin read occurs after the first failure.
 ## Window, sampling, and pagination semantics
 
 The parser first reads all valid timestamped record messages, sorts them by
-`(timestamp, original_encounter_index)`, and chooses the earliest valid
-timestamp as `T0`. A record's exact elapsed time is
-`(timestamp - T0).total_seconds()`; it is not rounded before selection or
-binning. This makes the first valid record elapsed second `0`, even when its
-timestamp has a microsecond component.
+`(raw_timestamp_seconds, original_encounter_index)`, and chooses the earliest
+raw timestamp as `T0`. A record's elapsed time is the exact non-negative
+integer `raw_timestamp_seconds - T0`; it is not rounded before selection or
+binning. All FIT timestamps accepted by this contract are whole seconds.
 
 The requested window is half-open:
 
@@ -173,8 +180,8 @@ The requested window is half-open:
 
 The lower bound is inclusive and the upper bound is exclusive. A record at
 exactly `start_seconds` belongs to this response; one at exactly the computed
-end belongs to the next page. This rule applies equally to irregular and
-fractional elapsed times. The response calls the computed exclusive end
+end belongs to the next page. This rule applies equally to irregular
+whole-second elapsed times. The response calls the computed exclusive end
 `actual_end_seconds`; it is `start_seconds + duration_seconds`, not a rounded or
 source-clipped activity end. The term *bounded end* means the validated
 request bound. Keeping it un-clipped gives a caller a stable continuation
@@ -185,20 +192,23 @@ Only non-empty bins are returned. For a selected record, the zero-based bin is
 `start_seconds + bin * resolution_seconds`. Empty bins are omitted, rather
 than represented by fabricated null samples. Each returned point therefore has
 one or more source records and `sample_count` proves how many. Normatively,
-`series.timestamp[i]` is the canonical UTC serialization of
-`T0 + timedelta(seconds=series.elapsed_seconds[i])`, where that elapsed value
-is the bin anchor. The anchor timestamp is metadata for the bin, not a claim
-that a device sampled exactly at that instant. This preserves visible pauses
-and gaps without interpolation.
+`series.timestamp[i]` is the canonical UTC serialization of the FIT epoch plus
+`T0 + series.elapsed_seconds[i]` seconds, where that elapsed value is the bin
+anchor. The anchor timestamp is metadata for the bin, not a claim that a device
+sampled exactly at that instant. This preserves visible pauses and gaps without
+interpolation.
 
 The output is paged by using a later request with
 `start_seconds=window.next_start_seconds` and the desired new duration and
 resolution. `next_start_seconds` is present only when at least one globally
 valid timestamped record has elapsed time `>= actual_end_seconds`; its value is
-exactly `actual_end_seconds`. A page boundary is consequently continuous:
+exactly `actual_end_seconds`. Because such a record has
+`raw_timestamp_seconds - T0 <= MAX_FIT_ELAPSED_SECONDS`, every emitted cursor
+is at most `MAX_FIT_ELAPSED_SECONDS` and is therefore a valid subsequent
+`start_seconds` input. A page boundary is consequently continuous:
 
-- a record at `599.999999` is in `[0, 600)`;
-- one at `600.000000` is in `[600, 1200)`;
+- a record at elapsed second `599` is in `[0, 600)`;
+- one at elapsed second `600` is in `[600, 1200)`;
 - neither is repeated nor skipped, regardless of duplicate timestamps,
   uneven recording intervals, empty bins, or a different resolution on the
   next request.
@@ -288,31 +298,80 @@ or request/response fields may be serialized.
 
 ## Allowed measurements and deterministic reduction
 
-Although the decoder consumes each data frame's field bytes, the parser selects
-only these FIT `record` fields for copied facts:
+The parser identifies FIT records and standard fields numerically, never by a
+message or field name. It considers a frame only when
+`frame.frame_type == fitdecode.FIT_FRAME_DATA` **and**
+`frame.global_mesg_num == 20` (the FIT `record` global message number). It
+never gates on `frame.name`, `frame.mesg_type.name`, or any other display name.
+For a candidate record it iterates `frame.fields` exactly; it does not call
+generic `get_value(...)`, `get_raw_value(...)`, `get_field(...)`, name lookup,
+or `all_field_defs`.
 
-```text
-timestamp
-heart_rate
-speed
-cadence
-power
-altitude
-grade
-```
+A direct standard candidate is accepted only when all of the following are
+true: `field_data.field_def is not None`,
+`field_data.field_def.is_dev is False`, `field_data.is_expanded is False`, and
+`field_data.parent_field is None`; then its field definition's `def_num`,
+`base_type.identifier`, and `size` must exactly match this table. Names are not
+part of the match.
+
+| Copied fact / output source | `def_num` | Base-type identifier | Definition size |
+| --- | ---: | ---: | ---: |
+| timestamp | 253 | `0x86` | 4 |
+| heart rate | 3 | `0x02` | 1 |
+| speed | 6 | `0x84` | 2 |
+| cadence | 4 | `0x02` | 1 |
+| power | 7 | `0x84` | 2 |
+| altitude | 2 | `0x84` | 2 |
+| grade | 9 | `0x83` | 2 |
+
+The only permitted non-direct timestamp candidate is fitdecode's own
+compressed-timestamp field. It is accepted only when
+`frame.time_offset is not None`, `field_data.field_def is None`,
+`field_data.field is fitdecode.profile.FIELD_TYPE_TIMESTAMP` (the canonical
+profile timestamp identity), and `field_data.parent_field is None`. This is
+the decoder-generated timestamp special case, not a general expanded-field
+path. Every other expanded/component field is excluded, including enhanced
+speed `def_num 73`, enhanced altitude `def_num 78`, and component-derived
+speed/altitude. All developer fields are excluded even if their definition
+number, profile/display name, or value resembles an allowed standard field.
+
+Exactly one valid timestamp candidate is required; zero or more than one makes
+the whole record malformed. For each optional metric, zero candidates or more
+than one candidate yields `null` for that metric in the otherwise timestamped
+record. With exactly one optional candidate, the parser copies only the
+normalized finite numeric measurement needed for reduction; it does not retain
+the `FieldData`, its definition, or its raw value. The timestamp alone uses
+the candidate's exact integer `raw_value`, under the raw-timestamp contract
+below.
+
+An accepted timestamp raw value has `type(raw_value) is int` and is in the
+inclusive range `0x10000000..0xFFFFFFFE`. This rejects booleans, the uint32
+invalid sentinel `0xFFFFFFFF`, and values below fitdecode's
+`FIT_DATETIME_MIN = 0x10000000`, which represent device-power-on elapsed time
+rather than absolute time. FIT raw seconds are measured from the UTC FIT epoch
+`1989-12-31T00:00:00Z`; the accepted raw range therefore represents
+`1998-07-03T21:24:16Z` through `2126-02-06T06:28:14Z`, inclusive. The matching
+fitdecode value must be an aware UTC `datetime` equal to the FIT-epoch instant
+plus that exact raw-second count. The parser uses the raw integer for sorting,
+`T0`, elapsed seconds, window selection, and binning; it uses the cross-checked
+UTC datetime only for canonical `Z` serialization. Thus every accepted source
+timestamp and elapsed value is an integer number of seconds. Since the earliest
+possible `T0` is `0x10000000` and the latest accepted raw timestamp is
+`0xFFFFFFFE`, no valid activity elapsed value can exceed
+`0xEFFFFFFE = MAX_FIT_ELAPSED_SECONDS`.
 
 It never selects, copies, retains, or serializes `position_lat`,
-`position_long`, enhanced position aliases, route data, developer fields, or
-any unlisted field. GPS is excluded both by the parser selection allowlist and
-the response serializer allowlist. Latitude, longitude, coordinates, polyline,
-and derived location data must never appear, even as `null` keys.
+`position_long`, route data, developer fields, or any unlisted field. GPS is
+excluded both by the numeric parser allowlist and the response serializer
+allowlist. Latitude, longitude, coordinates, polyline, and derived location
+data must never appear, even as `null` keys.
 
 For each field, a usable value is a non-Boolean Python `int` or `float` that
 is finite and in the stated inclusive physical-safety range. An invalid,
 non-finite, or out-of-range individual metric becomes `null` for that record;
 the timestamped record itself remains usable.
 
-| Output metric | FIT field | Valid raw range | Reduction and output rounding |
+| Output metric | FIT field identity | Valid normalized range | Reduction and output rounding |
 | --- | --- | --- | --- |
 | `heart_rate_bpm` | `heart_rate` | `1..300` | mean/min/max over valid values. Mean is 0.1 bpm; extrema are whole bpm. |
 | `speed_mps` | `speed` | `0..100` m/s | mean over all valid values, including recorded zero, at 0.001 m/s. |
@@ -322,7 +381,7 @@ the timestamped record itself remains usable.
 | `altitude_m` | `altitude` | `-1000..10000` m | mean at 0.1 m. |
 | `grade_pct` | `grade` | `-100..100` % | mean at 0.1 percentage point. |
 
-Round only after aggregating raw values. Every mean and the positive-speed
+Round only after aggregating normalized values. Every mean and the positive-speed
 mean used for pace is `math.fsum(values) / len(values)` over the sorted,
 per-bin values. Decimal rounding is round-half-up; whole pace/extrema are JSON
 integers and all other populated numeric outputs are JSON numbers at the
@@ -429,7 +488,10 @@ fitdecode.FitReader(
 
 Count every yielded header, definition, data, and CRC frame before filtering.
 At frame 200,001 (`MAX_FIT_FRAMES = 200000`), return the fatal frame-limit
-outcome. For every definition frame, check
+outcome. A valid decoded FIT stream contains exactly one `FIT_FRAME_HEADER`.
+Count those frames separately: a second header is immediately the fatal
+`chained_fit_unsupported` outcome. It discards all accumulated minimal facts
+and never combines consecutive FIT streams. For every definition frame, check
 `len(field_defs) + len(dev_field_defs)` and return the fatal definition-field
 outcome above `MAX_FIELDS_PER_DEFINITION = 128`. For record data messages,
 count every message before window filtering; at record 100,001
@@ -437,27 +499,27 @@ count every message before window filtering; at record 100,001
 of these outcomes may silently truncate a stream.
 
 Malformed records are the only non-fatal FIT-message condition. A `record`
-message is discarded and counted as malformed when its timestamp cannot be
-obtained without an exception, is not a timezone-aware UTC `datetime`, cannot
-participate in safe arithmetic/UTC serialization, or yields a negative elapsed
-time after sorting (the last condition is defensive and should not occur).
-Missing or invalid optional measurement fields do **not** make the record
-malformed; they produce null metrics as described above. An exception while
-obtaining an optional allowlisted measurement is handled the same way as an
-invalid optional value: that metric is null, while the timestamped record
-remains usable.
-Out-of-order and duplicate valid timestamps are valid, sorted records. Other
-fitdecode/file failures are fatal.
+message is discarded and counted as malformed when its numeric extraction has
+zero or multiple timestamp candidates, its timestamp `raw_value` is not the
+exact accepted integer/range, or its fitdecode timestamp value fails the aware
+UTC epoch cross-check defined above. Missing, duplicate, malformed, or
+out-of-range optional metric candidates do **not** make the record malformed;
+they produce null metrics as described above. An exception while normalizing
+one optional allowlisted measurement is handled the same way: that metric is
+null while the timestamped record remains usable. Out-of-order and duplicate
+valid timestamps are valid, sorted records. Other fitdecode/file failures are
+fatal.
 
 The decoder necessarily consumes all field bytes in a data message to advance
-its FIT state. The parser nevertheless iterates/selects only the seven
-allowlisted field names, copies only their primitive values into a minimal
-record fact, and drops the yielded frame/message immediately. It neither
-selects nor retains GPS or any other unlisted value. The service retains at
-most 100,000 minimal allowlisted record facts for sorting; it retains no
-decoded frame/message, raw chunk, archive member, or raw payload. The parser
-returns only those facts, the global-valid-record continuation fact, and the
-activity-global malformed-record count to the service.
+its FIT state. The parser nevertheless applies only the numeric standard-field
+rules above, copies only normalized allowed metric values and a raw timestamp
+into a minimal record fact, and drops the yielded frame/message immediately.
+It neither selects nor retains GPS, developer fields, component fields, or any
+other unlisted value. The service retains at most 100,000 minimal allowlisted
+record facts for sorting; it retains no decoded frame/message, raw chunk,
+archive member, or raw payload. The parser returns only those facts, the
+global-valid-record continuation fact, and the activity-global malformed-record
+count to the service.
 
 ## Status, errors, and warnings
 
@@ -504,7 +566,7 @@ The fixed error vocabulary is:
 | Provider | Code | Exact message | Condition |
 | --- | --- | --- | --- |
 | `input` | `invalid_activity_id` | `activity_id must be a positive integer or ASCII decimal string from 1 through 9007199254740991.` | Invalid ID type, text, zero, or JSON-safe range. |
-| `input` | `invalid_start_seconds` | `start_seconds must be an integer from 0 through 604800.` | Invalid start type or v1 safety range. |
+| `input` | `invalid_start_seconds` | `start_seconds must be an integer from 0 through 4026531838.` | Invalid start type or `MAX_FIT_ELAPSED_SECONDS` v1 safety range. |
 | `input` | `invalid_duration_seconds` | `duration_seconds must be an integer from 1 through 86400.` | Invalid duration type or range. |
 | `input` | `invalid_resolution_seconds` | `resolution_seconds must be an integer from 1 through 300.` | Invalid resolution type or range. |
 | `input` | `point_limit_exceeded` | `ceil(duration_seconds / resolution_seconds) must not exceed 600.` | Valid scalar values exceed the bin limit. |
@@ -516,6 +578,7 @@ The fixed error vocabulary is:
 | `fit` | `unsafe_fit_archive` | `Original FIT archive violates safety limits.` | ZIP64, non-classic/multi-disk structure, EOCD/central/local range failure, archive entry/directory/compression/encryption/path violation, ambiguous FIT member, or member safety limit. |
 | `fit` | `fit_member_too_large` | `Original FIT member exceeds the 25 MB limit.` | Streaming `LimitedReader` reaches byte 25,000,001. |
 | `fit` | `fit_parse_failed` | `Original FIT data could not be parsed.` | Strict `fitdecode` construction, CRC, or iteration failed. |
+| `fit` | `chained_fit_unsupported` | `Chained FIT files are not supported.` | A second `FIT_FRAME_HEADER` was yielded; accumulated facts are discarded. |
 | `fit` | `frame_limit_exceeded` | `Original FIT data exceeds the 200000-frame limit.` | More than 200,000 header/definition/data/CRC frames. |
 | `fit` | `definition_field_limit_exceeded` | `Original FIT data exceeds the 128-field definition limit.` | A definition has more than 128 standard plus developer field definitions. |
 | `fit` | `record_limit_exceeded` | `Original FIT data exceeds the 100000-record limit.` | More than 100,000 FIT `record` messages. |
@@ -624,15 +687,18 @@ The test suite must cover at least the following observable contracts:
    with a `ToolError` before any provider/client read; a trimmed ASCII decimal
    activity ID is accepted; malformed direct service-call shapes instead return
    stable error envelopes. Exercise the 9007199254740991 activity-ID cap, the
-   604800 start cap, validation precedence, safe end arithmetic, and the pinned
-   FastMCP behavior that ignores undeclared extra arguments (outside contract
-   and never delegated/used).
+   `MAX_FIT_ELAPSED_SECONDS = 4026531838` start cap, validation precedence,
+   safe end arithmetic, and the pinned FastMCP behavior that ignores
+   undeclared extra arguments (outside contract and never delegated/used).
 2. The exact default one-second window and a coarse resolution; multiple
    source records in one one-second bin; output bin cap and aligned-array
    lengths for every metric array.
 3. Half-open start/end boundaries, pagination cursor presence/absence, no
-   duplicate or skipped records across pages, fractional/irregular timestamps,
-   pauses/empty bins, observed median interval, and irregular flag semantics.
+   duplicate or skipped records across pages, irregular whole-second
+   timestamps, pauses/empty bins, observed median interval, and irregular-flag
+   semantics. Prove an emitted cursor at the v1 elapsed maximum remains a valid
+   next `start_seconds`, while an actual end beyond that maximum emits no cursor
+   unless a later valid raw elapsed record makes it provably safe.
 4. Stable sorting of out-of-order messages and deterministic duplicate
    timestamp aggregation for a given archive order; no interpolation,
    carry-forward values, or claim that archive reordering preserves reductions.
@@ -658,17 +724,28 @@ The test suite must cover at least the following observable contracts:
    non-FIT safe entries are not opened, and the selected member is streamed
    through a 65536-byte `LimitedReader` to strict `fitdecode`, never `zf.read`.
 10. Strict `fitdecode==0.11.0` configuration: public streaming `FitReader`,
-    `CrcCheck.RAISE`, `ErrorHandling.RAISE`, `keep_raw_chunks=False`,
-    timezone-aware UTC timestamps, fresh per-reader developer state, and no
-    retained decoded frames/messages. Test high non-record frame streams above
-    200,000, a record stream above 100,000, and standard-plus-developer
-    definition fields above 128; each is a fatal no-truncation error.
+    `CrcCheck.RAISE`, `ErrorHandling.RAISE`, `keep_raw_chunks=False`, the
+    raw-second/aware-UTC cross-check, fresh per-reader developer state, and no
+    retained decoded frames/messages. Exercise numeric `FIT_FRAME_DATA` plus
+    global message `20` gating (not a name); every listed standard
+    definition-number/base-type/size tuple; wrong base/size rejection; and
+    the direct-field/developer-field collision rule. Test developer fields
+    with the same IDs, expanded component fields, enhanced speed `73`, and
+    enhanced altitude `78` are excluded; test the sole exact compressed-
+    timestamp special case and zero/multiple timestamp or optional-candidate
+    policies. Exercise raw timestamp lower/upper/integer/sentinel boundaries.
+    Test high non-record frame streams above 200,000, a record stream above
+    100,000, standard-plus-developer definition fields above 128, and a
+    second `FIT_FRAME_HEADER` chained stream; each is the specified fatal
+    no-truncation outcome.
 11. Exception/payload sanitization: nested serialized result scans find no
     secret, URL, header, request ID, raw exception text, raw FIT message, or
     raw payload value.
 12. GPS privacy: fixtures containing latitude/longitude (and any other
     unlisted fields) prove the parser consumes frame bytes but neither selects
-    nor retains those values, and a recursive serialized-output scan finds no
+    nor retains those values. Include developer fields named `speed` and
+    `altitude` that carry coordinate sentinels, proving they cannot cross the
+    numeric direct-field boundary. A recursive serialized-output scan finds no
     GPS/coordinate/polyline keys or values.
 13. Root configuration, registration beside `analyze_activity`, exact
     14-member profile/startup filtering, retained exclusion of
