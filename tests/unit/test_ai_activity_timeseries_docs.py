@@ -306,14 +306,24 @@ def test_guide_example_sampling_matches_reducer_for_duplicate_safe_timestamps():
 def test_guide_pins_activity_id_string_normalization_and_rejections():
     lower = _normalized()
     for phrase in (
+        "strictint | strictstr",
+        "fastmcp strict union",
+        "raw activity_id string maximum 64 characters is enforced before trimming",
+        "within the 64-character limit",
         "activity_id strings are strip()ped first",
         "leading/trailing whitespace around ascii digits is accepted",
+        "64-character raw padded valid string may pass",
+        "65-character raw string rejects regardless of normalized numeric validity",
         "internal whitespace is rejected",
         "signs are rejected",
         "exponents are rejected",
         "unicode digits are rejected",
     ):
         assert phrase in lower
+    raw_limit = lower.index("raw activity_id string maximum 64 characters is enforced before trimming")
+    within_limit = lower.index("within the 64-character limit")
+    stripped = lower.index("activity_id strings are strip()ped first")
+    assert raw_limit < within_limit < stripped
     assert "other strings are rejected" not in lower
 
 

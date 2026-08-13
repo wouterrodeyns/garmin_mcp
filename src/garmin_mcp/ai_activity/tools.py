@@ -54,6 +54,7 @@ def register_tools(app: Any) -> Any:
         Use analyze_activity first for the normal completed-session overview; use this
         only for a concrete short interval question. Results are sparse, paged non-empty bins,
         can have gaps, never imply one-Hz sampling, and never include GPS or raw FIT data.
+        String activity IDs are limited to 64 raw characters before trimming.
         Availability describes this returned window, not account or device capability.
         """
         try:

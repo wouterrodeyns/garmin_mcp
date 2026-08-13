@@ -20,12 +20,17 @@ get_activity_timeseries only for concrete short interval evidence.
 
 ## Arguments and paging
 
+FastMCP strict union uses exact built-in types, `StrictInt | StrictStr`.
+Raw activity_id string maximum 64 characters is enforced before trimming.
+Within the 64-character limit, activity_id strings are strip()ped first; after
+trimming, a nonempty ASCII decimal string is validated and range checked from 1
+through 9007199254740991. Leading/trailing whitespace around ASCII digits is
+accepted. Internal whitespace is rejected, signs are rejected, exponents are
+rejected, and Unicode digits are rejected. An integer value must be positive
+and within the same range. A 64-character raw padded valid string may pass; a
+65-character raw string rejects regardless of normalized numeric validity.
 activity_id positive integer or ASCII decimal string from 1 through
-9007199254740991 is accepted. activity_id strings are strip()ped first; after trimming, a nonempty ASCII decimal string is validated
-and range checked from 1 through 9007199254740991. Leading/trailing whitespace
-around ASCII digits is accepted. Internal whitespace is rejected, signs are
-rejected, exponents are rejected, and Unicode digits are rejected. An integer
-value must be positive and within the same range.
+9007199254740991 is accepted.
 The window arguments are exact integers (not booleans, floats, or numeric
 strings).
 FastMCP rejects booleans and floats before the service runs; numeric strings for

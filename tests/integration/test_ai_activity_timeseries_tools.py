@@ -323,6 +323,7 @@ async def test_get_activity_timeseries_documents_its_read_only_evidence_boundary
         "read-only",
         "one original fit download after valid input",
         "analyze_activity first",
+        "string activity ids are limited to 64 raw characters before trimming",
         "short interval",
         "sparse",
         "gaps",
