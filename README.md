@@ -20,6 +20,7 @@ The recommended experience centers on three high-level coaching roles:
 |---|---|
 | [`get_training_context(days=14)`](docs/ai-training.md) | Context eyes: a compact, read-only factual snapshot before making a recommendation. |
 | [`analyze_activity(activity_id)`](docs/ai-activity.md) | Completed-session feedback read: bounded facts for the AI to interpret. |
+| [`get_activity_timeseries(activity_id, ...)`](docs/ai-activity-timeseries.md) | Narrow follow-up evidence read for a concrete short interval; it does not replace the overview. |
 | [`create_workout(...)`](docs/ai-workouts.md) and [`update_workout(...)`](docs/ai-workouts.md) | Workout hands: create a readable workout or apply a friendly in-place update while preserving its ID and schedules. |
 
 ```text
@@ -85,11 +86,12 @@ Garmin Connect China, and token recovery, see the
 
 ## AI-coach tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 13-tool surface:
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 14-tool surface:
 
 ```text
 `get_training_context`
 `analyze_activity`
+`get_activity_timeseries`
 `create_workout`
 `update_workout`
 `get_activities`
@@ -107,7 +109,9 @@ This profile narrows registration for the AI-facing surface; no existing
 upstream tool is removed, and broad upstream-compatible registration remains
 available when no profile is selected.
 
-The activity and coaching-context operations are reads. Workout creation and
+The activity, activity time-series, and coaching-context operations are reads.
+Use `analyze_activity` first; `get_activity_timeseries` is a narrow follow-up
+for concrete short-interval evidence. Workout creation and
 in-place update, scheduling, unscheduling, and deletion are deliberate writes.
 An update uses the numeric `workout_id` template ID; `scheduled_workout_id` is
 the calendar-entry ID used only for unscheduling. Updates preserve the
@@ -135,6 +139,8 @@ AI-facing default.
   normalized fields, optional metrics, and structured warning/status behavior.
 - [Activity analysis](docs/ai-activity.md) documents the completed-session
   feedback read, sport-gated detail, stable envelope, and v1 boundaries.
+- [Activity time-series evidence](docs/ai-activity-timeseries.md) documents the
+  narrow follow-up read, bounded windows, sparse sampling, and privacy limits.
 - [AI-friendly workouts](docs/ai-workouts.md) documents the readable workout
   schema, compiler, supported sports, targets, and scheduling result.
 - [Setup and operations](docs/setup.md) covers clients, authentication, local

@@ -23,6 +23,7 @@ SETUP_PATH = ROOT / "docs" / "setup.md"
 PROFILE_TOOLS = {
     "get_training_context",
     "analyze_activity",
+    "get_activity_timeseries",
     "create_workout",
     "update_workout",
     "get_activities",
@@ -311,6 +312,14 @@ def test_current_docs_publish_the_exact_profile_without_stale_eleven_claims():
     assert "ai-activity.md" in training
     assert "ai-activity.md" in workouts
     assert "ai_training, ai_workouts, and ai_activity packages" in readme.lower()
+
+
+def test_current_docs_keep_timeseries_as_a_narrow_follow_up_read():
+    docs = _read(DOCS_PATH).lower()
+    assert "analyze_activity" in docs
+    assert "ai-activity-timeseries.md" in docs
+    assert "get_activity_timeseries" in docs
+    assert "narrow follow-up" in docs
 
 
 def test_current_docs_describe_three_high_level_coaching_roles():

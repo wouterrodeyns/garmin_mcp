@@ -106,6 +106,7 @@ README_PATH = ROOT / "README.md"
 PROFILE_TOOLS = {
     "get_training_context",
     "analyze_activity",
+    "get_activity_timeseries",
     "create_workout",
     "update_workout",
     "get_activities",
@@ -157,10 +158,10 @@ def test_readme_profile_and_filter_contract():
     assert "broad upstream-compatible registration remains available" in lower
 
 
-def test_readme_pins_thirteen_tools_and_in_place_update_semantics():
+def test_readme_pins_fourteen_tools_and_in_place_update_semantics():
     lower = " ".join(_readme().lower().split())
     for expected in (
-        "13-tool surface",
+        "14-tool surface",
         "update_workout",
         "in-place",
         "preserves",

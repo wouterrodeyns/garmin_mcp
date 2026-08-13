@@ -6,6 +6,13 @@ summarizes one completed Garmin activity so the AI can interpret evidence in a
 feedback loop. It is not another training-context aggregate and it never
 uploads, edits, schedules, unschedules, or deletes Garmin data.
 
+Use `analyze_activity` first. When the overview leaves a concrete short
+interval that needs inspection, the narrow read-only
+[`get_activity_timeseries`](ai-activity-timeseries.md) follow-up returns sparse
+bounded evidence bins. That follow-up is not a replacement for this overview,
+and is a narrow follow-up read. It does not return raw FIT or GPS data, and it
+does not make a coaching judgement.
+
 ## Argument, source, and call budget
 
 The only tool argument is `activity_id`: a positive integer or decimal string
@@ -208,7 +215,8 @@ the coach's eyes for current context, while workout hands are
 
 ## Explicit v1 exclusions
 
-V1 does not expose FIT files, second-by-second records, details, maps, weather,
+V1 `analyze_activity` does not expose FIT files, unbounded second-by-second
+records, details, maps, weather,
 and gear; planned or scheduled workout linkage, step comparison, or
 `wktStepIndex`; coaching judgment, compliance, pass/fail, or recommendations;
 heart-rate drift or decoupling; strength weight or volume until units are
