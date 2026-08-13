@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import math
 import ntpath
 import stat
 import struct
@@ -13,6 +15,8 @@ from typing import BinaryIO, Iterator
 import zipfile
 import zlib
 
+import fitdecode
+
 
 MAX_ARCHIVE_ENTRIES = 16
 MAX_CENTRAL_DIRECTORY_BYTES = 65_536
@@ -20,6 +24,32 @@ MAX_AUXILIARY_ENTRY_BYTES = 65_536
 MAX_FIT_MEMBER_BYTES = 25_000_000
 FIT_STREAM_READ_CHUNK_BYTES = 65_536
 ZIP_EOCD_TAIL_BYTES = 65_557
+MAX_FIT_FRAMES = 200_000
+MAX_RECORD_MESSAGES = 100_000
+MAX_FIELDS_PER_DEFINITION = 128
+
+FIT_EPOCH = datetime(1989, 12, 31, tzinfo=timezone.utc)
+STANDARD_FIELDS = {
+    (253, 0x86, 4): "timestamp",
+    (3, 0x02, 1): "heart_rate_bpm",
+    (6, 0x84, 2): "speed_mps",
+    (4, 0x02, 1): "cadence_rpm",
+    (7, 0x84, 2): "power_w",
+    (2, 0x84, 2): "altitude_m",
+    (9, 0x83, 2): "grade_pct",
+}
+
+_METRIC_RANGES = {
+    "heart_rate_bpm": (1.0, 300.0),
+    "speed_mps": (0.0, 100.0),
+    "cadence_rpm": (0.0, 300.0),
+    "power_w": (0.0, 3000.0),
+    "altitude_m": (-1000.0, 10000.0),
+    "grade_pct": (-100.0, 100.0),
+}
+_METRIC_NAMES = tuple(_METRIC_RANGES)
+_TIMESTAMP_MIN_SECONDS = 0x10000000
+_TIMESTAMP_MAX_SECONDS = 0xFFFFFFFE
 
 _EOCD_SIGNATURE = b"PK\x05\x06"
 _CENTRAL_SIGNATURE = b"PK\x01\x02"
@@ -43,6 +73,21 @@ class ParseResult:
     records: tuple[object, ...]
     malformed_record_count: int
     failure_code: str | None
+
+
+@dataclass(frozen=True)
+class RecordFact:
+    """The only per-record facts retained after strict FIT decoding."""
+
+    raw_timestamp_seconds: int
+    timestamp_utc: datetime
+    encounter_index: int
+    heart_rate_bpm: float | None
+    speed_mps: float | None
+    cadence_rpm: float | None
+    power_w: float | None
+    altitude_m: float | None
+    grade_pct: float | None
 
 
 @dataclass(frozen=True)
@@ -85,6 +130,16 @@ class _MemberLimitExceeded(Exception):
 
 class _FitMemberReadFailed(Exception):
     pass
+
+
+@dataclass
+class _DecodeState:
+    facts: list[RecordFact]
+    malformed_record_count: int = 0
+    frame_count: int = 0
+    header_count: int = 0
+    record_message_count: int = 0
+    encounter_index: int = 0
 
 
 class LimitedReader:
@@ -601,9 +656,197 @@ def _open_fit_member(archive: bytes) -> Iterator[LimitedReader]:
                 raise
 
 
+def _standard_field_name(field: object) -> str | None:
+    """Return an allowlisted field name based only on exact FIT wire metadata."""
+    field_def = field.field_def
+    if (
+        field_def is None
+        or field_def.is_dev is not False
+        or field.is_expanded is not False
+        or field.parent_field is not None
+    ):
+        return None
+    definition_number = field_def.def_num
+    base_identifier = field_def.base_type.identifier
+    size = field_def.size
+    if (
+        type(definition_number) is not int
+        or type(base_identifier) is not int
+        or type(size) is not int
+    ):
+        return None
+    return STANDARD_FIELDS.get((definition_number, base_identifier, size))
+
+
+def _is_compressed_timestamp(field: object, time_offset: object) -> bool:
+    return (
+        time_offset is not None
+        and field.field_def is None
+        and field.field is fitdecode.profile.FIELD_TYPE_TIMESTAMP
+        and field.parent_field is None
+        and field.is_expanded is False
+    )
+
+
+def _timestamp_fact(field: object) -> tuple[int, datetime] | None:
+    raw_value = field.raw_value
+    value = field.value
+    if (
+        type(raw_value) is not int
+        or not _TIMESTAMP_MIN_SECONDS <= raw_value <= _TIMESTAMP_MAX_SECONDS
+        or type(value) is not datetime
+        or value.tzinfo is None
+        or value.utcoffset() != timedelta(0)
+        or value != FIT_EPOCH + timedelta(seconds=raw_value)
+    ):
+        return None
+    return raw_value, value
+
+
+def _normalized_metric(value: object, lower: float, upper: float) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    normalized = float(value)
+    if not math.isfinite(normalized) or not lower <= normalized <= upper:
+        return None
+    return normalized
+
+
+def _extract_record_fact(frame: object, encounter_index: int) -> RecordFact | None:
+    timestamp_candidates: list[tuple[int, datetime]] = []
+    metric_candidates: dict[str, list[object]] = {name: [] for name in _METRIC_NAMES}
+    time_offset = frame.time_offset
+
+    for field in frame.fields:
+        field_name = _standard_field_name(field)
+        if field_name == "timestamp":
+            timestamp = _timestamp_fact(field)
+            if timestamp is not None:
+                timestamp_candidates.append(timestamp)
+        elif field_name in _METRIC_RANGES:
+            metric_candidates[field_name].append(field.value)
+        elif _is_compressed_timestamp(field, time_offset):
+            timestamp = _timestamp_fact(field)
+            if timestamp is not None:
+                timestamp_candidates.append(timestamp)
+
+    if len(timestamp_candidates) != 1:
+        return None
+
+    raw_timestamp_seconds, timestamp_utc = timestamp_candidates[0]
+    normalized_metrics: dict[str, float | None] = {}
+    for name, (lower, upper) in _METRIC_RANGES.items():
+        candidates = metric_candidates[name]
+        normalized_metrics[name] = (
+            _normalized_metric(candidates[0], lower, upper) if len(candidates) == 1 else None
+        )
+    return RecordFact(
+        raw_timestamp_seconds=raw_timestamp_seconds,
+        timestamp_utc=timestamp_utc,
+        encounter_index=encounter_index,
+        heart_rate_bpm=normalized_metrics["heart_rate_bpm"],
+        speed_mps=normalized_metrics["speed_mps"],
+        cadence_rpm=normalized_metrics["cadence_rpm"],
+        power_w=normalized_metrics["power_w"],
+        altitude_m=normalized_metrics["altitude_m"],
+        grade_pct=normalized_metrics["grade_pct"],
+    )
+
+
+def _consume_frame(state: _DecodeState, frame: object) -> str | None:
+    """Consume one public FIT frame, retaining only a validated ``RecordFact``."""
+    frame_type = frame.frame_type
+    if frame_type not in {
+        fitdecode.FIT_FRAME_HEADER,
+        fitdecode.FIT_FRAME_DEFINITION,
+        fitdecode.FIT_FRAME_DATA,
+        fitdecode.FIT_FRAME_CRC,
+    }:
+        return "fit_parse_failed"
+
+    state.frame_count += 1
+    if state.frame_count > MAX_FIT_FRAMES:
+        return "frame_limit_exceeded"
+
+    if frame_type == fitdecode.FIT_FRAME_HEADER:
+        state.header_count += 1
+        if state.header_count > 1:
+            state.facts.clear()
+            return "chained_fit_unsupported"
+        return None
+
+    if frame_type == fitdecode.FIT_FRAME_DEFINITION:
+        if len(frame.field_defs) + len(frame.dev_field_defs) > MAX_FIELDS_PER_DEFINITION:
+            return "definition_field_limit_exceeded"
+        return None
+
+    if frame_type != fitdecode.FIT_FRAME_DATA:
+        return None
+
+    if type(frame.global_mesg_num) is not int or frame.global_mesg_num != 20:
+        return None
+    state.record_message_count += 1
+    if state.record_message_count > MAX_RECORD_MESSAGES:
+        return "record_limit_exceeded"
+
+    encounter_index = state.encounter_index
+    state.encounter_index += 1
+    fact = _extract_record_fact(frame, encounter_index)
+    if fact is None:
+        state.malformed_record_count += 1
+    else:
+        state.facts.append(fact)
+    return None
+
+
 def _decode_fit_stream(stream: LimitedReader) -> ParseResult:
-    """Temporary decoder seam; FIT frame interpretation arrives in Task 3."""
-    return ParseResult((), 0, "fit_parse_failed")
+    """Decode one FIT stream through the public, strict fitdecode frame API."""
+    try:
+        reader = fitdecode.FitReader(
+            stream,
+            check_crc=fitdecode.CrcCheck.RAISE,
+            error_handling=fitdecode.ErrorHandling.RAISE,
+            keep_raw_chunks=False,
+        )
+    except Exception:
+        return ParseResult((), 0, "fit_parse_failed")
+
+    state = _DecodeState(facts=[])
+    result: ParseResult | None = None
+    try:
+        iterator = iter(reader)
+        while True:
+            try:
+                frame = next(iterator)
+            except StopIteration:
+                break
+            except (_MemberLimitExceeded, _FitMemberReadFailed):
+                raise
+            except Exception:
+                result = ParseResult((), 0, "fit_parse_failed")
+                break
+
+            failure_code = _consume_frame(state, frame)
+            if failure_code is not None:
+                result = ParseResult((), 0, failure_code)
+                break
+        if result is None:
+            if state.header_count != 1:
+                result = ParseResult((), state.malformed_record_count, "fit_parse_failed")
+            elif not state.facts:
+                result = ParseResult((), state.malformed_record_count, "no_timestamped_records")
+            else:
+                result = ParseResult(tuple(state.facts), state.malformed_record_count, None)
+    finally:
+        caller_failed = sys.exc_info()[0] is not None
+        try:
+            reader.close()
+        except Exception:
+            if not caller_failed:
+                result = ParseResult((), 0, "fit_parse_failed")
+
+    assert result is not None
+    return result
 
 
 def parse_original_fit(archive: bytes) -> ParseResult:
