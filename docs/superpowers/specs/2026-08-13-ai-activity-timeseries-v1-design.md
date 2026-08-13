@@ -48,7 +48,10 @@ V1 does not add any of the following:
 ## Local compatibility facts
 
 The repository pins `garminconnect==0.3.10` and already has
-`fitparse>=1.2.0`. In that pinned Garmin client,
+`fitparse>=1.2.0` for the existing low-level activity-analysis tool. This v1
+tool adds and pins the separate dependency `fitdecode==0.11.0` in both
+`pyproject.toml` and `uv.lock`; it does not replace or loosen the existing
+`fitparse` dependency. In that pinned Garmin client,
 `Garmin.ActivityDownloadFormat.ORIGINAL` downloads the original activity as a
 ZIP archive; it is not a GPX or TCX endpoint. The call is exactly:
 
@@ -63,20 +66,33 @@ where `activity_id` is the normalized positive Python `int`. The client
 accepts the ID as a string internally, but this fork passes the normalized
 integer consistently with the existing activity tool test seam.
 
-`fitparse` 1.2 converts FIT `date_time` values to naïve Python `datetime`
-objects using UTC. A FIT record timestamp is therefore treated as a naïve UTC
-instant, never as local device time. The public serializer writes that instant
-as a canonical UTC RFC 3339 value with a `Z` suffix, for example
-`2026-08-13T06:00:01.250000Z`. It does not infer a local timezone or expose a
-local timestamp field.
+The v1 parser uses `fitdecode.FitReader`, the dependency's public streaming
+reader API. It yields header, definition, data, and CRC frames as they are
+decoded; it does not require an all-message cache. Each tool call creates and
+closes a fresh reader, so local message definitions and developer-field state
+are per-reader/per-FIT-file state rather than global state retained by the
+service. The reader is constructed exactly with
+`check_crc=fitdecode.CrcCheck.RAISE`,
+`error_handling=fitdecode.ErrorHandling.RAISE`, and
+`keep_raw_chunks=False`. CRC or malformed-FIT failures are therefore fatal and
+raw frame chunks are never retained.
+
+`fitdecode` 0.11's default data processor converts FIT `date_time` values to
+timezone-aware UTC Python `datetime` objects. A record timestamp must be such
+an aware UTC instant; the tool never interprets it as device-local time. The
+public serializer writes canonical UTC RFC 3339 with a `Z` suffix, for example
+`2026-08-13T06:00:01.250000Z`. It does not expose a local timestamp field.
 
 The existing `activity_analysis._parse_fit` is deliberately not reused. It
 reads position fields and serves an unrestricted tool with unrelated cycling
 analysis. Reusing it would make the new privacy boundary difficult to prove.
-The new parser is a small independent allowlist parser. A future shared pure
-helper is allowed only if it takes no message fields itself, has no GPS-aware
-callers, and has tests proving that it cannot expand the new parser's field
-allowlist; v1 should otherwise keep the duplication narrow.
+The new parser is a small independent allowlist parser. `fitdecode` must
+consume every field's bytes in a data frame to keep FIT decoder state correct,
+but v1 selects, copies, retains, and serializes only its explicit measurement
+allowlist. It does not retain raw frames/messages or unselected values. A
+future shared pure helper is allowed only if it takes no message fields itself,
+has no GPS-aware callers, and has tests proving that it cannot expand the new
+parser's field allowlist; v1 should otherwise keep the duplication narrow.
 
 ## Public input contract
 
@@ -103,8 +119,8 @@ boundary. Its normalization rules are exact:
 
 | Argument | Accepted and normalized form | Constraint |
 | --- | --- | --- |
-| `activity_id` | `type(value) is int`, or `type(value) is str` after `strip()` when it is non-empty ASCII decimal digits only; normalize to `int` | `> 0` |
-| `start_seconds` | `type(value) is int` only | `>= 0` |
+| `activity_id` | `type(value) is int`, or `type(value) is str` after `strip()` when it is non-empty ASCII decimal digits only; normalize to `int` | `1..9007199254740991` inclusive |
+| `start_seconds` | `type(value) is int` only | `0..604800` inclusive |
 | `duration_seconds` | `type(value) is int` only | `1..86400` inclusive |
 | `resolution_seconds` | `type(value) is int` only | `1..300` inclusive |
 
@@ -112,7 +128,11 @@ No leading sign, decimal point, exponent, non-ASCII numeral, Boolean, float,
 or other scalar form is accepted. `activity_id` strings may contain surrounding
 ASCII or Unicode whitespace only because `strip()` is applied before the
 ASCII-decimal check; the accepted remaining characters are still ASCII `0-9`.
-The normalized ID is not allowed to be zero.
+The normalized ID is not allowed to be zero or exceed
+`MAX_ACTIVITY_ID = 9007199254740991`, the largest JSON-safe integer. The
+normalized start is capped at `MAX_START_SECONDS = 604800` (seven days).
+These are v1 service safety bounds, not Garmin activity-ID or activity-duration
+limits.
 
 The request is also invalid unless:
 
@@ -121,17 +141,20 @@ ceil(duration_seconds / resolution_seconds) <= 600
 ```
 
 Arguments are rejected rather than clamped. The service performs zero Garmin
-calls for every invalid argument or unavailable client.
+calls for every invalid argument or unavailable client. It performs no envelope
+end arithmetic until both the bounded start and duration have passed their
+checks; their maximum possible sum is 691200, so `actual_end_seconds` cannot
+become an unbounded Python integer.
 
 Validation stops at the first failure in this order: `activity_id`,
 `start_seconds`, `duration_seconds`, `resolution_seconds`, then the point
 limit. This fixes the error returned for a request with more than one bad
 field. The error envelope retains only values already normalized before that
 failure: an invalid activity ID yields `activity_id: null` and a wholly null
-window; an invalid start retains the ID; an invalid duration retains the ID and
-requested start; an invalid resolution also retains the computed end; and a
-point-limit error retains all normalized window values. No later validation or
-Garmin read occurs after the first failure.
+window; an invalid start retains the bounded ID; an invalid duration retains
+the ID and bounded requested start; an invalid resolution also retains the
+safely computed end; and a point-limit error retains all normalized window
+values. No later validation or Garmin read occurs after the first failure.
 
 ## Window, sampling, and pagination semantics
 
@@ -161,9 +184,12 @@ Only non-empty bins are returned. For a selected record, the zero-based bin is
 `floor((elapsed_seconds - start_seconds) / resolution_seconds)`. Its anchor is
 `start_seconds + bin * resolution_seconds`. Empty bins are omitted, rather
 than represented by fabricated null samples. Each returned point therefore has
-one or more source records and `sample_count` proves how many. The anchor time
-is metadata for the bin, not a claim that a device sampled exactly at that
-instant. This preserves visible pauses and gaps without interpolation.
+one or more source records and `sample_count` proves how many. Normatively,
+`series.timestamp[i]` is the canonical UTC serialization of
+`T0 + timedelta(seconds=series.elapsed_seconds[i])`, where that elapsed value
+is the bin anchor. The anchor timestamp is metadata for the bin, not a claim
+that a device sampled exactly at that instant. This preserves visible pauses
+and gaps without interpolation.
 
 The output is paged by using a later request with
 `start_seconds=window.next_start_seconds` and the desired new duration and
@@ -184,7 +210,8 @@ not invent a point or turn an out-of-range page into an error.
 
 ## Stable response envelope
 
-Every result has these top-level keys in this order:
+Every call that passes FastMCP schema validation, and every direct call to the
+service, has these top-level keys in this order:
 
 ```text
 status, error, activity_id, window, sampling, availability, series, warnings
@@ -201,6 +228,13 @@ Each unavailable or not-yet-computable value is `null`. `next_start_seconds`
 is omitted entirely unless a later valid record exists, as specified above.
 The default request therefore reports `requested_start_seconds: 0`,
 `actual_end_seconds: 600`, and `resolution_seconds: 1`.
+
+A malformed declared adapter argument is a FastMCP `ToolError` before the
+service or Garmin client is called, so it is not a JSON envelope. Direct
+service calls instead return the stable input-error envelope. A pinned-FastMCP
+integration test verifies that undeclared extra adapter arguments are ignored.
+They are outside this tool contract and are never delegated to or used by the
+service; v1 does not promise rejection of extras.
 
 `sampling` is window-scoped, not a device capability statement:
 
@@ -254,7 +288,8 @@ or request/response fields may be serialized.
 
 ## Allowed measurements and deterministic reduction
 
-The parser may read only these FIT `record` fields:
+Although the decoder consumes each data frame's field bytes, the parser selects
+only these FIT `record` fields for copied facts:
 
 ```text
 timestamp
@@ -266,11 +301,11 @@ altitude
 grade
 ```
 
-It never reads `position_lat`, `position_long`, enhanced position aliases,
-route data, developer fields, or any unlisted field. GPS is excluded both by
-the parser allowlist and by the response serializer allowlist. Latitude,
-longitude, coordinates, polyline, and derived location data must never appear,
-even as `null` keys.
+It never selects, copies, retains, or serializes `position_lat`,
+`position_long`, enhanced position aliases, route data, developer fields, or
+any unlisted field. GPS is excluded both by the parser selection allowlist and
+the response serializer allowlist. Latitude, longitude, coordinates, polyline,
+and derived location data must never appear, even as `null` keys.
 
 For each field, a usable value is a non-Boolean Python `int` or `float` that
 is finite and in the stated inclusive physical-safety range. An invalid,
@@ -287,27 +322,31 @@ the timestamped record itself remains usable.
 | `altitude_m` | `altitude` | `-1000..10000` m | mean at 0.1 m. |
 | `grade_pct` | `grade` | `-100..100` % | mean at 0.1 percentage point. |
 
-Round only after aggregating raw values. Decimal rounding is round-half-up;
-whole pace/extrema are JSON integers and all other populated numeric outputs
-are JSON numbers at the stated precision. The primary value is always the
-average. Minimum/maximum and fastest/slowest preserve within-bin extrema, so a
-coarser resolution retains relevant peaks. A one-second bin can still contain
-multiple records: its primary values are averages and its `sample_count` is
-greater than one.
+Round only after aggregating raw values. Every mean and the positive-speed
+mean used for pace is `math.fsum(values) / len(values)` over the sorted,
+per-bin values. Decimal rounding is round-half-up; whole pace/extrema are JSON
+integers and all other populated numeric outputs are JSON numbers at the
+stated precision. The primary value is always the average. Minimum/maximum and
+fastest/slowest preserve within-bin extrema, so a coarser resolution retains
+relevant peaks. A one-second bin can still contain multiple records: its
+primary values are averages and its `sample_count` is greater than one.
 
 Records are sorted before reduction. For equal timestamps the original
-`fitparse` encounter index breaks the tie, making output independent of
-source-message order while retaining every duplicated record in the bin. No
-metric is carried forward from a previous record or bin.
+archive encounter index breaks the tie, making output deterministic for a
+given archive/message order while retaining every duplicated record in the
+bin. It does not claim equal results when the archive's message order changes.
+No metric is carried forward from a previous record or bin.
 
 ## FIT download and parser safety boundary
 
-The single source read is deliberately narrow. `ai_activity.providers` adds a
-bounded `download_original_fit(client, activity_id)` seam. It calls only the
-pinned `download_activity(..., dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL)`
-method, exactly once after validation. It calls no activity summary, detail,
-map, raw request, mutation, or second download method. V1 has no cache, so a
-separate tool invocation makes one new permitted download.
+The single source read is deliberately narrow. `ai_activity.providers` owns
+only the bounded `download_original_fit(client, activity_id)` seam. After all
+service validation succeeds, it makes exactly one call to the pinned
+`download_activity(..., dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL)`
+method. It calls no activity summary, detail, map, raw request, mutation, or
+second download method. Invalid input and an unavailable client make zero
+Garmin calls; every valid configured invocation makes exactly the one download.
+V1 has no cache, so a separate invocation makes one new permitted download.
 
 The provider accepts only a non-empty `bytes`, `bytearray`, or contiguous
 one-byte `memoryview` response. It measures the response before parsing or
@@ -317,38 +356,107 @@ exceptions and payload values are converted to fixed safe outcomes; raw
 exceptions, URLs, headers, token values, request IDs, and response bodies are
 never returned or logged in the tool result.
 
-The pure `timeseries.py` parser accepts that bounded byte string only. Because
-the pinned client's ORIGINAL response is evidenced to be a ZIP archive, it
-accepts a ZIP archive and does not guess gzip or raw-FIT fallback formats. It
-must safely require exactly one non-directory `.fit` member, reject encrypted
-members, reject a declared uncompressed member larger than 25,000,000 bytes,
-and after extraction verify that the actual member length is also at most
-25,000,000 bytes. The ZIP itself was already capped by the provider. Any ZIP
-format error, member ambiguity, unsupported member, or size violation is a
-safe error, never a fallback parse. This prevents decompression/archive
-surprises without adding speculative gzip heuristics.
+These are the normative parser/resource constants; all values are inclusive
+unless their corresponding `+1` abort point is stated:
 
-Only the extracted bounded FIT member is passed to
-`fitparse.FitFile(io.BytesIO(...))`. Iteration counts every FIT `record`
-message before window filtering. At message 100,001 the parser stops and
-returns the fatal record-limit outcome; it must not silently truncate.
+| Constant | Value | Bound |
+| --- | --- | --- |
+| `MAX_ORIGINAL_DOWNLOAD_BYTES` | 25,000,000 | Downloaded ZIP archive bytes. |
+| `ZIP_EOCD_TAIL_BYTES` | 65,557 | Maximum trailing bytes searched for classic EOCD. |
+| `MAX_ARCHIVE_ENTRIES` | 16 | Central-directory entries. |
+| `MAX_CENTRAL_DIRECTORY_BYTES` | 65,536 | Declared central-directory size. |
+| `MAX_AUXILIARY_ENTRY_BYTES` | 65,536 | Declared uncompressed size of each never-opened non-FIT entry. |
+| `MAX_FIT_MEMBER_BYTES` | 25,000,000 | Declared and streamed decompressed selected FIT member bytes. |
+| `FIT_STREAM_READ_CHUNK_BYTES` | 65,536 | Maximum underlying stream read. |
+| `MAX_FIT_FRAMES` | 200,000 | Header, definition, data, and CRC frames combined. |
+| `MAX_RECORD_MESSAGES` | 100,000 | FIT `record` data messages. |
+| `MAX_FIELDS_PER_DEFINITION` | 128 | Standard plus developer fields in one definition. |
+
+`timeseries.py` owns archive preflight, stream extraction, decoder limits, and
+minimal-fact reduction. It accepts the provider's already bounded archive byte
+string only. Because the pinned client's ORIGINAL response is evidenced to be
+a ZIP archive, it accepts a classic ZIP archive and has no gzip or raw-FIT
+fallback. It must complete the following preflight **before** constructing a
+`zipfile.ZipFile`:
+
+1. Inspect only the final `min(len(archive), 65557)` bytes for a classic
+   single-disk EOCD. Require one EOCD whose comment-length field ends exactly
+   at archive EOF. Reject a missing/ambiguous EOCD, all ZIP64 sentinels,
+   ZIP64 locator/record signatures, and ZIP64 extra fields.
+2. Require EOCD disk number and central-directory start disk to be zero, and
+   require equal per-disk/total entry counts. Reject multi-disk archives.
+   Require `MAX_ARCHIVE_ENTRIES = 16` or fewer entries and
+   `MAX_CENTRAL_DIRECTORY_BYTES = 65536` or fewer central-directory bytes.
+3. Walk every central-directory entry inside the declared directory range.
+   Require valid central-header lengths and ranges, start disk zero, no
+   encryption flags, and compression method `ZIP_STORED` or `ZIP_DEFLATED`
+   only. Validate each referenced local header, name/extra range, compressed
+   data range, and offset lies before the central directory. Reject unsafe
+   paths (absolute, traversal, or backslash paths), symlinks, and any ZIP64
+   extra field. A non-FIT auxiliary entry is permitted only when it is an
+   ordinary file/directory with declared uncompressed size at most 65536;
+   auxiliary entries are never opened.
+4. Require exactly one non-directory `.fit` entry, case-insensitively. Its
+   declared uncompressed size must be at most 25,000,000 bytes. Construct
+   `ZipFile` only after these checks and cross-check its selected `ZipInfo`
+   values (name, compression, flags, sizes, and local-header offset) against
+   the preflight values before opening it.
+
+The ZIP archive itself was already capped at 25,000,000 bytes by the provider.
+Archive parse errors with no valid classic structure are `invalid_fit_payload`;
+every preflight/cross-check limit or safety violation is `unsafe_fit_archive`.
+This two-stage validation prevents archive surprises without speculative
+format heuristics.
+
+The selected `ZipFile.open()` handle is never passed through `zf.read()` and
+the member is never extracted into one bytes object. A counting
+`LimitedReader` wraps that handle and is passed directly to `fitdecode`. It
+limits every underlying read to 65536 bytes, counts decompressed bytes, and
+raises the safe member-limit outcome on byte 25,000,001. The parser therefore
+does not allocate the declared or actual full FIT member before applying the
+cap.
+
+The stream uses exactly:
+
+```python
+fitdecode.FitReader(
+    limited_reader,
+    check_crc=fitdecode.CrcCheck.RAISE,
+    error_handling=fitdecode.ErrorHandling.RAISE,
+    keep_raw_chunks=False,
+)
+```
+
+Count every yielded header, definition, data, and CRC frame before filtering.
+At frame 200,001 (`MAX_FIT_FRAMES = 200000`), return the fatal frame-limit
+outcome. For every definition frame, check
+`len(field_defs) + len(dev_field_defs)` and return the fatal definition-field
+outcome above `MAX_FIELDS_PER_DEFINITION = 128`. For record data messages,
+count every message before window filtering; at record 100,001
+(`MAX_RECORD_MESSAGES = 100000`), return the fatal record-limit outcome. None
+of these outcomes may silently truncate a stream.
 
 Malformed records are the only non-fatal FIT-message condition. A `record`
 message is discarded and counted as malformed when its timestamp cannot be
-obtained without an exception, is not a naïve `datetime`, cannot participate in
-safe arithmetic/UTC serialization, or yields a negative elapsed time after
+obtained without an exception, is not a timezone-aware UTC `datetime`, cannot
+participate in safe arithmetic/UTC serialization, or yields a negative elapsed time after
 sorting (the last condition is defensive and should not occur). Missing or
 invalid optional measurement fields do **not** make the record malformed; they
 produce null metrics as described above. An exception while obtaining an
 optional allowlisted measurement is handled the same way as an invalid optional
 value: that metric is null, while the timestamped record remains usable.
 Out-of-order and duplicate valid timestamps are valid, sorted records. Other
-fitparse/file failures are fatal.
+fitdecode/file failures are fatal.
 
-The parser returns only small typed facts to the service: sorted allowlisted
-records, the global-valid-record continuation fact, and the malformed-record
-count. It never returns a raw `FitFile`, `DataMessage`, archive member, or raw
-payload to a serializer.
+The decoder necessarily consumes all field bytes in a data message to advance
+its FIT state. The parser nevertheless iterates/selects only the seven
+allowlisted field names, copies only their primitive values into a minimal
+record fact, and drops the yielded frame/message immediately. It neither
+selects nor retains GPS or any other unlisted value. The service retains at
+most 100,000 minimal allowlisted record facts for sorting; it retains no
+decoded frame/message, raw chunk, archive member, or raw payload. The parser
+returns only those facts, the global-valid-record continuation fact, and the
+activity-global malformed-record count to the service.
 
 ## Status, errors, and warnings
 
@@ -366,11 +474,15 @@ The tool uses only `success`, `partial_success`, and `error`.
   record message anywhere in the activity. Errors have empty series arrays,
   all availability flags false, and no partially truncated data.
 
-The special empty-window rule takes precedence over the partial rule: if the
-activity has at least one globally valid timestamped record but the selected
-window has none, return `success` with empty arrays even when malformed records
-were found elsewhere in the file. This prevents an empty page from claiming a
-sample or pretending to be a failed activity.
+Malformed-record status, warning, and count are activity-global because a
+timestamp-invalid record cannot be assigned to a requested window. Thus any
+selected window with usable records is `partial_success` when any malformed
+record was discarded anywhere in the decoded activity. Sampling and
+availability remain strictly window-scoped. The special empty-window rule takes
+precedence: if the activity has at least one globally valid timestamped record
+but the selected window has none, return `success` with empty arrays even when
+malformed records were found elsewhere in the file. This prevents an empty page
+from claiming a sample or pretending to be a failed activity.
 
 `error` is either `null` or this fixed object:
 
@@ -390,8 +502,8 @@ The fixed error vocabulary is:
 
 | Provider | Code | Exact message | Condition |
 | --- | --- | --- | --- |
-| `input` | `invalid_activity_id` | `activity_id must be a positive integer or ASCII decimal string.` | Invalid ID type, text, or range. |
-| `input` | `invalid_start_seconds` | `start_seconds must be an integer greater than or equal to 0.` | Invalid start type or range. |
+| `input` | `invalid_activity_id` | `activity_id must be a positive integer or ASCII decimal string from 1 through 9007199254740991.` | Invalid ID type, text, zero, or JSON-safe range. |
+| `input` | `invalid_start_seconds` | `start_seconds must be an integer from 0 through 604800.` | Invalid start type or v1 safety range. |
 | `input` | `invalid_duration_seconds` | `duration_seconds must be an integer from 1 through 86400.` | Invalid duration type or range. |
 | `input` | `invalid_resolution_seconds` | `resolution_seconds must be an integer from 1 through 300.` | Invalid resolution type or range. |
 | `input` | `point_limit_exceeded` | `ceil(duration_seconds / resolution_seconds) must not exceed 600.` | Valid scalar values exceed the bin limit. |
@@ -400,8 +512,11 @@ The fixed error vocabulary is:
 | `garmin` | `invalid_download_payload` | `Original FIT download returned an invalid payload.` | Empty or unsupported return type. |
 | `garmin` | `fit_download_too_large` | `Original FIT download exceeds the 25 MB limit.` | Downloaded bytes exceed 25,000,000. |
 | `fit` | `invalid_fit_payload` | `Original FIT data is invalid or unavailable.` | Not a valid ZIP or no ordinary `.fit` member. |
-| `fit` | `unsafe_fit_archive` | `Original FIT archive violates safety limits.` | More than one FIT member, encrypted member, or declared/actual extracted FIT member over 25,000,000 bytes. |
-| `fit` | `fit_parse_failed` | `Original FIT data could not be parsed.` | `fitparse` construction or iteration failed. |
+| `fit` | `unsafe_fit_archive` | `Original FIT archive violates safety limits.` | ZIP64, non-classic/multi-disk structure, EOCD/central/local range failure, archive entry/directory/compression/encryption/path violation, ambiguous FIT member, or member safety limit. |
+| `fit` | `fit_member_too_large` | `Original FIT member exceeds the 25 MB limit.` | Streaming `LimitedReader` reaches byte 25,000,001. |
+| `fit` | `fit_parse_failed` | `Original FIT data could not be parsed.` | Strict `fitdecode` construction, CRC, or iteration failed. |
+| `fit` | `frame_limit_exceeded` | `Original FIT data exceeds the 200000-frame limit.` | More than 200,000 header/definition/data/CRC frames. |
+| `fit` | `definition_field_limit_exceeded` | `Original FIT data exceeds the 128-field definition limit.` | A definition has more than 128 standard plus developer field definitions. |
 | `fit` | `record_limit_exceeded` | `Original FIT data exceeds the 100000-record limit.` | More than 100,000 FIT `record` messages. |
 | `fit` | `no_timestamped_records` | `Original FIT data contains no usable timestamped record messages.` | Parsing completed but no globally valid timestamped record remained. |
 
@@ -416,19 +531,27 @@ The implementation remains fork-owned under `src/garmin_mcp/ai_activity`:
 ```text
 ai_activity/
   providers.py            bounded original-FIT download seam
-  timeseries.py           pure archive validation, allowlist FIT parse, sort, bin, reduce
+  timeseries.py           ZIP preflight, bounded fitdecode stream, allowlist facts, sort, bin, reduce
   timeseries_service.py   strict validation, one provider call, stable envelope
   tools.py                FastMCP adapter and registration
 ```
 
 `timeseries.py` has no Garmin client, environment lookup, logging of payloads,
-or FastMCP dependency. It accepts bytes and plain request values and returns
-plain typed facts/outcomes. `timeseries_service.py` owns argument
-normalization, empty/error envelope creation, provider orchestration, status,
-and serialization-ready result selection. `tools.py` owns only strict adapter
-types, concise factual/privacy documentation, delegation, and stable
-`json.dumps(..., indent=2)` output. Package `__init__.py` exports the new
-service and retains the existing lazy `configure`/`register_tools` pattern.
+or FastMCP dependency. It owns ZIP/stream/decoder safety and accepts bounded
+archive bytes plus plain request values, returning plain minimal facts/outcomes.
+`providers.py` owns only the one Garmin call, response type/25 MB archive-byte
+cap, and provider failure sanitization. `timeseries_service.py` owns bounded
+argument normalization, empty/error envelope creation, provider orchestration,
+activity-global warning status, and serialization-ready result selection.
+`tools.py` owns only strict adapter types, concise factual/privacy
+documentation, delegation, and stable `json.dumps(..., indent=2)` output.
+Package `__init__.py` exports the new service and retains the existing lazy
+`configure`/`register_tools` pattern.
+
+The implementation pins `fitdecode==0.11.0` in `pyproject.toml` and `uv.lock`
+for this streaming parser. Existing `fitparse>=1.2.0` remains pinned and is
+used unchanged by the existing `activity_analysis.py` tool; it is not imported
+by `timeseries.py`.
 
 The root startup path continues to configure and register `ai_activity` once;
 no second client global is created. `register_tools` adds
@@ -497,8 +620,12 @@ The test suite must cover at least the following observable contracts:
 
 1. FastMCP schema/signature/defaults and actual call-time strictness: booleans,
    floats, strings for window arguments, arrays, and objects are rejected
-   before any provider/client read; a trimmed ASCII decimal activity ID is
-   accepted and every invalid service direct-call shape is rejected too.
+   with a `ToolError` before any provider/client read; a trimmed ASCII decimal
+   activity ID is accepted; malformed direct service-call shapes instead return
+   stable error envelopes. Exercise the 9007199254740991 activity-ID cap, the
+   604800 start cap, validation precedence, safe end arithmetic, and the pinned
+   FastMCP behavior that ignores undeclared extra arguments (outside contract
+   and never delegated/used).
 2. The exact default one-second window and a coarse resolution; multiple
    source records in one one-second bin; output bin cap and aligned-array
    lengths for every metric array.
@@ -506,34 +633,48 @@ The test suite must cover at least the following observable contracts:
    duplicate or skipped records across pages, fractional/irregular timestamps,
    pauses/empty bins, observed median interval, and irregular flag semantics.
 4. Stable sorting of out-of-order messages and deterministic duplicate
-   timestamp aggregation; no interpolation or carry-forward values.
+   timestamp aggregation for a given archive order; no interpolation,
+   carry-forward values, or claim that archive reordering preserves reductions.
 5. Heart-rate average/minimum/maximum, speed average, pace average/fastest/
    slowest, zero-only speed bins, missing fields, null arrays, and the exact
    rounding rules.
 6. Finite/adversarial metric values, including Boolean, NaN, infinity, and
    out-of-range values; they become null without making an otherwise valid
    timestamped record malformed.
-7. Malformed record-message discard/partial-success behavior, aggregate safe
-   warning, globally no usable timestamp error, and a valid activity with an
-   empty requested window returning factual `success` and zero points.
+7. Malformed record-message discard/partial-success behavior, activity-global
+   aggregate warning/count versus window-scoped sampling/availability, globally
+   no usable timestamp error, and a valid activity with an empty requested
+   window returning factual `success` and zero points.
 8. Provider call budget: exactly one
    `download_activity(activity_id, dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL)`
    after valid input, no caching, and a recording client that raises on every
    mutation, raw request, or non-download read.
-9. Empty, wrong-type, oversized, malformed, encrypted, multi-member, and
-   decompression-size-unsafe archive payloads; raw bytes are capped before
-   `fitparse`; more than 100,000 record messages is a fatal error with no
-   truncation.
-10. Exception/payload sanitization: nested serialized result scans find no
+9. Empty, wrong-type, oversized, malformed, raw/gzip fallback, ZIP64,
+   multi-disk, EOCD/central/local-range-invalid, encrypted, unsupported
+   compression, unsafe-path/symlink, too-many-entry, too-large-central-
+   directory, multi-FIT, oversized declared FIT-member, and streamed
+   25,000,001-byte-member payloads. Verify preflight occurs before `ZipFile`,
+   non-FIT safe entries are not opened, and the selected member is streamed
+   through a 65536-byte `LimitedReader` to strict `fitdecode`, never `zf.read`.
+10. Strict `fitdecode==0.11.0` configuration: public streaming `FitReader`,
+    `CrcCheck.RAISE`, `ErrorHandling.RAISE`, `keep_raw_chunks=False`,
+    timezone-aware UTC timestamps, fresh per-reader developer state, and no
+    retained decoded frames/messages. Test high non-record frame streams above
+    200,000, a record stream above 100,000, and standard-plus-developer
+    definition fields above 128; each is a fatal no-truncation error.
+11. Exception/payload sanitization: nested serialized result scans find no
     secret, URL, header, request ID, raw exception text, raw FIT message, or
     raw payload value.
-11. GPS privacy: fixtures containing latitude/longitude (and any other
-    unlisted fields) prove the parser never asks for them, and a recursive
-    serialized-output scan finds no GPS/coordinate/polyline keys or values.
-12. Root configuration, registration beside `analyze_activity`, exact
+12. GPS privacy: fixtures containing latitude/longitude (and any other
+    unlisted fields) prove the parser consumes frame bytes but neither selects
+    nor retains those values, and a recursive serialized-output scan finds no
+    GPS/coordinate/polyline keys or values.
+13. Root configuration, registration beside `analyze_activity`, exact
     14-member profile/startup filtering, retained exclusion of
-    `get_activity_fit_data`, and documentation assertions for the pinned 0.3.10
-    ORIGINAL ZIP behavior, limits, paging, and tool-selection guidance.
+    `get_activity_fit_data`, `fitdecode==0.11.0` pin/lock while preserving the
+    existing `fitparse` tool dependency, and documentation assertions for the
+    pinned 0.3.10 ORIGINAL ZIP behavior, limits, paging, and tool-selection
+    guidance.
 
 ## Response examples
 
@@ -541,6 +682,10 @@ The following are parseable contract examples. They show shape and semantics,
 not a claim that a particular device supplies every metric.
 
 ### Successful populated page
+
+This example's five source records can occur at elapsed seconds 0, 1, 2, 5,
+and 6: its positive source deltas are 1, 1, 3, and 1, so `irregular` is
+correctly `true` despite a 1.0-second median.
 
 ```json
 {
@@ -557,7 +702,7 @@ not a claim that a particular device supplies every metric.
     "source_records": 5,
     "returned_points": 2,
     "observed_median_interval_seconds": 1.0,
-    "irregular": false
+    "irregular": true
   },
   "availability": {
     "heart_rate_bpm": true,
