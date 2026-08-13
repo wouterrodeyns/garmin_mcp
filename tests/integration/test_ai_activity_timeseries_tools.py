@@ -79,6 +79,23 @@ def internal_error_envelope() -> dict[str, object]:
     }
 
 
+def serialization_failure_result(kind: str) -> dict[str, object]:
+    """Build one locally trusted result that the standard JSON encoder rejects."""
+    if kind == "object":
+        return {
+            "detail": "token=private https://example.invalid Authorization request_id path",
+            "bad_value": object(),
+        }
+    if kind == "circular":
+        values: list[object] = []
+        values.append(values)
+        return {
+            "detail": "token=private https://example.invalid Authorization request_id path",
+            "bad_value": values,
+        }
+    raise AssertionError(f"unknown serialization failure fixture: {kind}")
+
+
 @pytest.mark.asyncio
 async def test_get_activity_timeseries_schema_uses_strict_id_and_window_types():
     app = registered_app(object())
@@ -258,6 +275,40 @@ async def test_get_activity_timeseries_sanitizes_service_runtime_errors_at_the_p
         "runtimeerror",
     ):
         assert secret_fragment not in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["object", "circular"])
+async def test_get_activity_timeseries_sanitizes_serialization_failures_at_the_public_boundary(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+):
+    client = object()
+    app = registered_app(client)
+    service = Mock(return_value=serialization_failure_result(kind))
+    monkeypatch.setattr(tools, "get_activity_timeseries_service", service)
+
+    response = await app.call_tool("get_activity_timeseries", {"activity_id": 42})
+    expected = internal_error_envelope()
+    text = response_text(response)
+
+    service.assert_called_once_with(client, 42, 0, 600, 1)
+    assert text == json.dumps(expected, indent=2)
+    payload = json.loads(text)
+    assert payload == expected
+
+    rendered = json.dumps(payload, allow_nan=False).lower()
+    for leaked_fragment in (
+        "token=private",
+        "https://",
+        "authorization",
+        "request_id",
+        "path",
+        "object of type",
+        "not json serializable",
+        "circular reference",
+        "nan",
+    ):
+        assert leaked_fragment not in rendered
 
 
 @pytest.mark.asyncio

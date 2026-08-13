@@ -64,8 +64,8 @@ def register_tools(app: Any) -> Any:
                 duration_seconds,
                 resolution_seconds,
             )
+            return json.dumps(result, indent=2)
         except Exception:
-            result = _unexpected_error_envelope()
-        return json.dumps(result, indent=2)
+            return json.dumps(_unexpected_error_envelope(), indent=2)
 
     return app
