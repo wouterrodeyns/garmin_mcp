@@ -24,7 +24,7 @@ ERRORS = {
     "invalid_activity_id": {
         "provider": "input",
         "code": "invalid_activity_id",
-        "message": "activity_id must be a positive integer or ASCII decimal string from 1 through 9007199254740991.",
+        "message": "activity_id must be a positive integer or an ASCII decimal string from 1 through 9007199254740991 with at most 64 characters before trimming.",
     },
     "invalid_start_seconds": {
         "provider": "input",
