@@ -105,6 +105,7 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
     assert enabled == {
         "get_training_context",
         "analyze_activity",
+        "get_activity_timeseries",
         "create_workout",
         "update_workout",
         "get_activities",
@@ -122,6 +123,8 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
         "upload_workouts",
         "delete_workouts",
         "create_manual_activity",
+        "get_activity_fit_data",
+        "move_workout",
     } & enabled
 
 

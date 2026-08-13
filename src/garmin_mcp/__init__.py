@@ -113,6 +113,7 @@ TOOL_PROFILES = {
     "ai-coach": {
         "get_training_context",
         "analyze_activity",
+        "get_activity_timeseries",
         "create_workout",
         "update_workout",
         "get_activities",

@@ -59,7 +59,7 @@ async def test_analyze_activity_has_only_a_required_integer_or_string_activity_i
 
     tools_by_name = {tool.name: tool for tool in await app.list_tools()}
 
-    assert set(tools_by_name) == {"analyze_activity"}
+    assert set(tools_by_name) == {"analyze_activity", "get_activity_timeseries"}
     schema = tools_by_name["analyze_activity"].inputSchema
     assert schema["properties"] == {
         "activity_id": {

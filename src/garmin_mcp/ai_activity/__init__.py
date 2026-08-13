@@ -1,4 +1,4 @@
-"""Read-only Garmin activity analysis provider seams."""
+"""Read-only Garmin activity evidence provider seams."""
 
 from .service import analyze_activity_service
 from .timeseries_service import (

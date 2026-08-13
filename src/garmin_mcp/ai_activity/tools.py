@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import StrictInt, StrictStr
 
 from .service import analyze_activity_service
+from .timeseries_service import get_activity_timeseries_service
 
 
 garmin_client: Any = None
@@ -35,6 +36,30 @@ def register_tools(app: Any) -> Any:
         metrics.
         """
         result = analyze_activity_service(garmin_client, activity_id)
+        return json.dumps(result, indent=2)
+
+    @app.tool()
+    async def get_activity_timeseries(
+        activity_id: StrictInt | StrictStr,
+        start_seconds: StrictInt = 0,
+        duration_seconds: StrictInt = 600,
+        resolution_seconds: StrictInt = 1,
+    ) -> str:
+        """Return short-window factual cadence, power, pace, speed, altitude, grade, and heart-rate evidence.
+
+        This tool is read-only and makes one ORIGINAL FIT download after valid input.
+        Use analyze_activity first for the normal completed-session overview; use this
+        only for a concrete short interval question. Results are sparse, paged non-empty bins,
+        can have gaps, never imply one-Hz sampling, and never include GPS or raw FIT data.
+        Availability describes this returned window, not account or device capability.
+        """
+        result = get_activity_timeseries_service(
+            garmin_client,
+            activity_id,
+            start_seconds,
+            duration_seconds,
+            resolution_seconds,
+        )
         return json.dumps(result, indent=2)
 
     return app
