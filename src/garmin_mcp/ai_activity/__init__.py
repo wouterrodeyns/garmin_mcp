@@ -1,6 +1,11 @@
 """Read-only Garmin activity analysis provider seams."""
 
 from .service import analyze_activity_service
+from .timeseries_service import (
+    MAX_ACTIVITY_ID,
+    MAX_FIT_ELAPSED_SECONDS,
+    get_activity_timeseries_service,
+)
 from .providers import (
     CYCLING_TYPE_KEYS,
     MAX_ORIGINAL_DOWNLOAD_BYTES,
@@ -43,6 +48,9 @@ __all__ = [
     "WALKING_TYPE_KEYS",
     "ProviderResult",
     "analyze_activity_service",
+    "get_activity_timeseries_service",
+    "MAX_ACTIVITY_ID",
+    "MAX_FIT_ELAPSED_SECONDS",
     "configure",
     "download_original_fit",
     "get_activity",
