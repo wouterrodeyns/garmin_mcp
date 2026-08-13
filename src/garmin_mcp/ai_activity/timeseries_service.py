@@ -230,13 +230,17 @@ def _trusted_array(
 def _copy_reduction(result: WindowResult) -> tuple[dict[str, Any], dict[str, bool], dict[str, Any]]:
     """Copy the known reducer shape so its mutable arrays never escape by alias."""
     source_records = _trusted_nonnegative_int(
-        result.sampling["source_records"], "WindowResult sampling.source_records"
+        result.sampling["source_records"],
+        "WindowResult sampling.source_records",
+        MAX_RECORD_MESSAGES,
     )
     returned_points = _trusted_nonnegative_int(
         result.sampling["returned_points"],
         "WindowResult sampling.returned_points",
         MAX_RETURNED_POINTS,
     )
+    if returned_points > source_records:
+        raise ValueError("WindowResult sampling.returned_points exceeds source_records")
     sampling = {
         "source_records": source_records,
         "returned_points": returned_points,

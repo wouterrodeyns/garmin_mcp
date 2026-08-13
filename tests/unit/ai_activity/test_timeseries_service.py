@@ -173,6 +173,37 @@ def _one_point_window_result(*, next_start_seconds: int | None = None) -> Window
     return result
 
 
+def _window_result_with_point_count(source_records: int, returned_points: int) -> WindowResult:
+    result = _empty_window_result()
+    result.sampling.update(
+        {
+            "source_records": source_records,
+            "returned_points": returned_points,
+            "observed_median_interval_seconds": 1.0,
+            "irregular": False,
+        }
+    )
+    result.series["elapsed_seconds"] = list(range(returned_points))
+    result.series["timestamp"] = ["1998-07-03T21:24:16.000000Z"] * returned_points
+    result.series["sample_count"] = [1] * returned_points
+    result.series["heart_rate_bpm"] = {
+        "average": [120.0] * returned_points,
+        "minimum": [120] * returned_points,
+        "maximum": [120] * returned_points,
+    }
+    result.series["speed_mps"] = {"average": [2.0] * returned_points}
+    result.series["pace_seconds_per_km"] = {
+        "average": [500] * returned_points,
+        "fastest": [500] * returned_points,
+        "slowest": [500] * returned_points,
+    }
+    result.series["cadence_rpm"] = {"average": [90.0] * returned_points}
+    result.series["power_w"] = {"average": [200.0] * returned_points}
+    result.series["altitude_m"] = {"average": [10.0] * returned_points}
+    result.series["grade_pct"] = {"average": [1.0] * returned_points}
+    return result
+
+
 def _expected_empty(
     *,
     activity_id: int | None = None,
@@ -1158,6 +1189,56 @@ def test_trusted_availability_values_must_be_exact_bools(
 
     with pytest.raises(TypeError):
         service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "source_records",
+    [
+        pytest.param(MAX_RECORD_MESSAGES + 1, id="over-record-limit"),
+        pytest.param(10**5000, id="huge-int"),
+    ],
+)
+def test_trusted_source_record_count_cannot_exceed_the_record_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    service_module,
+    recorded_success_seams,
+    source_records: int,
+):
+    reduced = _one_point_window_result()
+    reduced.sampling["source_records"] = source_records
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    with pytest.raises(ValueError):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+
+def test_trusted_returned_points_cannot_exceed_source_records(
+    monkeypatch: pytest.MonkeyPatch, service_module, recorded_success_seams
+):
+    reduced = _one_point_window_result()
+    reduced.sampling["source_records"] = 0
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    with pytest.raises(ValueError):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+
+@pytest.mark.parametrize("source_records", [MAX_RETURNED_POINTS, MAX_RECORD_MESSAGES])
+def test_trusted_sampling_count_upper_boundaries_are_accepted_when_returned_points_fit_source_records(
+    monkeypatch: pytest.MonkeyPatch,
+    service_module,
+    recorded_success_seams,
+    source_records: int,
+):
+    reduced = _window_result_with_point_count(source_records, MAX_RETURNED_POINTS)
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    response = service_module.get_activity_timeseries_service(object(), 42, 0, 600, 1)
+
+    assert response["status"] == "success"
+    assert response["sampling"]["source_records"] == source_records
+    assert response["sampling"]["returned_points"] == MAX_RETURNED_POINTS
+    assert len(response["series"]["elapsed_seconds"]) == MAX_RETURNED_POINTS
 
 
 def test_successful_output_is_json_safe_and_contains_no_sensitive_or_raw_content(service_module, recorded_success_seams):
