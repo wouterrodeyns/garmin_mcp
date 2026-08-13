@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import timedelta
 from pathlib import Path
+
+from garmin_mcp.ai_activity.timeseries import FIT_EPOCH, RecordFact, reduce_records
 
 
 ROOT = Path(__file__).parents[2]
@@ -100,6 +103,24 @@ def _assert_exact_types(values: list[object], expected: tuple[type | None, ...])
             assert value is None
         else:
             assert type(value) is expected_type
+
+
+def _safe_example_facts() -> list[RecordFact]:
+    base = 1000
+    return [
+        RecordFact(
+            raw_timestamp_seconds=raw,
+            timestamp_utc=FIT_EPOCH + timedelta(seconds=raw),
+            encounter_index=index,
+            heart_rate_bpm=None,
+            speed_mps=None,
+            cadence_rpm=None,
+            power_w=None,
+            altitude_m=None,
+            grade_pct=None,
+        )
+        for index, raw in enumerate((base, base, base + 1, base + 1))
+    ]
 
 
 def test_guide_has_findable_sections_for_tool_choice_and_boundaries():
@@ -262,8 +283,24 @@ def test_guide_example_uses_safe_plausible_values_and_utc_bin_anchors():
     }
     assert example["sampling"]["source_records"] >= example["sampling"]["returned_points"]
     assert example["sampling"]["observed_median_interval_seconds"] == 1.0
-    assert example["sampling"]["irregular"] is True
+    assert example["sampling"]["irregular"] is False
     assert all(TIMESTAMP_RE.fullmatch(value) for value in example["series"]["timestamp"])
+
+
+def test_guide_example_sampling_matches_reducer_for_duplicate_safe_timestamps():
+    result = reduce_records(_safe_example_facts(), 0, 600, 1)
+    assert result.sampling == {
+        "source_records": 4,
+        "returned_points": 2,
+        "observed_median_interval_seconds": 1.0,
+        "irregular": False,
+    }
+    assert result.series["elapsed_seconds"] == [0, 1]
+    assert result.series["sample_count"] == [2, 2]
+    example = _example()
+    assert example["sampling"] == result.sampling
+    assert example["series"]["elapsed_seconds"] == result.series["elapsed_seconds"]
+    assert example["series"]["sample_count"] == result.series["sample_count"]
 
 
 def test_guide_pins_activity_id_string_normalization_and_rejections():
