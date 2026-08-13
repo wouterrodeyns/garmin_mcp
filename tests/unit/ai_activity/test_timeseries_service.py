@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 import json
 from typing import Any
@@ -9,7 +10,7 @@ from typing import Any
 import pytest
 
 from garmin_mcp.ai_activity.providers import OriginalFitDownload
-from garmin_mcp.ai_activity.timeseries import ParseResult, WindowResult
+from garmin_mcp.ai_activity.timeseries import FIT_EPOCH, ParseResult, RecordFact, WindowResult
 
 
 MAX_ACTIVITY_ID = 9_007_199_254_740_991
@@ -237,6 +238,18 @@ class _HostileInt(int):
     def __index__(self):  # pragma: no cover - called only by an incorrect implementation
         raise AssertionError("hostile __index__ invoked")
 
+    def __lt__(self, other):  # pragma: no cover - called only by an incorrect implementation
+        raise AssertionError("hostile comparison invoked")
+
+    def __le__(self, other):  # pragma: no cover - called only by an incorrect implementation
+        raise AssertionError("hostile comparison invoked")
+
+    def __gt__(self, other):  # pragma: no cover - called only by an incorrect implementation
+        raise AssertionError("hostile comparison invoked")
+
+    def __ge__(self, other):  # pragma: no cover - called only by an incorrect implementation
+        raise AssertionError("hostile comparison invoked")
+
 
 class _HostileStr(str):
     def strip(self, *args, **kwargs):  # pragma: no cover - called only by an incorrect implementation
@@ -322,6 +335,99 @@ def test_window_arguments_are_exact_bounded_ints_with_prefix_projection(
 
 
 @pytest.mark.parametrize(
+    ("argument", "code", "expected_window"),
+    [
+        ("start_seconds", "invalid_start_seconds", (None, None, None)),
+        ("duration_seconds", "invalid_duration_seconds", (7, None, None)),
+        ("resolution_seconds", "invalid_resolution_seconds", (7, 17, None)),
+    ],
+)
+@pytest.mark.parametrize("value", [True, 1.0, "1", [], {}, object(), _HostileInt(1)])
+def test_each_window_argument_rejects_every_non_exact_int_without_invoking_hostile_hooks(
+    service_module,
+    recorded_success_seams,
+    argument: str,
+    code: str,
+    expected_window: tuple[int | None, int | None, int | None],
+    value: object,
+):
+    values: dict[str, object] = {"start_seconds": 7, "duration_seconds": 10, "resolution_seconds": 1}
+    values[argument] = value
+
+    result = service_module.get_activity_timeseries_service(object(), 42, **values)
+
+    assert result == _expected_empty(
+        activity_id=42,
+        requested_start_seconds=expected_window[0],
+        actual_end_seconds=expected_window[1],
+        resolution_seconds=expected_window[2],
+        code=code,
+    )
+    assert recorded_success_seams[0] == []
+
+
+@pytest.mark.parametrize(
+    ("activity_id", "start_seconds", "duration_seconds", "resolution_seconds", "code", "window"),
+    [
+        (False, False, False, False, "invalid_activity_id", (None, None, None)),
+        (42, False, False, False, "invalid_start_seconds", (None, None, None)),
+        (42, 7, False, False, "invalid_duration_seconds", (7, None, None)),
+        (42, 7, 10, False, "invalid_resolution_seconds", (7, 17, None)),
+        (42, 7, 601, 1, "point_limit_exceeded", (7, 608, 1)),
+    ],
+)
+def test_validation_precedence_advances_only_after_the_prior_input_is_valid(
+    service_module,
+    recorded_success_seams,
+    activity_id: object,
+    start_seconds: object,
+    duration_seconds: object,
+    resolution_seconds: object,
+    code: str,
+    window: tuple[int | None, int | None, int | None],
+):
+    result = service_module.get_activity_timeseries_service(
+        object(), activity_id, start_seconds, duration_seconds, resolution_seconds
+    )
+
+    assert result == _expected_empty(
+        activity_id=42 if code != "invalid_activity_id" else None,
+        requested_start_seconds=window[0],
+        actual_end_seconds=window[1],
+        resolution_seconds=window[2],
+        code=code,
+    )
+    assert recorded_success_seams[0] == []
+
+
+def test_upper_request_bounds_delegate_exact_values_and_permit_an_end_after_fit_elapsed_maximum(
+    service_module, recorded_success_seams
+):
+    calls, archive, parsed, _ = recorded_success_seams
+    client = object()
+
+    result = service_module.get_activity_timeseries_service(
+        client,
+        MAX_ACTIVITY_ID,
+        MAX_FIT_ELAPSED_SECONDS,
+        86_400,
+        300,
+    )
+
+    assert result["status"] == "success"
+    assert result["window"] == {
+        "requested_start_seconds": MAX_FIT_ELAPSED_SECONDS,
+        "actual_end_seconds": MAX_FIT_ELAPSED_SECONDS + 86_400,
+        "resolution_seconds": 300,
+    }
+    assert calls == [
+        ("download", (client, MAX_ACTIVITY_ID)),
+        ("parse", (archive,)),
+        ("reduce", (parsed.records, MAX_FIT_ELAPSED_SECONDS, 86_400, 300)),
+    ]
+
+
+@pytest.mark.parametrize(
     ("duration_seconds", "resolution_seconds", "expected_code"),
     [(600, 1, None), (601, 1, "point_limit_exceeded"), (86_400, 144, None), (86_400, 143, "point_limit_exceeded")],
 )
@@ -370,6 +476,106 @@ def test_empty_error_envelopes_have_exact_stable_order_and_no_partial_series(ser
         "resolution_seconds",
     )
     assert recorded_success_seams[0] == []
+
+
+def _assert_complete_ordered_shape(result: dict[str, Any]) -> None:
+    assert tuple(result) == (
+        "status",
+        "error",
+        "activity_id",
+        "window",
+        "sampling",
+        "availability",
+        "series",
+        "warnings",
+    )
+    assert tuple(result["window"]) == (
+        "requested_start_seconds",
+        "actual_end_seconds",
+        "resolution_seconds",
+    )
+    assert tuple(result["sampling"]) == (
+        "source_records",
+        "returned_points",
+        "observed_median_interval_seconds",
+        "irregular",
+    )
+    assert tuple(result["availability"]) == (
+        "heart_rate_bpm",
+        "speed_mps",
+        "pace_seconds_per_km",
+        "cadence_rpm",
+        "power_w",
+        "altitude_m",
+        "grade_pct",
+    )
+    assert tuple(result["series"]) == (
+        "elapsed_seconds",
+        "timestamp",
+        "sample_count",
+        "heart_rate_bpm",
+        "speed_mps",
+        "pace_seconds_per_km",
+        "cadence_rpm",
+        "power_w",
+        "altitude_m",
+        "grade_pct",
+    )
+    assert tuple(result["series"]["heart_rate_bpm"]) == ("average", "minimum", "maximum")
+    assert tuple(result["series"]["speed_mps"]) == ("average",)
+    assert tuple(result["series"]["pace_seconds_per_km"]) == ("average", "fastest", "slowest")
+    assert tuple(result["series"]["cadence_rpm"]) == ("average",)
+    assert tuple(result["series"]["power_w"]) == ("average",)
+    assert tuple(result["series"]["altitude_m"]) == ("average",)
+    assert tuple(result["series"]["grade_pct"]) == ("average",)
+
+
+def test_error_and_populated_success_envelopes_preserve_the_complete_hard_coded_key_order(
+    service_module, recorded_success_seams
+):
+    _, _, _, reduced = recorded_success_seams
+    reduced.sampling.update({"source_records": 1, "returned_points": 1})
+    reduced.series["elapsed_seconds"].append(0)
+    reduced.series["timestamp"].append("1998-07-03T21:24:16.000000Z")
+    reduced.series["sample_count"].append(1)
+    reduced.series["heart_rate_bpm"] = {"average": [120.0], "minimum": [120], "maximum": [120]}
+    reduced.series["speed_mps"] = {"average": [2.0]}
+    reduced.series["pace_seconds_per_km"] = {"average": [500], "fastest": [500], "slowest": [500]}
+    reduced.series["cadence_rpm"] = {"average": [90.0]}
+    reduced.series["power_w"] = {"average": [200.0]}
+    reduced.series["altitude_m"] = {"average": [10.0]}
+    reduced.series["grade_pct"] = {"average": [1.0]}
+
+    error = service_module.get_activity_timeseries_service(object(), 42, 7, 0, 1)
+    success = service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+    _assert_complete_ordered_shape(error)
+    _assert_complete_ordered_shape(success)
+
+
+def test_next_start_is_omitted_when_null_and_appended_last_when_available(
+    monkeypatch: pytest.MonkeyPatch, service_module, recorded_success_seams
+):
+    no_cursor = service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+    monkeypatch.setattr(
+        service_module,
+        "reduce_records",
+        lambda records, start, duration, resolution: _empty_window_result(next_start_seconds=1),
+    )
+    with_cursor = service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+    assert tuple(no_cursor["window"]) == (
+        "requested_start_seconds",
+        "actual_end_seconds",
+        "resolution_seconds",
+    )
+    assert tuple(with_cursor["window"]) == (
+        "requested_start_seconds",
+        "actual_end_seconds",
+        "resolution_seconds",
+        "next_start_seconds",
+    )
+    assert with_cursor["window"]["next_start_seconds"] == 1
 
 
 def test_client_none_is_reported_only_after_validating_every_input(service_module, recorded_success_seams):
@@ -578,6 +784,140 @@ def test_selected_records_without_malformed_messages_are_success(
 
     assert response["status"] == "success"
     assert response["warnings"] == []
+
+
+_FORBIDDEN_TEXT = (
+    "token=",
+    "https://",
+    "authorization",
+    "request_id",
+    "position",
+    "latitude",
+    "longitude",
+    "coordinate",
+    "location",
+    "polyline",
+    "untrusted-coordinate-sentinel",
+)
+
+
+def _assert_no_forbidden_text(value: object) -> None:
+    if type(value) is dict:
+        for key, nested in value.items():
+            assert type(key) is str
+            assert all(token not in key.lower() for token in _FORBIDDEN_TEXT)
+            _assert_no_forbidden_text(nested)
+        return
+    if type(value) is list:
+        for nested in value:
+            _assert_no_forbidden_text(nested)
+        return
+    text = value if type(value) is str else repr(value)
+    assert all(token not in text.lower() for token in _FORBIDDEN_TEXT)
+
+
+class _FailingDownloadClient:
+    def download_activity(self, activity_id: int, *, dl_fmt: object) -> bytes:
+        raise RuntimeError(
+            "token=private https://private.example authorization request_id=private "
+            "untrusted-coordinate-sentinel"
+        )
+
+
+class _PayloadDownloadClient:
+    def __init__(self, payload: object) -> None:
+        self.payload = payload
+
+    def download_activity(self, activity_id: int, *, dl_fmt: object) -> object:
+        return self.payload
+
+
+def test_real_provider_exception_boundary_returns_fixed_download_error_without_echo(service_module):
+    response = service_module.get_activity_timeseries_service(_FailingDownloadClient(), 42, 0, 1, 1)
+
+    assert response == _expected_empty(
+        activity_id=42,
+        requested_start_seconds=0,
+        actual_end_seconds=1,
+        resolution_seconds=1,
+        code="download_failed",
+    )
+    _assert_no_forbidden_text(response)
+    assert json.loads(json.dumps(response, allow_nan=False)) == response
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        (
+            "token=private https://private.example untrusted-coordinate-sentinel private-location-sentinel",
+            "invalid_download_payload",
+        ),
+        (
+            b"token=private https://private.example untrusted-coordinate-sentinel private-location-sentinel",
+            "invalid_fit_payload",
+        ),
+    ],
+)
+def test_real_provider_payload_boundary_returns_fixed_error_without_echo(
+    service_module, payload: object, code: str
+):
+    response = service_module.get_activity_timeseries_service(_PayloadDownloadClient(payload), 42, 0, 1, 1)
+
+    assert response == _expected_empty(
+        activity_id=42,
+        requested_start_seconds=0,
+        actual_end_seconds=1,
+        resolution_seconds=1,
+        code=code,
+    )
+    _assert_no_forbidden_text(response)
+    assert json.loads(json.dumps(response, allow_nan=False)) == response
+
+
+def test_real_reduction_of_safe_record_facts_produces_json_safe_non_echoing_output(
+    monkeypatch: pytest.MonkeyPatch, service_module
+):
+    raw_timestamp_seconds = 0x10000000
+    records = (
+        RecordFact(
+            raw_timestamp_seconds=raw_timestamp_seconds,
+            timestamp_utc=FIT_EPOCH + timedelta(seconds=raw_timestamp_seconds),
+            encounter_index=0,
+            heart_rate_bpm=120.0,
+            speed_mps=2.0,
+            cadence_rpm=90.0,
+            power_w=200.0,
+            altitude_m=10.0,
+            grade_pct=1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "download_original_fit",
+        lambda client, activity_id: OriginalFitDownload(b"safe-original-fit", None),
+    )
+    monkeypatch.setattr(service_module, "parse_original_fit", lambda archive: ParseResult(records, 0, None))
+
+    response = service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
+
+    assert response["status"] == "success"
+    assert response["sampling"]["source_records"] == 1
+    assert response["series"]["heart_rate_bpm"]["average"] == [120.0]
+    _assert_no_forbidden_text(response)
+    assert json.loads(json.dumps(response, allow_nan=False)) == response
+
+
+@pytest.mark.parametrize("corruption", [object(), "untrusted-raw-string-sentinel"])
+def test_corrupt_trusted_window_result_is_a_visible_contract_failure(
+    monkeypatch: pytest.MonkeyPatch, service_module, recorded_success_seams, corruption: object
+):
+    _, _, _, reduced = recorded_success_seams
+    reduced.series["elapsed_seconds"] = [corruption]
+    monkeypatch.setattr(service_module, "reduce_records", lambda records, start, duration, resolution: reduced)
+
+    with pytest.raises(TypeError):
+        service_module.get_activity_timeseries_service(object(), 42, 0, 1, 1)
 
 
 def test_successful_output_is_json_safe_and_contains_no_sensitive_or_raw_content(service_module, recorded_success_seams):

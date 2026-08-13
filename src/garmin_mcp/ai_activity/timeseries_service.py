@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .providers import download_original_fit
@@ -163,34 +164,82 @@ def _bounded_integer(value: Any, minimum: int, maximum: int) -> int | None:
     return value if minimum <= value <= maximum else None
 
 
+def _trusted_value(value: Any, expected_types: tuple[type, ...], name: str) -> Any:
+    """Fail visibly when a trusted local reduction violates its public contract."""
+    if type(value) not in expected_types:
+        raise TypeError(f"WindowResult {name} has an invalid type")
+    if type(value) is float and not math.isfinite(value):
+        raise TypeError(f"WindowResult {name} must be finite")
+    return value
+
+
+def _trusted_array(values: Any, expected_types: tuple[type, ...], name: str) -> list[Any]:
+    """Copy one known reducer array while retaining type-contract failures."""
+    if type(values) is not list:
+        raise TypeError(f"WindowResult {name} must be a list")
+    return [
+        _trusted_value(value, expected_types, f"{name} item")
+        for value in values
+    ]
+
+
 def _copy_reduction(result: WindowResult) -> tuple[dict[str, Any], dict[str, bool], dict[str, Any]]:
     """Copy the known reducer shape so its mutable arrays never escape by alias."""
     sampling = {
-        "source_records": result.sampling["source_records"],
-        "returned_points": result.sampling["returned_points"],
-        "observed_median_interval_seconds": result.sampling["observed_median_interval_seconds"],
-        "irregular": result.sampling["irregular"],
+        "source_records": _trusted_value(result.sampling["source_records"], (int,), "sampling.source_records"),
+        "returned_points": _trusted_value(result.sampling["returned_points"], (int,), "sampling.returned_points"),
+        "observed_median_interval_seconds": _trusted_value(
+            result.sampling["observed_median_interval_seconds"],
+            (float, type(None)),
+            "sampling.observed_median_interval_seconds",
+        ),
+        "irregular": _trusted_value(result.sampling["irregular"], (bool,), "sampling.irregular"),
     }
-    availability = {key: result.availability[key] for key in _AVAILABILITY_KEYS}
+    availability = {
+        key: _trusted_value(result.availability[key], (bool,), f"availability.{key}")
+        for key in _AVAILABILITY_KEYS
+    }
     series = {
-        "elapsed_seconds": list(result.series["elapsed_seconds"]),
-        "timestamp": list(result.series["timestamp"]),
-        "sample_count": list(result.series["sample_count"]),
+        "elapsed_seconds": _trusted_array(result.series["elapsed_seconds"], (int,), "series.elapsed_seconds"),
+        "timestamp": _trusted_array(result.series["timestamp"], (str,), "series.timestamp"),
+        "sample_count": _trusted_array(result.series["sample_count"], (int,), "series.sample_count"),
         "heart_rate_bpm": {
-            "average": list(result.series["heart_rate_bpm"]["average"]),
-            "minimum": list(result.series["heart_rate_bpm"]["minimum"]),
-            "maximum": list(result.series["heart_rate_bpm"]["maximum"]),
+            "average": _trusted_array(
+                result.series["heart_rate_bpm"]["average"], (float, type(None)), "series.heart_rate_bpm.average"
+            ),
+            "minimum": _trusted_array(
+                result.series["heart_rate_bpm"]["minimum"], (int, type(None)), "series.heart_rate_bpm.minimum"
+            ),
+            "maximum": _trusted_array(
+                result.series["heart_rate_bpm"]["maximum"], (int, type(None)), "series.heart_rate_bpm.maximum"
+            ),
         },
-        "speed_mps": {"average": list(result.series["speed_mps"]["average"])},
+        "speed_mps": {
+            "average": _trusted_array(result.series["speed_mps"]["average"], (float, type(None)), "series.speed_mps.average")
+        },
         "pace_seconds_per_km": {
-            "average": list(result.series["pace_seconds_per_km"]["average"]),
-            "fastest": list(result.series["pace_seconds_per_km"]["fastest"]),
-            "slowest": list(result.series["pace_seconds_per_km"]["slowest"]),
+            "average": _trusted_array(
+                result.series["pace_seconds_per_km"]["average"], (int, type(None)), "series.pace_seconds_per_km.average"
+            ),
+            "fastest": _trusted_array(
+                result.series["pace_seconds_per_km"]["fastest"], (int, type(None)), "series.pace_seconds_per_km.fastest"
+            ),
+            "slowest": _trusted_array(
+                result.series["pace_seconds_per_km"]["slowest"], (int, type(None)), "series.pace_seconds_per_km.slowest"
+            ),
         },
-        "cadence_rpm": {"average": list(result.series["cadence_rpm"]["average"])},
-        "power_w": {"average": list(result.series["power_w"]["average"])},
-        "altitude_m": {"average": list(result.series["altitude_m"]["average"])},
-        "grade_pct": {"average": list(result.series["grade_pct"]["average"])},
+        "cadence_rpm": {
+            "average": _trusted_array(result.series["cadence_rpm"]["average"], (float, type(None)), "series.cadence_rpm.average")
+        },
+        "power_w": {
+            "average": _trusted_array(result.series["power_w"]["average"], (float, type(None)), "series.power_w.average")
+        },
+        "altitude_m": {
+            "average": _trusted_array(result.series["altitude_m"]["average"], (float, type(None)), "series.altitude_m.average")
+        },
+        "grade_pct": {
+            "average": _trusted_array(result.series["grade_pct"]["average"], (float, type(None)), "series.grade_pct.average")
+        },
     }
     return sampling, availability, series
 
