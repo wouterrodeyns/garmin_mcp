@@ -295,10 +295,19 @@ async def test_tool_description_documents_every_wellness_heart_rate_guardrail():
         "bins summarize returned samples, not continuous coverage",
         "do not infer drift, recovery, stress, or coaching conclusions from this tool alone",
         "garmin, device, account, and sync availability can vary",
+        "incomplete current-day local time uses garmin's provisional start-bound offset only when it matches the mcp host's current local utc offset",
+        "spring/fall transitions or a remote-host mismatch fail closed",
+        "this host check is conservative, not garmin-authoritative",
+        "never borrows yesterday's offset",
+        "never interprets a requested local window as utc",
+        "one garmin heart-rate read per requested date",
+        "response caps and bin schema are unchanged",
+        "local_time_provisional",
     ):
         assert phrase in description
     assert "utc always" not in description
     assert "raw one date input refuses rather than truncates" not in description
+    assert "previous-day fallback" not in description
 
 
 @pytest.mark.asyncio

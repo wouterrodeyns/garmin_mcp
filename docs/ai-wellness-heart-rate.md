@@ -48,7 +48,9 @@ most 10,000 source points per day, at most 1,000 selected raw points, at most
 1,000 returned bins per request, and at most 262,144 UTF-8 output bytes. Raw
 and binned requests refuse an over-bound result; they never silently truncate.
 The internal-gap threshold is 300 seconds. The service makes at most seven
-sequential reads, one per requested date.
+sequential reads: one Garmin heart-rate read per requested date. Response caps
+and bin schema do not change for current-day handling; the exact
+262,144-byte cap and the existing UTC guarantees remain in force.
 Raw and binned results never truncate; the service never truncates evidence.
 These are product safety limits, not claimed Garmin API limits.
 
@@ -79,8 +81,10 @@ date, available, summary, time_provenance, sampling, points, gaps
 ```
 
 `summary` has `resting_hr_bpm`, `min_hr_bpm`, `max_hr_bpm`, and
-`seven_day_avg_resting_hr_bpm`. `time_provenance` has
-`local_offset_minutes` and `local_time_available`. `sampling` has
+`seven_day_avg_resting_hr_bpm`. `time_provenance` has exactly
+`local_offset_minutes`, `local_time_available`, and `local_time_basis`, in that
+order. `local_time_basis` is `complete_bounds`, `current_day_start_bound`, or
+null. `sampling` has
 `source_points`, `valid_bpm_points`, `null_bpm_points`, `returned_points`,
 `observed_median_interval_seconds`, and
 `duration_from_sample_count_valid`. `points` and `gaps` are always present.
@@ -102,7 +106,7 @@ contain no real user data.
       "date": "2026-08-10",
       "available": true,
       "summary": {"resting_hr_bpm": 45, "min_hr_bpm": 41, "max_hr_bpm": 166, "seven_day_avg_resting_hr_bpm": 46},
-      "time_provenance": {"local_offset_minutes": 120, "local_time_available": true},
+      "time_provenance": {"local_offset_minutes": 120, "local_time_available": true, "local_time_basis": "complete_bounds"},
       "sampling": {"source_points": 713, "valid_bpm_points": null, "null_bpm_points": null, "returned_points": 0, "observed_median_interval_seconds": null, "duration_from_sample_count_valid": false},
       "points": [],
       "gaps": []
@@ -126,7 +130,7 @@ contain no real user data.
       "date": "2026-08-10",
       "available": true,
       "summary": {"resting_hr_bpm": 45, "min_hr_bpm": 41, "max_hr_bpm": 166, "seven_day_avg_resting_hr_bpm": 46},
-      "time_provenance": {"local_offset_minutes": 120, "local_time_available": true},
+      "time_provenance": {"local_offset_minutes": 120, "local_time_available": true, "local_time_basis": "complete_bounds"},
       "sampling": {"source_points": 3, "valid_bpm_points": 2, "null_bpm_points": 1, "returned_points": 3, "observed_median_interval_seconds": 120, "duration_from_sample_count_valid": false},
       "points": [
         {"time_local": "2026-08-10T19:00:00+02:00", "time_utc": "2026-08-10T17:00:00Z", "bpm": 138},
@@ -143,6 +147,45 @@ contain no real user data.
 Raw `bpm: null` is retained. Raw timestamps always have exact UTC `Z` form;
 the local form is included only when its daily offset is unambiguous.
 
+### Current-day provisional raw points
+
+An incomplete current day may use Garmin's start-bound offset provisionally
+when that offset matches the MCP host's current local UTC offset. The basis is
+then `current_day_start_bound`, and the fixed warning is
+`local_time_provisional` with the exact message `Current-day local wellness
+heart-rate time uses Garmin's provisional start-bound offset.`:
+
+```json
+{
+  "status": "success",
+  "error": null,
+  "period": {"start_date": "2026-08-14", "end_date": "2026-08-14", "start_time": null, "end_time": null},
+  "resolution": "raw",
+  "availability": {"2026-08-14": true},
+  "days": [
+    {
+      "date": "2026-08-14",
+      "available": true,
+      "summary": {"resting_hr_bpm": 45, "min_hr_bpm": 41, "max_hr_bpm": 166, "seven_day_avg_resting_hr_bpm": 46},
+      "time_provenance": {"local_offset_minutes": 120, "local_time_available": true, "local_time_basis": "current_day_start_bound"},
+      "sampling": {"source_points": 1, "valid_bpm_points": 1, "null_bpm_points": 0, "returned_points": 1, "observed_median_interval_seconds": null, "duration_from_sample_count_valid": false},
+      "points": [
+        {"time_local": "2026-08-14T19:00:00+02:00", "time_utc": "2026-08-14T17:00:00Z", "bpm": 138}
+      ],
+      "gaps": []
+    }
+  ],
+  "warnings": [{"provider": "wellness_heart_rate", "date": "2026-08-14", "code": "local_time_provisional", "message": "Current-day local wellness heart-rate time uses Garmin's provisional start-bound offset."}]
+}
+```
+
+Complete agreeing Garmin GMT/local bounds are preferred. For an incomplete
+current day, the Garmin start-bound offset is provisional and is used only
+when it matches the MCP host's current local UTC offset. Spring/fall
+transitions or a remote-host mismatch fail closed. This host check is
+conservative, not Garmin-authoritative. The service never borrows the previous
+day's offset and never interprets a requested local window as UTC.
+
 ### Binned points
 
 ```json
@@ -157,7 +200,7 @@ the local form is included only when its daily offset is unambiguous.
       "date": "2026-08-10",
       "available": true,
       "summary": {"resting_hr_bpm": 45, "min_hr_bpm": 41, "max_hr_bpm": 166, "seven_day_avg_resting_hr_bpm": 46},
-      "time_provenance": {"local_offset_minutes": 120, "local_time_available": true},
+      "time_provenance": {"local_offset_minutes": 120, "local_time_available": true, "local_time_basis": "complete_bounds"},
       "sampling": {"source_points": 4, "valid_bpm_points": 4, "null_bpm_points": 0, "returned_points": 2, "observed_median_interval_seconds": 120, "duration_from_sample_count_valid": false},
       "points": [
         {"start_time_local": "2026-08-10T19:00:00+02:00", "end_time_local": "2026-08-10T19:05:00+02:00", "start_time_utc": "2026-08-10T17:00:00Z", "end_time_utc": "2026-08-10T17:05:00Z", "min_bpm": 126, "mean_bpm": 139.4, "max_bpm": 151, "sample_count": 3},
@@ -191,7 +234,7 @@ starts at the last valid sample at 19:04 and ends at the next valid sample at
       "date": "2026-08-10",
       "available": true,
       "summary": {"resting_hr_bpm": 45, "min_hr_bpm": 41, "max_hr_bpm": 166, "seven_day_avg_resting_hr_bpm": 46},
-      "time_provenance": {"local_offset_minutes": 120, "local_time_available": true},
+      "time_provenance": {"local_offset_minutes": 120, "local_time_available": true, "local_time_basis": "complete_bounds"},
       "sampling": {"source_points": 1, "valid_bpm_points": null, "null_bpm_points": null, "returned_points": 0, "observed_median_interval_seconds": null, "duration_from_sample_count_valid": false},
       "points": [],
       "gaps": []
@@ -200,7 +243,7 @@ starts at the last valid sample at 19:04 and ends at the next valid sample at
       "date": "2026-08-11",
       "available": false,
       "summary": {"resting_hr_bpm": null, "min_hr_bpm": null, "max_hr_bpm": null, "seven_day_avg_resting_hr_bpm": null},
-      "time_provenance": {"local_offset_minutes": null, "local_time_available": false},
+      "time_provenance": {"local_offset_minutes": null, "local_time_available": false, "local_time_basis": null},
       "sampling": {"source_points": 0, "valid_bpm_points": null, "null_bpm_points": null, "returned_points": 0, "observed_median_interval_seconds": null, "duration_from_sample_count_valid": false},
       "points": [],
       "gaps": []
@@ -258,7 +301,12 @@ UTC is present for every returned timestamped raw/bin/gap fact as an exact `Z`
 timestamp. Daily mode is sample-free: points and gaps are empty, so daily
 responses have no timestamps. When Garmin's daily GMT/local bounds establish
 one unambiguous numeric offset, local ISO 8601 timestamps are also returned
-(for example `2026-08-10T19:02:00+02:00`).
+(for example `2026-08-10T19:02:00+02:00`) with `local_time_basis: complete_bounds`.
+Complete agreeing bounds are preferred. On an incomplete current day, the
+Garmin start-bound offset is provisional (`local_time_basis:
+current_day_start_bound`) and is accepted only when it matches the MCP host's
+current local UTC offset. Spring/fall transitions and remote-host mismatches
+fail closed; this host check is conservative, not Garmin-authoritative.
 If local provenance is missing, malformed, or contains an offset transition,
 an unwindowed raw response may return UTC with local timestamps null and one
 `local_time_unavailable` warning. Daily remains sample-free. Binned and
@@ -278,7 +326,10 @@ Invalid arguments, projected bin bounds, raw over-limit responses, and output
 over-limit responses are fixed errors and return no truncated series.
 
 The fixed warning codes are `provider_unavailable`,
-`invalid_provider_response`, and `local_time_unavailable`. Fixed errors include
+`invalid_provider_response`, `local_time_unavailable`, and
+`local_time_provisional`. The provisional warning's exact message is
+`Current-day local wellness heart-rate time uses Garmin's provisional start-bound offset.`
+Fixed errors include
 `invalid_start_date`, `invalid_end_date`, `invalid_date_range`,
 `date_range_too_large`, `invalid_resolution`, `raw_requires_single_date`,
 `invalid_time_window`, `request_too_large`, `client_unavailable`,

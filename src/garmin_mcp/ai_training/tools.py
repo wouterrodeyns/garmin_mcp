@@ -55,6 +55,14 @@ def register_tools(app: Any) -> Any:
         This evidence is fetched explicitly when detailed evidence is needed. Requests
         cover at most seven dates. Raw mode is limited to one date and refuses
         results above 1,000 points rather than truncating them.
+        Incomplete current-day local time uses Garmin's provisional start-bound
+        offset only when it matches the MCP host's current local UTC offset;
+        spring/fall transitions or a remote-host mismatch fail closed. This host
+        check is conservative, not Garmin-authoritative. Never borrows yesterday's
+        offset (the previous day's offset) and never interprets a requested local
+        window as UTC. There is one Garmin
+        heart-rate read per requested date; response caps and bin schema are
+        unchanged. The provisional warning code is local_time_provisional.
         Every returned raw, bin, or gap timestamp includes UTC; local ISO is
         included only when unambiguous. Samples can be irregular or missing; sample
         count times cadence is not duration, and this does not establish time in
