@@ -4,7 +4,7 @@
 
 **Goal:** Make local-window and binned wellness heart-rate reads work for Garmin's incomplete current-day bounds without guessing historical or UTC semantics.
 
-**Architecture:** Keep the existing provider and one-read-per-date orchestration. Normalize complete and provisional time provenance inside `heart_rate.py`, inject the effective current date only through the internal service seam, and expose a stable provenance basis plus a fixed warning. Preserve validated source counts when local provenance is still unavailable.
+**Architecture:** Keep the existing provider and one-read-per-date orchestration. Normalize complete and provisional time provenance inside `heart_rate.py`, derive the effective current date and MCP host offset from an internal keyword-only `now` seam, and expose a stable provenance basis plus a fixed warning. Preserve validated source counts when local provenance is still unavailable.
 
 **Tech Stack:** Python 3.12+, `garminconnect==0.3.2`, FastMCP, pytest, existing `ai_training` provider/service/tool layers.
 
@@ -46,7 +46,7 @@ def test_current_day_incomplete_bounds_use_provisional_start_offset_for_local_wi
         resolution="raw",
         start_time="10:00",
         end_time="11:00",
-        today=date(2026, 8, 14),
+        now=datetime(2026, 8, 14, 12, 0, tzinfo=timezone(timedelta(hours=2))),
     )
 
     assert result["status"] == "success"
@@ -79,7 +79,7 @@ def test_current_day_incomplete_bounds_support_local_bins():
         resolution="5m",
         start_time="10:00",
         end_time="11:00",
-        today=date(2026, 8, 14),
+        now=datetime(2026, 8, 14, 12, 0, tzinfo=timezone(timedelta(hours=2))),
     )
 
     assert result["status"] == "success"
@@ -105,7 +105,7 @@ def test_incomplete_bounds_are_not_provisional_for_a_non_current_date():
         resolution="raw",
         start_time="10:00",
         end_time="11:00",
-        today=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, 12, 0, tzinfo=timezone(timedelta(hours=2))),
     )
 
     assert result["status"] == "error"
@@ -131,7 +131,7 @@ def test_completed_current_day_bound_disagreement_stays_unavailable():
         resolution="raw",
         start_time="10:00",
         end_time="11:00",
-        today=date(2026, 8, 14),
+        now=datetime(2026, 8, 14, 12, 0, tzinfo=timezone(timedelta(hours=2))),
     )
 
     assert result["status"] == "error"
@@ -148,7 +148,7 @@ def test_complete_bounds_publish_complete_basis():
         ),
         "2026-08-14",
         resolution="daily",
-        today=date(2026, 8, 14),
+        now=datetime(2026, 8, 14, 12, 0, tzinfo=timezone(timedelta(hours=2))),
     )
 
     assert result["days"][0]["time_provenance"] == {
@@ -156,7 +156,108 @@ def test_complete_bounds_publish_complete_basis():
         "local_time_available": True,
         "local_time_basis": "complete_bounds",
     }
+
+
+@pytest.mark.parametrize(
+    ("calendar_date", "garmin_offset", "host_offset"),
+    [
+        ("2026-03-29", 60, 120),   # spring-forward: stale Garmin start offset
+        ("2026-10-25", 120, 60),   # fall-back: stale Garmin start offset
+    ],
+)
+def test_dst_start_offset_mismatch_fails_closed(
+    calendar_date: str, garmin_offset: int, host_offset: int
+):
+    payload = incomplete_current_day_payload(calendar_date=calendar_date)
+    # The fixture builder supplies the Garmin bounds; adjust them to the
+    # transition's stale start offset while retaining an incomplete end pair.
+    payload["startTimestampGMT"] = f"{calendar_date}T00:00:00.0"
+    payload["startTimestampLocal"] = (
+        datetime.fromisoformat(calendar_date)
+        + timedelta(minutes=garmin_offset)
+    ).isoformat(timespec="milliseconds")
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={calendar_date: payload}),
+        calendar_date,
+        resolution="raw",
+        start_time="10:00",
+        end_time="11:00",
+        now=datetime.fromisoformat(calendar_date).replace(
+            hour=12, tzinfo=timezone(timedelta(minutes=host_offset))
+        ),
+    )
+
+    assert result["status"] == "error"
+    assert result["days"][0]["time_provenance"]["local_time_available"] is False
+
+
+def test_current_day_incomplete_bounds_require_matching_host_offset():
+    result = get_wellness_heart_rate_service(
+        RecordingClient(
+            payloads={"2026-08-14": incomplete_current_day_payload()}
+        ),
+        "2026-08-14",
+        resolution="raw",
+        start_time="10:00",
+        end_time="11:00",
+        now=datetime(2026, 8, 14, 12, 0, tzinfo=timezone(timedelta(hours=2))),
+    )
+
+    assert result["status"] == "success"
+    assert result["days"][0]["time_provenance"]["local_time_basis"] == (
+        "current_day_start_bound"
+    )
+
+
+def test_complete_bounds_ignore_host_offset_when_bounds_agree():
+    result = get_wellness_heart_rate_service(
+        RecordingClient(
+            payloads={"2026-08-14": canonical_payload(heart_rate_values=[])}
+        ),
+        "2026-08-14",
+        resolution="daily",
+        now=datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert result["days"][0]["time_provenance"] == {
+        "local_offset_minutes": 120,
+        "local_time_available": True,
+        "local_time_basis": "complete_bounds",
+    }
+
+
+class SecondOffset(tzinfo):
+    def utcoffset(self, dt: datetime | None) -> timedelta:
+        return timedelta(seconds=30)
+
+
+class DateTimeSubclass(datetime):
+    pass
+
+
+@pytest.mark.parametrize(
+    "invalid_now",
+    [
+        datetime(2026, 8, 14, 12, 0),
+        datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc).replace(tzinfo=None),
+        "2026-08-14T12:00:00+02:00",
+        date(2026, 8, 14),
+        datetime(2026, 8, 14, 12, 0, tzinfo=SecondOffset()),
+        DateTimeSubclass(2026, 8, 14, 12, 0, tzinfo=timezone.utc),
+    ],
+)
+def test_invalid_now_inputs_raise_type_error(invalid_now: object):
+    with pytest.raises(TypeError):
+        get_wellness_heart_rate_service(
+            RecordingClient(payloads={"2026-08-14": canonical_payload()}),
+            "2026-08-14",
+            now=invalid_now,
+        )
 ```
+
+Here `SecondOffset` is a `tzinfo` whose `utcoffset()` returns 30 seconds and
+`DateTimeSubclass` subclasses `datetime`; both demonstrate that the seam
+requires an exact built-in aware datetime with a supported whole-minute offset.
 
 - [ ] **Step 2: Run the regressions and verify RED**
 
@@ -168,7 +269,7 @@ UV_CACHE_DIR=/private/tmp/garmin-mcp-current-day-fix-cache uv run pytest \
   'current_day or incomplete_bounds or preserves_validated_source_points or complete_bounds_basis' -q
 ```
 
-Expected: failures because the service has no `today` seam, rejects the incomplete current-day end pair, resets source counts, and omits `local_time_basis`.
+Expected: failures because the service has no `now` seam, rejects the incomplete current-day end pair, resets source counts, and omits `local_time_basis`.
 
 - [ ] **Step 3: Implement exact provenance classification**
 
@@ -187,8 +288,16 @@ def _offset_minutes(local_bound: datetime, gmt_bound: datetime) -> int | None:
     return minutes if -1439 <= minutes <= 1439 else None
 
 
+def _supported_offset_minutes(value: datetime) -> int | None:
+    offset = value.utcoffset()
+    if offset is None or offset.microseconds or offset.seconds % 60:
+        return None
+    minutes = offset.days * 1_440 + offset.seconds // 60
+    return minutes if -1439 <= minutes <= 1439 else None
+
+
 def _local_time_provenance(
-    raw: dict[Any, Any], date_text: str, today: date
+    raw: dict[Any, Any], date_text: str, now: datetime
 ) -> tuple[int | None, str | None]:
     start_gmt = _parse_naive_bound(raw, "startTimestampGMT")
     end_gmt = _parse_naive_bound(raw, "endTimestampGMT")
@@ -204,7 +313,13 @@ def _local_time_provenance(
     if start_offset is not None and start_offset == end_offset:
         return start_offset, "complete_bounds"
 
-    if date_text != today.isoformat() or start_offset is None:
+    host_offset = _supported_offset_minutes(now)
+    if (
+        date_text != now.date().isoformat()
+        or start_offset is None
+        or host_offset is None
+        or start_offset != host_offset
+    ):
         return None, None
     if end_local - start_local != timedelta(days=1):
         return None, None
@@ -214,7 +329,7 @@ def _local_time_provenance(
     return start_offset, "current_day_start_bound"
 ```
 
-Change `_normalize_day_facts` to receive `today`, store both returned values, and validate local timestamp representability exactly as before.
+Change `_normalize_day_facts` to receive `now`, store both returned values, and validate local timestamp representability exactly as before. Complete-bound agreement is evaluated before the host-offset guard, so complete bounds remain valid even when their agreed offset differs from the host.
 
 Add a keyword-only deterministic seam without changing the MCP call shape:
 
@@ -227,11 +342,15 @@ def get_wellness_heart_rate_service(
     start_time: Any = None,
     end_time: Any = None,
     *,
-    today: date | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    effective_today = date.today() if today is None else today
-    if type(effective_today) is not date:
-        raise TypeError("today must be an exact date")
+    effective_now = datetime.now().astimezone() if now is None else now
+    if type(effective_now) is not datetime:
+        raise TypeError("now must be an exact built-in aware datetime")
+    if effective_now.tzinfo is None or effective_now.utcoffset() is None:
+        raise TypeError("now must be an exact built-in aware datetime")
+    if _supported_offset_minutes(effective_now) is None:
+        raise TypeError("now must have a supported whole-minute UTC offset")
 ```
 
 Keep trusted internal misuse visible; do not catch the `TypeError`.

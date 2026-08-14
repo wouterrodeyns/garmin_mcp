@@ -29,17 +29,31 @@ bound pairs must imply the same whole-minute offset.
 When that path fails, the service may use the start-bound offset only when all of
 these conditions hold:
 
-1. the requested date equals the service's effective current date;
+1. the requested date equals the service's effective current date, derived from
+   an exact built-in aware `now: datetime` value;
 2. `startTimestampGMT` and `startTimestampLocal` are valid naive datetimes and
    imply a whole-minute offset in the existing supported range;
 3. `endTimestampLocal` is exactly one local day after the local start;
 4. `endTimestampGMT` is at or after the GMT start and strictly before the
    full-day GMT end implied by the start offset.
+5. the Garmin start-bound offset equals the valid supported whole-minute offset
+   of the MCP host at `now`.
 
 This identifies Garmin's incomplete current-day shape without accepting an
-inconsistent completed historical day. The internal service API gains an
-optional injected `today: date | None` seam for deterministic tests; the MCP
-tool does not expose it.
+inconsistent completed historical day. The internal service API gains a
+keyword-only `now: datetime | None` seam for deterministic tests; the MCP tool
+does not expose it. When omitted, `now` defaults to
+`datetime.now().astimezone()`. An injected value must be an exact built-in,
+timezone-aware `datetime` with a non-`None` UTC offset; invalid values raise a
+visible `TypeError`.
+
+The service derives both the effective current date and the host offset from
+`now`. The host offset must be a supported whole-minute value. This is a
+conservative guard, not a claim that the MCP host is Garmin-authoritative: if
+Garmin's start offset and the host offset differ, the provisional path fails
+closed. That matters at spring-forward and fall-back transitions, when a
+Garmin start offset can be stale; shifting windows or bins under the stale
+offset would be worse than reporting local provenance unavailable.
 
 The fallback is explicitly provisional:
 
@@ -74,6 +88,14 @@ Tests must pin:
 - source counts and selected points remain truthful;
 - the provisional basis and warning are stable and sanitized;
 - the same incomplete shape is not accepted for a non-current date;
+- spring-forward and fall-back incomplete shapes fail closed when Garmin's
+  start offset is stale;
+- a current-day incomplete shape succeeds when its start offset matches the
+  host offset;
+- complete bounds remain preferred and succeed even when their agreed offset
+  differs from the host offset;
+- invalid injected `now` values (naive, offset-less, non-`datetime`, subclass,
+  or unsupported/non-whole-minute offset) raise `TypeError`;
 - completed-day disagreement remains unavailable;
 - unavailable local provenance preserves a validated source count;
 - one provider read per requested date remains the only Garmin access;
