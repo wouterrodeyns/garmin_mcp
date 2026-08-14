@@ -1407,6 +1407,64 @@ def test_binned_boundary_overflow_is_a_sanitized_invalid_provider_response(
     assert str(timestamp_ms) not in json.dumps(result, separators=(",", ":"), ensure_ascii=False)
 
 
+def test_binned_null_boundary_sample_is_kept_as_summary_only_data():
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "9999-12-31": canonical_payload(
+                heart_rate_values=[[253402300799999, None]],
+                startTimestampGMT="9999-12-31T00:00:00.0",
+                endTimestampGMT="9999-12-31T00:00:00.0",
+                startTimestampLocal="9999-12-31T00:00:00.0",
+                endTimestampLocal="9999-12-31T00:00:00.0",
+            ),
+        }),
+        "9999-12-31",
+        resolution="5m",
+    )
+
+    assert result["status"] == "success"
+    assert result["availability"] == {"9999-12-31": True}
+    assert result["days"][0]["points"] == []
+    assert result["days"][0]["sampling"] == {
+        "source_points": 1,
+        "valid_bpm_points": 0,
+        "null_bpm_points": 1,
+        "returned_points": 0,
+        "observed_median_interval_seconds": None,
+        "duration_from_sample_count_valid": False,
+    }
+
+
+def test_binned_out_of_window_boundary_sample_remains_valid_summary_only_data():
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "9999-12-31": canonical_payload(
+                heart_rate_values=[[253402300799999, 48]],
+                startTimestampGMT="9999-12-31T00:00:00.0",
+                endTimestampGMT="9999-12-31T00:00:00.0",
+                startTimestampLocal="9999-12-31T00:00:00.0",
+                endTimestampLocal="9999-12-31T00:00:00.0",
+            ),
+        }),
+        "9999-12-31",
+        resolution="5m",
+        start_time="00:00",
+        end_time="00:01",
+    )
+
+    assert result["status"] == "success"
+    assert result["availability"] == {"9999-12-31": True}
+    assert result["days"][0]["points"] == []
+    assert result["days"][0]["sampling"] == {
+        "source_points": 1,
+        "valid_bpm_points": 0,
+        "null_bpm_points": 0,
+        "returned_points": 0,
+        "observed_median_interval_seconds": None,
+        "duration_from_sample_count_valid": False,
+    }
+
+
 def test_trusted_bin_boundary_runtime_error_is_not_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ):

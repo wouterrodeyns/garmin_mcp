@@ -342,10 +342,7 @@ def _normalize_day_facts(raw: Any, date_text: str, resolution: str) -> DayFacts:
     if offset_minutes is not None:
         for sample in samples:
             try:
-                if resolution in BIN_MINUTES:
-                    _bin_bounds(sample.timestamp_ms, offset_minutes, BIN_MINUTES[resolution])
-                else:
-                    _local_datetime(sample.timestamp_ms, offset_minutes)
+                _local_datetime(sample.timestamp_ms, offset_minutes)
             except OverflowError:
                 raise InvalidProviderResponse from None
 
@@ -390,6 +387,19 @@ def _selected_samples(
         if start_time <= local_wall_time < end_time:
             selected.append(sample)
     return tuple(selected)
+
+
+def _validate_bin_contributors(
+    selected: tuple[Sample, ...], offset_minutes: int, bin_minutes: int
+) -> None:
+    """Reject only selected valid-bpm samples whose public bin bounds overflow."""
+    for sample in selected:
+        if sample.bpm is None:
+            continue
+        try:
+            _bin_bounds(sample.timestamp_ms, offset_minutes, bin_minutes)
+        except OverflowError:
+            raise InvalidProviderResponse from None
 
 
 def _median_interval_seconds(samples: tuple[Sample, ...]) -> int | float | None:
@@ -634,6 +644,22 @@ def get_wellness_heart_rate_service(
             selected = _selected_samples(
                 facts.samples, facts.offset_minutes, parsed_start_time, parsed_end_time
             )
+
+        if resolution in BIN_MINUTES:
+            assert facts.offset_minutes is not None
+            try:
+                _validate_bin_contributors(
+                    selected, facts.offset_minutes, BIN_MINUTES[resolution]
+                )
+            except InvalidProviderResponse:
+                failed_dates += 1
+                day = _empty_day(date_text)
+                result["days"].append(day)
+                result["availability"][date_text] = day["available"]
+                result["warnings"].append(
+                    _dated_warning(date_text, "invalid_provider_response", _INVALID_DTO_WARNING)
+                )
+                continue
 
         if resolution == "raw" and len(selected) > MAX_RAW_POINTS:
             return _global_error(result, "raw_response_too_large")
