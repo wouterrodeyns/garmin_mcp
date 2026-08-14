@@ -53,8 +53,8 @@ def register_tools(app: Any) -> Any:
         """Return bounded read-only all-day wellness heart-rate evidence.
 
         This evidence is fetched explicitly when detailed evidence is needed. Requests
-        cover at most seven dates. Raw resolution is limited to one date and
-        max 1000 points; raw one date input refuses rather than truncates.
+        cover at most seven dates. Raw mode is limited to one date and refuses
+        results above 1,000 points rather than truncating them.
         Times use local ISO when unambiguous and UTC always. Samples can be
         irregular or missing; sample
         count times cadence is not duration, and this does not establish time in

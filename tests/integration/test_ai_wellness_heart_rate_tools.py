@@ -241,9 +241,7 @@ async def test_tool_description_documents_every_wellness_heart_rate_guardrail():
         "bounded read-only all-day wellness heart-rate evidence",
         "fetched explicitly when detailed evidence is needed",
         "at most seven dates",
-        "raw one date",
-        "max 1000",
-        "refuses rather than truncates",
+        "raw mode is limited to one date and refuses results above 1,000 points rather than truncating them",
         "local iso when unambiguous and utc always",
         "samples can be irregular or missing",
         "sample count times cadence is not duration",
@@ -256,6 +254,7 @@ async def test_tool_description_documents_every_wellness_heart_rate_guardrail():
         "garmin, device, account, and sync availability can vary",
     ):
         assert phrase in description
+    assert "raw one date input refuses rather than truncates" not in description
 
 
 @pytest.mark.asyncio
