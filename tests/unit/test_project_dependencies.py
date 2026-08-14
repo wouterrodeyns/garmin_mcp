@@ -37,8 +37,22 @@ def test_project_uses_standard_development_dependency_group() -> None:
     assert "dev-dependencies" not in PYPROJECT.get("tool", {}).get("uv", {})
 
 
+def test_hatch_build_excludes_tests_from_sdist_only() -> None:
+    build_targets = PYPROJECT["tool"]["hatch"]["build"]["targets"]
+
+    assert "/tests" in build_targets["sdist"]["exclude"]
+    assert build_targets["wheel"]["packages"] == ["src/garmin_mcp"]
+
+
 def test_lock_contains_fixed_dependency_versions() -> None:
     assert LOCK["requires-python"] == ">=3.12"
     assert _locked_version("garminconnect") == "0.3.10"
     assert _version_tuple(_locked_version("click")) >= (8, 3, 3)
     assert _version_tuple(_locked_version("h11")) >= (0, 16, 0)
+
+
+def test_project_pins_fitdecode_without_replacing_fitparse() -> None:
+    dependencies = PYPROJECT["project"]["dependencies"]
+    assert "fitdecode==0.11.0" in dependencies
+    assert "fitparse>=1.2.0" in dependencies
+    assert _locked_version("fitdecode") == "0.11.0"

@@ -134,21 +134,22 @@ Typical concise responses are:
 
 ## The `ai-coach` tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 13 tools:
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 14 tools:
 
 1. `get_training_context`
 2. `analyze_activity`
-3. `create_workout`
-4. `update_workout`
-5. `get_activities`
-6. `get_activities_by_date`
-7. `get_activity`
-8. `get_workouts`
-9. `get_workout_by_id`
-10. `get_scheduled_workouts`
-11. `schedule_workout`
-12. `unschedule_workout`
-13. `delete_workout`
+3. `get_activity_timeseries`
+4. `create_workout`
+5. `update_workout`
+6. `get_activities`
+7. `get_activities_by_date`
+8. `get_activity`
+9. `get_workouts`
+10. `get_workout_by_id`
+11. `get_scheduled_workouts`
+12. `schedule_workout`
+13. `unschedule_workout`
+14. `delete_workout`
 
 Profile precedence is explicit: an explicitly configured
 `GARMIN_ENABLED_TOOLS` allowlist overrides the profile; otherwise a profile
@@ -156,7 +157,10 @@ starts with its exact list and subtracts `GARMIN_DISABLED_TOOLS`. With the
 profile unset, the default remains full upstream tool registration. The
 `ai-coach` profile intentionally hides raw `upload_workout`, bulk
 `upload_workouts`, and unrelated health, nutrition, device, and management
-tools.
+tools. `analyze_activity` remains the first/default activity overview;
+`get_activity_timeseries` is a narrow follow-up evidence read, documented in
+the [activity time-series guide](ai-activity-timeseries.md), and does not
+mutate workouts.
 
 ## Pinned API assumptions
 

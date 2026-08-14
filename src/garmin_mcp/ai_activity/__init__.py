@@ -1,13 +1,22 @@
-"""Read-only Garmin activity analysis provider seams."""
+"""Read-only Garmin activity evidence provider seams."""
 
 from .service import analyze_activity_service
+from .timeseries_service import (
+    MAX_ACTIVITY_ID,
+    MAX_ACTIVITY_ID_TEXT_LENGTH,
+    MAX_FIT_ELAPSED_SECONDS,
+    get_activity_timeseries_service,
+)
 from .providers import (
     CYCLING_TYPE_KEYS,
+    MAX_ORIGINAL_DOWNLOAD_BYTES,
     MAX_RETURNED_SPLITS,
+    OriginalFitDownload,
     RUNNING_TYPE_KEYS,
     STRENGTH_TYPE_KEYS,
     WALKING_TYPE_KEYS,
     ProviderResult,
+    download_original_fit,
     get_activity,
     get_heart_rate_zones,
     get_power_zones,
@@ -32,13 +41,20 @@ def register_tools(app):
 
 __all__ = [
     "CYCLING_TYPE_KEYS",
+    "MAX_ORIGINAL_DOWNLOAD_BYTES",
     "MAX_RETURNED_SPLITS",
+    "OriginalFitDownload",
     "RUNNING_TYPE_KEYS",
     "STRENGTH_TYPE_KEYS",
     "WALKING_TYPE_KEYS",
     "ProviderResult",
     "analyze_activity_service",
+    "get_activity_timeseries_service",
+    "MAX_ACTIVITY_ID",
+    "MAX_ACTIVITY_ID_TEXT_LENGTH",
+    "MAX_FIT_ELAPSED_SECONDS",
     "configure",
+    "download_original_fit",
     "get_activity",
     "get_heart_rate_zones",
     "get_power_zones",

@@ -286,6 +286,7 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
     expected = {
         "get_training_context",
         "analyze_activity",
+        "get_activity_timeseries",
         "create_workout",
         "update_workout",
         "get_activities",
@@ -298,7 +299,7 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
         "unschedule_workout",
         "delete_workout",
     }
-    assert len(tools) == 13
+    assert len(tools) == 14
     assert set(tools) == expected
     assert set(tools) == TOOL_PROFILES["ai-coach"]
     assert tools.index("update_workout") == tools.index("create_workout") + 1

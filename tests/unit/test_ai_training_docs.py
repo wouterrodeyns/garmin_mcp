@@ -119,7 +119,7 @@ def test_docs_pin_status_boundary_error_codes_and_warning_vocabulary():
 
 def test_docs_pin_profile_and_sport_translation():
     lower = DOCS.lower()
-    assert "exactly 13 tools" in lower
+    assert "exactly 14 tools" in lower
     assert "analyze_activity" in lower
     assert "recent_activities[].sport" in lower
     assert "garmin activity type keys" in lower
@@ -129,7 +129,7 @@ def test_docs_pin_profile_and_sport_translation():
 
 
 def test_docs_pin_exact_ai_coach_profile_and_three_high_level_roles():
-    assert "13-tool surface" in DOCS.lower() or "exactly 13 tools" in DOCS.lower()
+    assert "14-tool surface" in DOCS.lower() or "exactly 14 tools" in DOCS.lower()
     for expected in (
         "context eyes",
         "completed-session feedback",
@@ -142,6 +142,7 @@ def test_docs_pin_exact_ai_coach_profile_and_three_high_level_roles():
     expected_profile = {
         "get_training_context",
         "analyze_activity",
+        "get_activity_timeseries",
         "create_workout",
         "update_workout",
         "get_activities",

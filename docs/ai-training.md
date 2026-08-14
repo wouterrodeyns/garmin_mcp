@@ -230,9 +230,10 @@ Warnings never include raw Garmin responses, tokens, or credentials.
 
 ## AI-coach profile and workflow
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 13 tools. The three
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 14 tools. The three
 high-level coaching roles are context eyes (`get_training_context`),
-completed-session feedback (`analyze_activity`), and workout hands
+completed-session feedback (`analyze_activity`, with the narrow
+`get_activity_timeseries` follow-up for concrete short-interval evidence), and workout hands
 (`create_workout` plus in-place `update_workout`). The full profile also
 preserves compatibility for focused reads and calendar operations:
 
@@ -246,7 +247,10 @@ Claude: get_training_context(days=30)
 
 After a completed session, `analyze_activity(activity_id)` is the bounded,
 read-only feedback read for the AI to interpret. It is not another context
-aggregate; see the [activity analysis guide](ai-activity.md).
+aggregate; see the [activity analysis guide](ai-activity.md). If that overview
+leaves a concrete short interval to inspect, use the narrow, read-only
+[`get_activity_timeseries`](ai-activity-timeseries.md) follow-up; it is not a
+replacement for `analyze_activity`.
 
 User: "Put that workout on Garmin for tomorrow."
 

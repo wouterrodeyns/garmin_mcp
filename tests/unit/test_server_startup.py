@@ -154,6 +154,8 @@ def test_main_configures_and_registers_ai_activity_adjacent_to_ai_tools(monkeypa
     assert names.index("configure_training") < names.index("configure_activity")
     assert names.index("register_training") < names.index("register_activity")
     assert events[names.index("configure_activity")][1]._client is not None
+    assert names.count("configure_activity") == 1
+    assert names.count("register_activity") == 1
 
 
 def test_main_rejects_unknown_profile_before_authentication(monkeypatch, capsys):
@@ -203,7 +205,22 @@ def test_main_registers_exact_ai_coach_profile(monkeypatch):
 
     garmin_mcp.main()
 
-    assert run_calls == [garmin_mcp.TOOL_PROFILES["ai-coach"]]
+    assert run_calls == [{
+        "get_training_context",
+        "analyze_activity",
+        "get_activity_timeseries",
+        "create_workout",
+        "update_workout",
+        "get_activities",
+        "get_activities_by_date",
+        "get_activity",
+        "get_workouts",
+        "get_workout_by_id",
+        "get_scheduled_workouts",
+        "schedule_workout",
+        "unschedule_workout",
+        "delete_workout",
+    }]
 
 
 def test_ai_coach_profile_equals_actual_registered_tool_names(monkeypatch):
@@ -220,8 +237,25 @@ def test_ai_coach_profile_equals_actual_registered_tool_names(monkeypatch):
 
     garmin_mcp.main()
 
-    assert run_calls == [garmin_mcp.TOOL_PROFILES["ai-coach"]]
-    assert len(run_calls[0]) == 13
+    assert run_calls == [{
+        "get_training_context",
+        "analyze_activity",
+        "get_activity_timeseries",
+        "create_workout",
+        "update_workout",
+        "get_activities",
+        "get_activities_by_date",
+        "get_activity",
+        "get_workouts",
+        "get_workout_by_id",
+        "get_scheduled_workouts",
+        "schedule_workout",
+        "unschedule_workout",
+        "delete_workout",
+    }]
+    assert len(run_calls[0]) == 14
+    assert "get_activity_fit_data" not in run_calls[0]
+    assert "move_workout" not in run_calls[0]
 
 
 def test_main_warns_for_unknown_tool_in_profile(monkeypatch, capsys):

@@ -5,10 +5,15 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 
 import pytest
+from garminconnect import Garmin
+
+from garmin_mcp.ai_activity import providers
 
 from garmin_mcp.ai_activity.providers import (
     CYCLING_TYPE_KEYS,
+    MAX_ORIGINAL_DOWNLOAD_BYTES,
     MAX_RETURNED_SPLITS,
+    OriginalFitDownload,
     RUNNING_TYPE_KEYS,
     STRENGTH_TYPE_KEYS,
     WALKING_TYPE_KEYS,
@@ -18,6 +23,7 @@ from garmin_mcp.ai_activity.providers import (
     get_power_zones,
     get_splits,
     get_strength,
+    download_original_fit,
 )
 
 
@@ -141,3 +147,154 @@ def test_public_activity_constants_match_the_exact_contract():
     )
     assert STRENGTH_TYPE_KEYS == frozenset({"strength_training"})
     assert MAX_RETURNED_SPLITS == 100
+
+
+class DownloadOnlyClient:
+    """Client test double that rejects every operation except original download."""
+
+    def __init__(self, payload: object) -> None:
+        self.payload = payload
+        self.calls: list[tuple[int, object]] = []
+
+    def download_activity(self, activity_id: int, *, dl_fmt: object) -> object:
+        self.calls.append((activity_id, dl_fmt))
+        return self.payload
+
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"unexpected Garmin operation: {name}")
+
+
+def test_original_download_limit_is_exactly_pinned() -> None:
+    assert MAX_ORIGINAL_DOWNLOAD_BYTES == 25_000_000
+
+
+def test_download_original_fit_uses_only_original_format_once() -> None:
+    client = DownloadOnlyClient(bytearray(b"PK\x03\x04"))
+
+    result = download_original_fit(client, 42)
+
+    assert result == OriginalFitDownload(b"PK\x03\x04", None)
+    assert client.calls == [(42, Garmin.ActivityDownloadFormat.ORIGINAL)]
+
+
+def test_original_fit_download_is_frozen_with_exact_fields() -> None:
+    result = OriginalFitDownload(b"fit", None)
+
+    assert set(result.__dataclass_fields__) == {"archive", "failure_code"}
+    with pytest.raises(FrozenInstanceError):
+        result.archive = b"changed"
+
+
+@pytest.mark.parametrize("payload", [None, "zip", [], memoryview(b"xyz")[::2]])
+def test_download_original_fit_rejects_unsupported_payload_without_copying(
+    payload: object,
+) -> None:
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+
+    assert result == OriginalFitDownload(None, "invalid_download_payload")
+
+
+def test_download_original_fit_rejects_empty_payload() -> None:
+    for payload in (b"", bytearray(), memoryview(b"")):
+        result = download_original_fit(DownloadOnlyClient(payload), 42)
+        assert result == OriginalFitDownload(None, "invalid_download_payload")
+
+
+def test_download_original_fit_accepts_bytes_as_exact_bytes() -> None:
+    result = download_original_fit(DownloadOnlyClient(b"fit"), 42)
+
+    assert result == OriginalFitDownload(b"fit", None)
+    assert type(result.archive) is bytes
+
+
+def test_download_original_fit_copies_bytearray_before_source_mutation() -> None:
+    payload = bytearray(b"fit")
+
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+    payload[:] = b"bad"
+
+    assert result == OriginalFitDownload(b"fit", None)
+    assert type(result.archive) is bytes
+
+
+def test_download_original_fit_copies_memoryview_before_source_mutation() -> None:
+    source = bytearray(b"fit")
+    payload = memoryview(source)
+
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+    source[:] = b"bad"
+
+    assert result == OriginalFitDownload(b"fit", None)
+    assert type(result.archive) is bytes
+
+
+def test_download_original_fit_rejects_released_memoryview_without_exception_text() -> None:
+    payload = memoryview(b"fit")
+    payload.release()
+
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+
+    assert result == OriginalFitDownload(None, "invalid_download_payload")
+    assert "ValueError" not in repr(result)
+
+
+class HostileBytes(bytes):
+    def __len__(self) -> int:
+        raise AssertionError("hostile bytes length hook invoked")
+
+
+class HostileBytearray(bytearray):
+    def __len__(self) -> int:
+        raise AssertionError("hostile bytearray length hook invoked")
+
+    def __bytes__(self) -> bytes:
+        raise AssertionError("hostile bytearray bytes hook invoked")
+
+
+@pytest.mark.parametrize("payload", [HostileBytes(b"fit"), HostileBytearray(b"fit")])
+def test_download_original_fit_rejects_bytes_subclasses_without_invoking_hooks(
+    payload: object,
+) -> None:
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+
+    assert result == OriginalFitDownload(None, "invalid_download_payload")
+
+
+def test_download_original_fit_rejects_before_copying_an_oversized_mutable_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(providers, "MAX_ORIGINAL_DOWNLOAD_BYTES", 3)
+    monkeypatch.setattr(
+        providers,
+        "_archive_bytes",
+        lambda _payload: (_ for _ in ()).throw(AssertionError("copy invoked")),
+    )
+    payload = bytearray(b"1234")
+
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+
+    assert result == OriginalFitDownload(None, "fit_download_too_large")
+
+
+@pytest.mark.parametrize("payload", [b"1234", bytearray(b"1234"), memoryview(b"1234")])
+def test_download_original_fit_rejects_oversized_payload_forms(
+    monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    monkeypatch.setattr(providers, "MAX_ORIGINAL_DOWNLOAD_BYTES", 3)
+
+    result = download_original_fit(DownloadOnlyClient(payload), 42)
+
+    assert result == OriginalFitDownload(None, "fit_download_too_large")
+
+
+def test_download_original_fit_returns_safe_failure_when_download_raises() -> None:
+    class FailingDownloadClient(DownloadOnlyClient):
+        def download_activity(self, activity_id: int, *, dl_fmt: object) -> object:
+            self.calls.append((activity_id, dl_fmt))
+            raise RuntimeError("token=secret@example.com https://private.example/request/123")
+
+    result = download_original_fit(FailingDownloadClient(b"ignored"), 42)
+
+    assert result == OriginalFitDownload(None, "download_failed")
+    assert "secret@example.com" not in repr(result)
+    assert "private.example" not in repr(result)
