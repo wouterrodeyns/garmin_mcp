@@ -284,7 +284,8 @@ async def test_tool_description_documents_every_wellness_heart_rate_guardrail():
         "fetched explicitly when detailed evidence is needed",
         "at most seven dates",
         "raw mode is limited to one date and refuses results above 1,000 points rather than truncating them",
-        "local iso when unambiguous and utc always",
+        "every returned raw, bin, or gap timestamp includes utc",
+        "local iso is included only when unambiguous",
         "samples can be irregular or missing",
         "sample count times cadence is not duration",
         "does not establish time in zone",
@@ -296,6 +297,7 @@ async def test_tool_description_documents_every_wellness_heart_rate_guardrail():
         "garmin, device, account, and sync availability can vary",
     ):
         assert phrase in description
+    assert "utc always" not in description
     assert "raw one date input refuses rather than truncates" not in description
 
 

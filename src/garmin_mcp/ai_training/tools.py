@@ -55,8 +55,8 @@ def register_tools(app: Any) -> Any:
         This evidence is fetched explicitly when detailed evidence is needed. Requests
         cover at most seven dates. Raw mode is limited to one date and refuses
         results above 1,000 points rather than truncating them.
-        Times use local ISO when unambiguous and UTC always. Samples can be
-        irregular or missing; sample
+        Every returned raw, bin, or gap timestamp includes UTC; local ISO is
+        included only when unambiguous. Samples can be irregular or missing; sample
         count times cadence is not duration, and this does not establish time in
         zone. Wellness samples are distinct from FIT activity HR and cannot be
         assumed to use the same sensor, smoothing, samples, or zones. Gaps have

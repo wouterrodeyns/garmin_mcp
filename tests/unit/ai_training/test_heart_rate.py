@@ -344,7 +344,9 @@ def test_invalid_time_windows_are_rejected_before_provider_access(
 
 @pytest.mark.parametrize("resolution", RESOLUTIONS)
 def test_every_resolution_accepts_a_valid_one_date_request(resolution: str):
-    client = RecordingClient(payloads={"2099-01-01": canonical_payload()})
+    client = RecordingClient(
+        payloads={"2099-01-01": canonical_payload(calendarDate="2099-01-01")}
+    )
 
     result = get_wellness_heart_rate_service(client, "2099-01-01", resolution=resolution)
 
@@ -370,7 +372,7 @@ def test_omitted_end_date_resolves_to_start_date():
 def test_exact_seven_day_boundary_is_accepted_when_projected_bins_fit():
     client = RecordingClient(
         payloads={
-            f"2026-01-0{day}": canonical_payload()
+            f"2026-01-0{day}": canonical_payload(calendarDate=f"2026-01-0{day}")
             for day in range(1, 8)
         }
     )
@@ -406,7 +408,9 @@ def test_oversized_date_range_is_rejected_before_date_list_materialization(
 
 def test_binned_projection_cap_precedes_client_access(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(heart_rate, "MAX_RETURNED_BINS", 2)
-    client = RecordingClient(payloads={"2026-01-01": canonical_payload()})
+    client = RecordingClient(
+        payloads={"2026-01-01": canonical_payload(calendarDate="2026-01-01")}
+    )
 
     accepted = get_wellness_heart_rate_service(
         client, "2026-01-01", resolution="5m", start_time="00:00", end_time="00:10"
@@ -446,7 +450,9 @@ def test_valid_provider_requests_are_one_per_date_in_date_order():
 def test_absent_or_none_heart_rate_values_are_legitimate_empty_raw_days():
     client = RecordingClient(
         payloads={
-            "2026-01-01": canonical_payload(include_values=False),
+            "2026-01-01": canonical_payload(
+                include_values=False, calendarDate="2026-01-01"
+            ),
         }
     )
 
@@ -499,7 +505,9 @@ def test_mixed_provider_results_are_partial_success_and_keep_only_safe_warnings(
 ):
     results = iter((
         ProviderResult(data=None, failed=True, warnings=({"provider": "wellness_heart_rate", "code": "provider_unavailable", "message": "Unavailable", "secret": "no"},)),
-        ProviderResult(data=canonical_payload(heart_rate_values=[])),
+        ProviderResult(
+            data=canonical_payload(heart_rate_values=[], calendarDate="2026-01-02")
+        ),
     ))
     monkeypatch.setattr(heart_rate, "get_wellness_heart_rate_day", lambda *_args: next(results))
     client = RecordingClient()
@@ -649,6 +657,7 @@ def test_absent_and_explicit_null_collections_are_valid_empty_days_without_fabri
             ),
             "2026-08-15": canonical_payload(
                 heartRateValues=None,
+                calendarDate="2026-08-15",
                 resting_heart_rate=None,
                 min_heart_rate=None,
                 max_heart_rate=None,
@@ -732,6 +741,19 @@ def test_raw_rejects_untrusted_root_and_exact_container_violations(payload: Any)
     assert_invalid_dto(result, "2026-08-14")
 
 
+@pytest.mark.parametrize("calendar_date", ["2026-08-13", None, 20260814])
+def test_supplied_calendar_date_must_exactly_match_requested_date(calendar_date: Any):
+    payload = canonical_payload(calendarDate=calendar_date)
+
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"2026-08-14": payload}),
+        "2026-08-14",
+        resolution="daily",
+    )
+
+    assert_invalid_dto(result, "2026-08-14")
+
+
 @pytest.mark.parametrize("timestamp", [True, 1.0, "1786665600000", 10**100])
 def test_raw_rejects_invalid_timestamp_types_and_out_of_range_values(timestamp: Any):
     payload = canonical_payload(heart_rate_values=[[timestamp, 50]])
@@ -768,7 +790,9 @@ def test_summary_scalars_reject_malformed_supplied_values(value: Any):
 def test_invalid_date_is_sanitized_and_a_later_valid_date_is_kept():
     payloads = {
         "2026-08-14": {"heartRateValues": "do-not-return"},
-        "2026-08-15": canonical_payload(heart_rate_values=[]),
+        "2026-08-15": canonical_payload(
+            heart_rate_values=[], calendarDate="2026-08-15"
+        ),
     }
 
     result = get_wellness_heart_rate_service(
@@ -1206,8 +1230,14 @@ def test_binned_availability_uses_bins_or_summary_and_null_only_data_stays_unava
     }
     client = RecordingClient(payloads={
         "2026-08-14": canonical_payload(heart_rate_values=[[utc_ms(7), 48]], **no_summary),
-        "2026-08-15": canonical_payload(heart_rate_values=[],),
-        "2026-08-16": canonical_payload(heart_rate_values=[[utc_ms(7), None]], **no_summary),
+        "2026-08-15": canonical_payload(
+            heart_rate_values=[], calendarDate="2026-08-15"
+        ),
+        "2026-08-16": canonical_payload(
+            heart_rate_values=[[utc_ms(7), None]],
+            calendarDate="2026-08-16",
+            **no_summary,
+        ),
     })
 
     result = get_wellness_heart_rate_service(
@@ -1318,8 +1348,16 @@ def test_failed_dates_keep_fixed_empty_days_warnings_in_date_order_and_later_rea
     outcomes = iter((
         ProviderResult(data=None, failed=True, warnings=({"secret": "provider-token"},)),
         ProviderResult(data={"heartRateValues": "payload-secret"}),
-        ProviderResult(data=canonical_payload(startTimestampGMT=None)),
-        ProviderResult(data=canonical_payload(heart_rate_values=[[utc_ms(7), 48]])),
+        ProviderResult(
+            data=canonical_payload(
+                startTimestampGMT=None, calendarDate="2026-08-16"
+            )
+        ),
+        ProviderResult(
+            data=canonical_payload(
+                heart_rate_values=[[utc_ms(7), 48]], calendarDate="2026-08-17"
+            )
+        ),
     ))
 
     def next_outcome(_client: Any, date_text: str) -> ProviderResult:
@@ -1358,7 +1396,9 @@ def test_all_legitimately_empty_dates_are_a_success_with_complete_unavailable_da
     result = get_wellness_heart_rate_service(
         RecordingClient(payloads={
             "2026-08-14": canonical_payload(heart_rate_values=[], **no_summary),
-            "2026-08-15": canonical_payload(heart_rate_values=[], **no_summary),
+            "2026-08-15": canonical_payload(
+                heart_rate_values=[], calendarDate="2026-08-15", **no_summary
+            ),
         }),
         "2026-08-14",
         "2026-08-15",
@@ -1415,18 +1455,24 @@ def test_binned_actual_cap_is_request_scoped_across_completed_dates(
         "2026-08-14": canonical_payload(heart_rate_values=[
             [utc_ms(0, day_offset=0), 48], [utc_ms(0, day_offset=1), 49],
         ]),
-        "2026-08-15": canonical_payload(heart_rate_values=[
-            [utc_ms(0, day_offset=2), 50], [utc_ms(0, day_offset=3), 51],
-        ]),
+        "2026-08-15": canonical_payload(
+            heart_rate_values=[
+                [utc_ms(0, day_offset=2), 50], [utc_ms(0, day_offset=3), 51],
+            ],
+            calendarDate="2026-08-15",
+        ),
     })
     rejected_client = RecordingClient(payloads={
         "2026-08-14": canonical_payload(heart_rate_values=[
             [utc_ms(0, day_offset=0), 48], [utc_ms(0, day_offset=1), 49],
         ]),
-        "2026-08-15": canonical_payload(heart_rate_values=[
-            [utc_ms(0, day_offset=2), 50], [utc_ms(0, day_offset=3), 51],
-            [utc_ms(0, day_offset=4), 52],
-        ]),
+        "2026-08-15": canonical_payload(
+            heart_rate_values=[
+                [utc_ms(0, day_offset=2), 50], [utc_ms(0, day_offset=3), 51],
+                [utc_ms(0, day_offset=4), 52],
+            ],
+            calendarDate="2026-08-15",
+        ),
     })
     request = {
         "start_date": "2026-08-14",
@@ -1475,7 +1521,7 @@ def test_binned_boundary_overflow_is_a_sanitized_invalid_provider_response(
     result = get_wellness_heart_rate_service(
         RecordingClient(payloads={
             "9999-12-31": canonical_payload(
-                heart_rate_values=[[timestamp_ms, 48]], **bounds,
+                heart_rate_values=[[timestamp_ms, 48]], calendarDate="9999-12-31", **bounds,
             ),
         }),
         "9999-12-31",
@@ -1500,6 +1546,7 @@ def test_binned_null_boundary_sample_is_kept_as_summary_only_data():
         RecordingClient(payloads={
             "9999-12-31": canonical_payload(
                 heart_rate_values=[[253402300799999, None]],
+                calendarDate="9999-12-31",
                 startTimestampGMT="9999-12-31T00:00:00.0",
                 endTimestampGMT="9999-12-31T00:00:00.0",
                 startTimestampLocal="9999-12-31T00:00:00.0",
@@ -1528,6 +1575,7 @@ def test_binned_out_of_window_boundary_sample_remains_valid_summary_only_data():
         RecordingClient(payloads={
             "9999-12-31": canonical_payload(
                 heart_rate_values=[[253402300799999, 48]],
+                calendarDate="9999-12-31",
                 startTimestampGMT="9999-12-31T00:00:00.0",
                 endTimestampGMT="9999-12-31T00:00:00.0",
                 startTimestampLocal="9999-12-31T00:00:00.0",

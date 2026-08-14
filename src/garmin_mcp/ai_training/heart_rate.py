@@ -325,6 +325,10 @@ def _normalize_day_facts(raw: Any, date_text: str, resolution: str) -> DayFacts:
         raise InvalidProviderResponse
 
     _require_exact_string_keys(raw)
+    if "calendarDate" in raw and (
+        type(raw["calendarDate"]) is not str or raw["calendarDate"] != date_text
+    ):
+        raise InvalidProviderResponse
     summary = _summary_facts(raw)
     values = raw.get("heartRateValues")
     if values is None:
