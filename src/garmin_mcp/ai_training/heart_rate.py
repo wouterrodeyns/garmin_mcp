@@ -208,6 +208,25 @@ def _local_datetime(timestamp_ms: int, offset_minutes: int) -> datetime:
     return (_utc_datetime(timestamp_ms) + timedelta(minutes=offset_minutes)).replace(tzinfo=zone)
 
 
+def _bin_bounds(
+    timestamp_ms: int, offset_minutes: int, bin_minutes: int
+) -> tuple[datetime, datetime, datetime, datetime]:
+    """Return exact fixed-offset local and UTC boundaries for one source timestamp."""
+    local = _local_datetime(timestamp_ms, offset_minutes)
+    local_midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_minute = local.hour * 60 + local.minute
+    start_local = local_midnight + timedelta(
+        minutes=(local_minute // bin_minutes) * bin_minutes
+    )
+    end_local = start_local + timedelta(minutes=bin_minutes)
+    return (
+        start_local,
+        end_local,
+        start_local.astimezone(timezone.utc),
+        end_local.astimezone(timezone.utc),
+    )
+
+
 def _require_exact_string_keys(raw: dict[Any, Any]) -> None:
     """Reject non-string keys before any string-key lookup can compare them."""
     for key in raw:
@@ -323,7 +342,10 @@ def _normalize_day_facts(raw: Any, date_text: str, resolution: str) -> DayFacts:
     if offset_minutes is not None:
         for sample in samples:
             try:
-                _local_datetime(sample.timestamp_ms, offset_minutes)
+                if resolution in BIN_MINUTES:
+                    _bin_bounds(sample.timestamp_ms, offset_minutes, BIN_MINUTES[resolution])
+                else:
+                    _local_datetime(sample.timestamp_ms, offset_minutes)
             except OverflowError:
                 raise InvalidProviderResponse from None
 
@@ -415,24 +437,25 @@ def _binned_points(
     """Reduce valid selected samples into fixed Garmin-local wall-clock bins."""
     bin_minutes = BIN_MINUTES[resolution]
     values_by_start: dict[datetime, list[int]] = {}
+    bounds_by_start: dict[datetime, tuple[datetime, datetime, datetime]] = {}
     for sample in selected:
         if sample.bpm is None:
             continue
-        local = _local_datetime(sample.timestamp_ms, offset_minutes)
-        local_midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
-        local_minute = local.hour * 60 + local.minute
-        start = local_midnight + timedelta(minutes=(local_minute // bin_minutes) * bin_minutes)
-        values_by_start.setdefault(start, []).append(sample.bpm)
+        start_local, end_local, start_utc, end_utc = _bin_bounds(
+            sample.timestamp_ms, offset_minutes, bin_minutes
+        )
+        values_by_start.setdefault(start_local, []).append(sample.bpm)
+        bounds_by_start.setdefault(start_local, (end_local, start_utc, end_utc))
 
     points: list[dict[str, str | int | float]] = []
-    for start in sorted(values_by_start):
-        values = values_by_start[start]
-        end = start + timedelta(minutes=bin_minutes)
+    for start_local in sorted(values_by_start):
+        values = values_by_start[start_local]
+        end_local, start_utc, end_utc = bounds_by_start[start_local]
         points.append({
-            "start_time_local": start.isoformat(),
-            "end_time_local": end.isoformat(),
-            "start_time_utc": _utc_datetime_iso(start),
-            "end_time_utc": _utc_datetime_iso(end),
+            "start_time_local": start_local.isoformat(),
+            "end_time_local": end_local.isoformat(),
+            "start_time_utc": _utc_datetime_iso(start_utc),
+            "end_time_utc": _utc_datetime_iso(end_utc),
             "min_bpm": min(values),
             "mean_bpm": round(sum(values) / len(values), 1),
             "max_bpm": max(values),

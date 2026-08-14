@@ -1358,6 +1358,71 @@ def test_binned_actual_cap_is_request_scoped_across_completed_dates(
     assert rejected_client.calls == ["2026-08-14", "2026-08-15"]
 
 
+@pytest.mark.parametrize(
+    ("timestamp_ms", "bounds"),
+    [
+        (
+            253402300799999,
+            {
+                "startTimestampGMT": "9999-12-31T00:00:00.0",
+                "endTimestampGMT": "9999-12-31T00:00:00.0",
+                "startTimestampLocal": "9999-12-31T00:00:00.0",
+                "endTimestampLocal": "9999-12-31T00:00:00.0",
+            },
+        ),
+        (
+            253402300799999,
+            {
+                "startTimestampGMT": "9999-12-31T02:00:00.0",
+                "endTimestampGMT": "9999-12-31T23:00:00.0",
+                "startTimestampLocal": "9999-12-31T00:00:00.0",
+                "endTimestampLocal": "9999-12-31T21:00:00.0",
+            },
+        ),
+    ],
+)
+def test_binned_boundary_overflow_is_a_sanitized_invalid_provider_response(
+    timestamp_ms: int, bounds: dict[str, str],
+):
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "9999-12-31": canonical_payload(
+                heart_rate_values=[[timestamp_ms, 48]], **bounds,
+            ),
+        }),
+        "9999-12-31",
+        resolution="5m",
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == {
+        "code": "wellness_heart_rate_unavailable",
+        "message": PUBLIC_ERROR_MESSAGES["wellness_heart_rate_unavailable"],
+    }
+    assert result["availability"] == {"9999-12-31": False}
+    assert result["days"] == [empty_day("9999-12-31")]
+    assert result["warnings"] == [
+        normalized_warning("9999-12-31", "invalid_provider_response", INVALID_DTO_WARNING)
+    ]
+    assert str(timestamp_ms) not in json.dumps(result, separators=(",", ":"), ensure_ascii=False)
+
+
+def test_trusted_bin_boundary_runtime_error_is_not_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def unexpected_runtime_error(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("trusted bin-bound fault")
+
+    monkeypatch.setattr(heart_rate, "_bin_bounds", unexpected_runtime_error, raising=False)
+
+    with pytest.raises(RuntimeError, match="trusted bin-bound fault"):
+        get_wellness_heart_rate_service(
+            RecordingClient(payloads={"2026-08-14": canonical_payload()}),
+            "2026-08-14",
+            resolution="5m",
+        )
+
+
 @pytest.mark.parametrize("target", ["bin", "gap", "compact", "dumps"])
 def test_local_reducer_and_serializer_runtime_errors_are_not_sanitized(
     monkeypatch: pytest.MonkeyPatch, target: str,
