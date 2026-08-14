@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 import inspect
 import json
 from typing import Any
@@ -87,6 +88,26 @@ def canonical_payload(
     return payload
 
 
+def provisional_current_day_payload(
+    *,
+    calendar_date: str = "2026-08-14",
+    start_gmt: str = "2026-08-13T22:00:00.0",
+    start_local: str = "2026-08-14T00:00:00.0",
+    end_gmt: str = "2026-08-14T11:40:00.0",
+    end_local: str = "2026-08-15T00:00:00.0",
+    heart_rate_values: Any = None,
+) -> dict[str, Any]:
+    """Return Garmin's current-sync shape with only a trustworthy start bound."""
+    return canonical_payload(
+        calendarDate=calendar_date,
+        startTimestampGMT=start_gmt,
+        startTimestampLocal=start_local,
+        endTimestampGMT=end_gmt,
+        endTimestampLocal=end_local,
+        heart_rate_values=heart_rate_values,
+    )
+
+
 def normalized_warning(date_text: str, code: str, message: str) -> dict[str, str]:
     return {"provider": "wellness_heart_rate", "date": date_text, "code": code, "message": message}
 
@@ -94,9 +115,12 @@ def normalized_warning(date_text: str, code: str, message: str) -> dict[str, str
 LOCAL_TIME_WARNING = "Local wellness heart-rate time is unavailable for this date."
 INVALID_DTO_WARNING = "Wellness heart-rate data had an unexpected shape for this date."
 PROVIDER_UNAVAILABLE_WARNING = "Wellness heart-rate data is unavailable for this date."
+LOCAL_TIME_PROVISIONAL_WARNING = (
+    "Current-day local wellness heart-rate time uses Garmin's provisional start-bound offset."
+)
 
 
-def empty_day(date_text: str) -> dict[str, Any]:
+def empty_day(date_text: str, source_points: int = 0) -> dict[str, Any]:
     """The stable unavailable per-date object required after a failed read."""
     return {
         "date": date_text,
@@ -107,9 +131,13 @@ def empty_day(date_text: str) -> dict[str, Any]:
             "max_hr_bpm": None,
             "seven_day_avg_resting_hr_bpm": None,
         },
-        "time_provenance": {"local_offset_minutes": None, "local_time_available": False},
+        "time_provenance": {
+            "local_offset_minutes": None,
+            "local_time_available": False,
+            "local_time_basis": None,
+        },
         "sampling": {
-            "source_points": 0,
+            "source_points": source_points,
             "valid_bpm_points": None,
             "null_bpm_points": None,
             "returned_points": 0,
@@ -464,7 +492,11 @@ def test_absent_or_none_heart_rate_values_are_legitimate_empty_raw_days():
         "date": "2026-01-01",
         "available": True,
         "summary": {"resting_hr_bpm": 45, "min_hr_bpm": 41, "max_hr_bpm": 166, "seven_day_avg_resting_hr_bpm": 46},
-        "time_provenance": {"local_offset_minutes": 120, "local_time_available": True},
+        "time_provenance": {
+            "local_offset_minutes": 120,
+            "local_time_available": True,
+            "local_time_basis": "complete_bounds",
+        },
         "sampling": {"source_points": 0, "valid_bpm_points": 0, "null_bpm_points": 0, "returned_points": 0, "observed_median_interval_seconds": None, "duration_from_sample_count_valid": False},
         "points": [],
         "gaps": [],
@@ -558,7 +590,11 @@ def test_daily_normalizes_only_summary_and_collection_metadata_without_reading_s
                 "max_hr_bpm": 166,
                 "seven_day_avg_resting_hr_bpm": 46,
             },
-            "time_provenance": {"local_offset_minutes": 120, "local_time_available": True},
+            "time_provenance": {
+                "local_offset_minutes": 120,
+                "local_time_available": True,
+                "local_time_basis": "complete_bounds",
+            },
             "sampling": {
                 "source_points": 1,
                 "valid_bpm_points": None,
@@ -601,7 +637,11 @@ def test_raw_projects_complete_garmin_dto_with_null_bpm_and_missing_summary_as_n
                 "max_hr_bpm": None,
                 "seven_day_avg_resting_hr_bpm": 46,
             },
-            "time_provenance": {"local_offset_minutes": 120, "local_time_available": True},
+            "time_provenance": {
+                "local_offset_minutes": 120,
+                "local_time_available": True,
+                "local_time_basis": "complete_bounds",
+            },
             "sampling": {
                 "source_points": 3,
                 "valid_bpm_points": 2,
@@ -877,7 +917,11 @@ def test_utc_and_local_time_projection_use_verified_plus_two_hour_offset():
     )
 
     day = result["days"][0]
-    assert day["time_provenance"] == {"local_offset_minutes": 120, "local_time_available": True}
+    assert day["time_provenance"] == {
+        "local_offset_minutes": 120,
+        "local_time_available": True,
+        "local_time_basis": "complete_bounds",
+    }
     assert day["points"][0] == {
         "time_local": "2026-08-14T02:00:00+02:00",
         "time_utc": "2026-08-14T00:00:00Z",
@@ -970,6 +1014,7 @@ def test_unwindowed_raw_and_daily_keep_facts_when_local_provenance_is_unavailabl
     assert result["days"][0]["time_provenance"] == {
         "local_offset_minutes": None,
         "local_time_available": False,
+        "local_time_basis": None,
     }
     assert result["warnings"] == [
         normalized_warning("2026-08-14", "local_time_unavailable", LOCAL_TIME_WARNING)
@@ -1009,6 +1054,7 @@ def test_fractional_minute_offset_is_unavailable_without_guessing_local_time():
     assert result["days"][0]["time_provenance"] == {
         "local_offset_minutes": None,
         "local_time_available": False,
+        "local_time_basis": None,
     }
     assert result["days"][0]["points"][0]["time_local"] is None
     assert result["warnings"] == [
@@ -1031,7 +1077,7 @@ def test_explicit_window_and_binned_modes_fail_date_when_local_time_is_unavailab
         "message": PUBLIC_ERROR_MESSAGES["wellness_heart_rate_unavailable"],
     }
     assert result["availability"] == {"2026-08-14": False}
-    assert result["days"] == [empty_day("2026-08-14")]
+    assert result["days"] == [empty_day("2026-08-14", source_points=3)]
     assert result["warnings"] == [
         normalized_warning("2026-08-14", "local_time_unavailable", LOCAL_TIME_WARNING)
     ]
@@ -1051,6 +1097,158 @@ def test_raw_window_includes_start_and_excludes_end_using_garmin_local_wall_time
         "time_utc": "2026-08-14T00:00:00Z",
         "bpm": 48,
     }]
+
+
+def test_current_day_provisional_start_bound_selects_raw_window_in_garmin_local_time():
+    client = RecordingClient(payloads={
+        "2026-08-14": provisional_current_day_payload(heart_rate_values=[
+            [utc_ms(0), 48], [utc_ms(2), None], [utc_ms(4), 51],
+        ]),
+    })
+
+    result = get_wellness_heart_rate_service(
+        client,
+        "2026-08-14",
+        start_time="02:00",
+        end_time="02:03",
+        today=date(2026, 8, 14),
+    )
+
+    assert client.calls == ["2026-08-14"]
+    assert result["status"] == "success"
+    assert result["days"][0]["time_provenance"] == {
+        "local_offset_minutes": 120,
+        "local_time_available": True,
+        "local_time_basis": "current_day_start_bound",
+    }
+    assert result["days"][0]["points"] == [
+        {
+            "time_local": "2026-08-14T02:00:00+02:00",
+            "time_utc": "2026-08-14T00:00:00Z",
+            "bpm": 48,
+        },
+        {
+            "time_local": "2026-08-14T02:02:00+02:00",
+            "time_utc": "2026-08-14T00:02:00Z",
+            "bpm": None,
+        },
+    ]
+    assert result["days"][0]["sampling"] == {
+        "source_points": 3,
+        "valid_bpm_points": 1,
+        "null_bpm_points": 1,
+        "returned_points": 2,
+        "observed_median_interval_seconds": 120,
+        "duration_from_sample_count_valid": False,
+    }
+    assert result["warnings"] == [
+        normalized_warning(
+            "2026-08-14", "local_time_provisional", LOCAL_TIME_PROVISIONAL_WARNING
+        )
+    ]
+
+
+def test_current_day_provisional_start_bound_aligns_binned_points_in_garmin_local_time():
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "2026-08-14": provisional_current_day_payload(heart_rate_values=[
+                [utc_ms(7), 101], [utc_ms(8), 102], [utc_ms(9), 102],
+            ]),
+        }),
+        "2026-08-14",
+        resolution="5m",
+        today=date(2026, 8, 14),
+    )
+
+    assert result["status"] == "success"
+    assert result["days"][0]["time_provenance"]["local_time_basis"] == (
+        "current_day_start_bound"
+    )
+    assert result["days"][0]["points"] == [{
+        "start_time_local": "2026-08-14T02:05:00+02:00",
+        "end_time_local": "2026-08-14T02:10:00+02:00",
+        "start_time_utc": "2026-08-14T00:05:00Z",
+        "end_time_utc": "2026-08-14T00:10:00Z",
+        "min_bpm": 101,
+        "mean_bpm": 101.7,
+        "max_bpm": 102,
+        "sample_count": 3,
+    }]
+    assert result["warnings"] == [
+        normalized_warning(
+            "2026-08-14", "local_time_provisional", LOCAL_TIME_PROVISIONAL_WARNING
+        )
+    ]
+
+
+@pytest.mark.parametrize("resolution", ["raw", "5m"])
+def test_noncurrent_incomplete_bounds_keep_source_count_when_local_time_is_required(
+    resolution: str,
+):
+    payload = provisional_current_day_payload(
+        calendar_date="2026-08-13",
+        start_gmt="2026-08-12T22:00:00.0",
+        start_local="2026-08-13T00:00:00.0",
+        end_gmt="2026-08-13T11:40:00.0",
+        end_local="2026-08-14T00:00:00.0",
+    )
+    kwargs = {"start_time": "02:00", "end_time": "02:05"} if resolution == "raw" else {}
+
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"2026-08-13": payload}),
+        "2026-08-13",
+        resolution=resolution,
+        today=date(2026, 8, 14),
+        **kwargs,
+    )
+
+    assert result["status"] == "error"
+    assert result["days"][0]["time_provenance"] == {
+        "local_offset_minutes": None,
+        "local_time_available": False,
+        "local_time_basis": None,
+    }
+    assert result["days"][0]["sampling"] == {
+        "source_points": 3,
+        "valid_bpm_points": None,
+        "null_bpm_points": None,
+        "returned_points": 0,
+        "observed_median_interval_seconds": None,
+        "duration_from_sample_count_valid": False,
+    }
+    assert result["warnings"] == [
+        normalized_warning("2026-08-13", "local_time_unavailable", LOCAL_TIME_WARNING)
+    ]
+
+
+def test_completed_day_offset_mismatch_remains_unavailable_even_when_requested_today():
+    payload = provisional_current_day_payload(
+        end_gmt="2026-08-14T22:00:00.0",
+        end_local="2026-08-15T01:00:00.0",
+    )
+
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"2026-08-14": payload}),
+        "2026-08-14",
+        start_time="02:00",
+        end_time="02:05",
+        today=date(2026, 8, 14),
+    )
+
+    assert result["status"] == "error"
+    assert result["days"] == [empty_day("2026-08-14", source_points=3)]
+    assert result["warnings"] == [
+        normalized_warning("2026-08-14", "local_time_unavailable", LOCAL_TIME_WARNING)
+    ]
+
+
+def test_injected_today_requires_an_exact_date_instance():
+    with pytest.raises(
+        TypeError, match=r"^today must be an exact datetime\.date instance or None$"
+    ):
+        get_wellness_heart_rate_service(
+            RecordingClient(), "2026-08-14", today="2026-08-14"
+        )
 
 
 def test_raw_sampling_counts_and_median_use_selected_sorted_samples_and_positive_intervals_only():
@@ -1372,7 +1570,11 @@ def test_failed_dates_keep_fixed_empty_days_warnings_in_date_order_and_later_rea
     assert calls == ["2026-08-14", "2026-08-15", "2026-08-16", "2026-08-17"]
     assert result["status"] == "partial_success"
     assert [day["date"] for day in result["days"]] == calls
-    assert result["days"][:3] == [empty_day(date_text) for date_text in calls[:3]]
+    assert result["days"][:3] == [
+        empty_day(calls[0]),
+        empty_day(calls[1]),
+        empty_day(calls[2], source_points=3),
+    ]
     assert result["availability"] == {
         day["date"]: day["available"] for day in result["days"]
     }

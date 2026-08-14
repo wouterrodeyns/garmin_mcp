@@ -57,6 +57,7 @@ class DayFacts:
     date: str
     summary: dict[str, int | None]
     offset_minutes: int | None
+    local_time_basis: str | None
     samples: tuple[Sample, ...]
     source_points: int
 
@@ -202,6 +203,9 @@ _SUMMARY_FIELDS = {
     "lastSevenDaysAvgRestingHeartRate": "seven_day_avg_resting_hr_bpm",
 }
 _LOCAL_TIME_WARNING = "Local wellness heart-rate time is unavailable for this date."
+_LOCAL_TIME_PROVISIONAL_WARNING = (
+    "Current-day local wellness heart-rate time uses Garmin's provisional start-bound offset."
+)
 _INVALID_DTO_WARNING = "Wellness heart-rate data had an unexpected shape for this date."
 _PROVIDER_UNAVAILABLE_WARNING = "Wellness heart-rate data is unavailable for this date."
 _UTC_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -271,33 +275,45 @@ def _parse_naive_bound(raw: dict[Any, Any], key: str) -> datetime | None:
     return parsed if parsed.tzinfo is None else None
 
 
-def _local_offset_minutes(raw: dict[Any, Any]) -> int | None:
-    """Establish a stable offset only when both Garmin daily bounds agree."""
+def _whole_minute_offset(gmt: datetime, local: datetime) -> int | None:
+    """Return a valid fixed offset from one complete Garmin bound pair."""
+    delta = local.replace(tzinfo=timezone.utc) - gmt.replace(tzinfo=timezone.utc)
+    microseconds = (
+        (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
+    )
+    if microseconds % 60_000_000:
+        return None
+    minutes = microseconds // 60_000_000
+    return minutes if -1439 <= minutes <= 1439 else None
+
+
+def _local_time_provenance(
+    raw: dict[Any, Any], date_text: str, effective_today: date
+) -> tuple[int | None, str | None]:
+    """Resolve complete Garmin bounds, with a narrow current-day start fallback."""
     start_gmt = _parse_naive_bound(raw, "startTimestampGMT")
     end_gmt = _parse_naive_bound(raw, "endTimestampGMT")
     start_local = _parse_naive_bound(raw, "startTimestampLocal")
     end_local = _parse_naive_bound(raw, "endTimestampLocal")
     if None in (start_gmt, end_gmt, start_local, end_local):
-        return None
+        return None, None
 
     assert start_gmt is not None
     assert end_gmt is not None
     assert start_local is not None
     assert end_local is not None
-    start_delta = start_local.replace(tzinfo=timezone.utc) - start_gmt.replace(tzinfo=timezone.utc)
-    end_delta = end_local.replace(tzinfo=timezone.utc) - end_gmt.replace(tzinfo=timezone.utc)
-    start_microseconds = (
-        (start_delta.days * 86_400 + start_delta.seconds) * 1_000_000
-        + start_delta.microseconds
-    )
-    end_microseconds = (
-        (end_delta.days * 86_400 + end_delta.seconds) * 1_000_000
-        + end_delta.microseconds
-    )
-    if start_microseconds != end_microseconds or start_microseconds % 60_000_000:
-        return None
-    minutes = start_microseconds // 60_000_000
-    return minutes if -1439 <= minutes <= 1439 else None
+    start_offset = _whole_minute_offset(start_gmt, start_local)
+    end_offset = _whole_minute_offset(end_gmt, end_local)
+    if start_offset is not None and start_offset == end_offset:
+        return start_offset, "complete_bounds"
+    if (
+        date_text == effective_today.isoformat()
+        and start_offset is not None
+        and end_local == start_local + timedelta(days=1)
+        and start_gmt <= end_gmt < start_gmt + timedelta(days=1)
+    ):
+        return start_offset, "current_day_start_bound"
+    return None, None
 
 
 def _validate_timestamp(timestamp_ms: Any) -> int:
@@ -319,7 +335,9 @@ def _validate_bpm(bpm: Any) -> int | None:
     raise InvalidProviderResponse
 
 
-def _normalize_day_facts(raw: Any, date_text: str, resolution: str) -> DayFacts:
+def _normalize_day_facts(
+    raw: Any, date_text: str, resolution: str, effective_today: date
+) -> DayFacts:
     """Copy a strictly valid Garmin DTO into immutable local facts."""
     if type(raw) is not dict:
         raise InvalidProviderResponse
@@ -353,7 +371,7 @@ def _normalize_day_facts(raw: Any, date_text: str, resolution: str) -> DayFacts:
             indexed_samples.sort(key=lambda item: (item[0], item[1]))
             samples = tuple(item[2] for item in indexed_samples)
 
-    offset_minutes = _local_offset_minutes(raw)
+    offset_minutes, local_time_basis = _local_time_provenance(raw, date_text, effective_today)
     if offset_minutes is not None:
         for sample in samples:
             try:
@@ -365,6 +383,7 @@ def _normalize_day_facts(raw: Any, date_text: str, resolution: str) -> DayFacts:
         date=date_text,
         summary=summary,
         offset_minutes=offset_minutes,
+        local_time_basis=local_time_basis,
         samples=samples,
         source_points=source_points,
     )
@@ -509,7 +528,7 @@ def _gap_points(
     return gaps
 
 
-def _empty_day(date_text: str) -> dict[str, Any]:
+def _empty_day(date_text: str, source_points: int = 0) -> dict[str, Any]:
     """Return the fixed no-data schema for one failed requested date."""
     return {
         "date": date_text,
@@ -520,9 +539,13 @@ def _empty_day(date_text: str) -> dict[str, Any]:
             "max_hr_bpm": None,
             "seven_day_avg_resting_hr_bpm": None,
         },
-        "time_provenance": {"local_offset_minutes": None, "local_time_available": False},
+        "time_provenance": {
+            "local_offset_minutes": None,
+            "local_time_available": False,
+            "local_time_basis": None,
+        },
         "sampling": {
-            "source_points": 0,
+            "source_points": source_points,
             "valid_bpm_points": None,
             "null_bpm_points": None,
             "returned_points": 0,
@@ -572,6 +595,7 @@ def _day_result(
         "time_provenance": {
             "local_offset_minutes": facts.offset_minutes,
             "local_time_available": facts.offset_minutes is not None,
+            "local_time_basis": facts.local_time_basis,
         },
         "sampling": _sampling(facts.source_points, selected, resolution, len(points)),
         "points": points,
@@ -600,8 +624,13 @@ def get_wellness_heart_rate_service(
     resolution: Any = "raw",
     start_time: Any = None,
     end_time: Any = None,
+    *,
+    today: date | None = None,
 ) -> dict[str, Any]:
     """Validate and orchestrate bounded daily wellness-HR reads."""
+    if today is not None and type(today) is not date:
+        raise TypeError("today must be an exact datetime.date instance or None")
+    effective_today = date.today() if today is None else today
     result = _base_envelope(start_date, end_date, resolution, start_time, end_time)
     error_code, dates = _validate_request(start_date, end_date, resolution, start_time, end_time)
     if error_code is not None:
@@ -632,7 +661,9 @@ def get_wellness_heart_rate_service(
             continue
 
         try:
-            facts = _normalize_day_facts(provider_result.data, date_text, resolution)
+            facts = _normalize_day_facts(
+                provider_result.data, date_text, resolution, effective_today
+            )
         except InvalidProviderResponse:
             failed_dates += 1
             day = _empty_day(date_text)
@@ -650,12 +681,20 @@ def get_wellness_heart_rate_service(
             )
             if requires_local_time:
                 failed_dates += 1
-                day = _empty_day(date_text)
+                day = _empty_day(date_text, facts.source_points)
                 result["days"].append(day)
                 result["availability"][date_text] = day["available"]
                 continue
             selected = facts.samples
         else:
+            if facts.local_time_basis == "current_day_start_bound":
+                result["warnings"].append(
+                    _dated_warning(
+                        date_text,
+                        "local_time_provisional",
+                        _LOCAL_TIME_PROVISIONAL_WARNING,
+                    )
+                )
             selected = _selected_samples(
                 facts.samples, facts.offset_minutes, parsed_start_time, parsed_end_time
             )
