@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import ai_training
 from garmin_mcp.ai_training import tools
+from garmin_mcp.ai_training.heart_rate import MAX_SERIALIZED_BYTES
 
 
 def response_text(content):
@@ -161,6 +162,47 @@ async def test_real_service_reads_only_get_heart_rates_in_date_order():
     )
     assert json.loads(response_text(binned))["status"] == "success"
     assert client.calls[-2:] == ["2026-08-14", "2026-08-15"]
+
+
+@pytest.mark.asyncio
+async def test_huge_invalid_start_date_is_bounded_before_mcp_transport():
+    client = RecordingClient()
+    ai_training.configure(client)
+    app = FastMCP("test")
+    ai_training.register_tools(app)
+
+    result = await app.call_tool(
+        "get_wellness_heart_rate",
+        {"start_date": "x" * (MAX_SERIALIZED_BYTES + 1)},
+    )
+    text = response_text(result)
+    payload = json.loads(text)
+
+    assert len(text.encode("utf-8")) <= MAX_SERIALIZED_BYTES
+    assert payload["error"]["code"] == "invalid_start_date"
+    assert payload["period"]["start_date"] is None
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_lone_surrogate_is_redacted_before_mcp_text_serialization():
+    client = RecordingClient()
+    ai_training.configure(client)
+    app = FastMCP("test")
+    ai_training.register_tools(app)
+
+    result = await app.call_tool(
+        "get_wellness_heart_rate", {"start_date": "\ud800"}
+    )
+    content_block = result[0][0]
+    text = content_block.text
+    payload = json.loads(text)
+
+    assert payload["error"]["code"] == "invalid_start_date"
+    assert payload["period"]["start_date"] is None
+    assert "\ud800" not in text
+    content_block.model_dump_json().encode("utf-8")
+    assert client.calls == []
 
 
 @pytest.mark.asyncio

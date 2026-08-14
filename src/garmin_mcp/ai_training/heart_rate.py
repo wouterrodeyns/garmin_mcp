@@ -20,6 +20,7 @@ MAX_SERIALIZED_BYTES = 262_144
 GAP_THRESHOLD_SECONDS = 300
 RESOLUTIONS = ("daily", "raw", "5m", "15m", "30m", "60m")
 BIN_MINUTES = {"5m": 5, "15m": 15, "30m": 30, "60m": 60}
+_MAX_RESOLUTION_TEXT_LENGTH = max(len(value) for value in RESOLUTIONS)
 
 ERROR_MESSAGES = {
     "invalid_start_date": "start_date must be a real calendar date in YYYY-MM-DD format.",
@@ -82,8 +83,18 @@ def _strict_time(value: Any) -> time | None:
     return parsed if parsed.strftime("%H:%M") == value else None
 
 
-def _safe_text(value: Any) -> str | None:
-    return value if type(value) is str else None
+def _utf8_bytes(value: str) -> bytes:
+    return value.encode("utf-8", "strict")
+
+
+def _safe_text(value: Any, max_length: int) -> str | None:
+    if type(value) is not str or len(value) > max_length:
+        return None
+    try:
+        _utf8_bytes(value)
+    except UnicodeEncodeError:
+        return None
+    return value
 
 
 def _base_envelope(
@@ -98,12 +109,12 @@ def _base_envelope(
         "status": "success",
         "error": None,
         "period": {
-            "start_date": _safe_text(start_date),
-            "end_date": _safe_text(end_date),
-            "start_time": _safe_text(start_time),
-            "end_time": _safe_text(end_time),
+            "start_date": _safe_text(start_date, 10),
+            "end_date": _safe_text(end_date, 10),
+            "start_time": _safe_text(start_time, 5),
+            "end_time": _safe_text(end_time, 5),
         },
-        "resolution": _safe_text(resolution),
+        "resolution": _safe_text(resolution, _MAX_RESOLUTION_TEXT_LENGTH),
         "availability": {},
         "days": [],
         "warnings": [],

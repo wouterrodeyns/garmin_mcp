@@ -165,6 +165,94 @@ def test_public_error_messages_match_the_approved_literal_contract():
 
 
 @pytest.mark.parametrize(
+    ("field", "limit"),
+    [("start_date", 10), ("end_date", 10), ("start_time", 5), ("end_time", 5), ("resolution", 5)],
+)
+def test_base_envelope_bounds_reflected_input_fields(field: str, limit: int):
+    values = {
+        "start_date": "2026-01-01",
+        "end_date": "2026-01-01",
+        "resolution": "daily",
+        "start_time": "08:00",
+        "end_time": "09:00",
+    }
+    values[field] = "x" * limit
+    envelope = heart_rate._base_envelope(**values)
+    reflected = envelope["period"].get(field) if field != "resolution" else envelope[field]
+    assert reflected == "x" * limit
+
+    values[field] = "x" * (limit + 1)
+    envelope = heart_rate._base_envelope(**values)
+    reflected = envelope["period"].get(field) if field != "resolution" else envelope[field]
+    assert reflected is None
+
+
+def test_safe_text_rejects_str_subclass_before_protocols(monkeypatch):
+    class HostileText(str):
+        def __len__(self):
+            raise AssertionError("len must not be called on a rejected subclass")
+
+        def encode(self, *args, **kwargs):
+            raise AssertionError("encode must not be called on a rejected subclass")
+
+    assert heart_rate._safe_text(HostileText("x"), 10) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "surrogate", "error_code"),
+    [
+        ("start_date", "\ud800", "invalid_start_date"),
+        ("start_date", "\udc00", "invalid_start_date"),
+        ("end_date", "\ud800", "invalid_end_date"),
+        ("end_date", "\udc00", "invalid_end_date"),
+        ("resolution", "\ud800", "invalid_resolution"),
+        ("resolution", "\udc00", "invalid_resolution"),
+        ("start_time", "\ud800", "invalid_time_window"),
+        ("start_time", "\udc00", "invalid_time_window"),
+        ("end_time", "\ud800", "invalid_time_window"),
+        ("end_time", "\udc00", "invalid_time_window"),
+    ],
+)
+def test_unpaired_surrogates_are_redacted_from_error_envelope(
+    field: str, surrogate: str, error_code: str
+):
+    values = {
+        "start_date": "2026-01-01",
+        "end_date": "2026-01-01",
+        "resolution": "raw",
+        "start_time": None,
+        "end_time": None,
+    }
+    if field == "start_time":
+        values["end_time"] = "09:00"
+    elif field == "end_time":
+        values["start_time"] = "08:00"
+    values[field] = surrogate
+
+    result = get_wellness_heart_rate_service(None, **values)
+
+    assert_error(result, error_code)
+    reflected = result["period"].get(field) if field != "resolution" else result[field]
+    assert reflected is None
+    serialized = json.dumps(result, separators=(",", ":"), ensure_ascii=False)
+    assert surrogate not in serialized
+    assert len(serialized.encode("utf-8")) <= MAX_SERIALIZED_BYTES
+
+
+def test_oversized_input_is_rejected_before_utf8_helper(monkeypatch):
+    calls = []
+
+    def fail_if_called(value: str) -> bytes:
+        calls.append(value)
+        raise AssertionError("oversized input must not be encoded")
+
+    monkeypatch.setattr(heart_rate, "_utf8_bytes", fail_if_called)
+
+    assert heart_rate._safe_text("x" * 1_000_000, 10) is None
+    assert calls == []
+
+
+@pytest.mark.parametrize(
     "start_date",
     [None, True, 1, 1.0, b"2026-01-01", "2026-1-01", "2026/01/01", "2026-02-30"],
 )
