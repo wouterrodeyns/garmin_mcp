@@ -7,6 +7,14 @@ coach's **hands** when the athlete later asks to put a recommendation on
 Garmin or change an existing workout in place. The context tool never uploads,
 schedules, changes, or deletes Garmin data. It does not provide coaching advice.
 
+Detailed historical or all-day wellness heart-rate evidence is an explicit
+follow-up, not another field embedded in `get_training_context`. Use
+[`get_wellness_heart_rate`](ai-wellness-heart-rate.md) only when the question
+needs its bounded raw samples, daily summary, or time bins. An empty or
+unavailable current date can simply mean the watch/device has not synced to
+Garmin Connect yet; it does not establish an unsupported account or device.
+Sync, then retry.
+
 The implementation is pinned to `garminconnect==0.3.10`. Garmin metric
 availability varies by device and account, so every recovery and fitness metric
 described below is optional.
@@ -230,8 +238,9 @@ Warnings never include raw Garmin responses, tokens, or credentials.
 
 ## AI-coach profile and workflow
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 14 tools. The three
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 15 tools. The four
 high-level coaching roles are context eyes (`get_training_context`),
+explicit all-day wellness evidence (`get_wellness_heart_rate`),
 completed-session feedback (`analyze_activity`, with the narrow
 `get_activity_timeseries` follow-up for concrete short-interval evidence), and workout hands
 (`create_workout` plus in-place `update_workout`). The full profile also
