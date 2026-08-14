@@ -183,7 +183,10 @@ def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types():
             assert sampling["valid_bpm_points"] is None or type(sampling["valid_bpm_points"]) is int
             assert sampling["null_bpm_points"] is None or type(sampling["null_bpm_points"]) is int
             assert type(sampling["returned_points"]) is int
-            assert sampling["observed_median_interval_seconds"] is None or type(sampling["observed_median_interval_seconds"]) is float
+            observed_median = sampling["observed_median_interval_seconds"]
+            assert observed_median is None or type(observed_median) in (int, float)
+            assert observed_median is None or type(observed_median) is not bool
+            assert observed_median is None or observed_median == 120
             assert type(sampling["duration_from_sample_count_valid"]) is bool
             assert sampling["duration_from_sample_count_valid"] is False
             for point in day["points"]:
@@ -206,6 +209,14 @@ def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types():
                 for key in ("start_time_local", "end_time_local", "start_time_utc", "end_time_utc"):
                     assert gap[key] is None or type(gap[key]) is str
                 assert type(gap["elapsed_minutes"]) is float
+                assert gap == {
+                    "start_time_local": "2026-08-10T19:04:00+02:00",
+                    "end_time_local": "2026-08-10T19:15:00+02:00",
+                    "start_time_utc": "2026-08-10T17:04:00Z",
+                    "end_time_utc": "2026-08-10T17:15:00Z",
+                    "elapsed_minutes": 11.0,
+                }
+                assert gap["start_time_local"] != "2026-08-10T19:05:00+02:00"
         for warning in example["warnings"]:
             assert list(warning) == ["provider", "date", "code", "message"]
             assert type(warning["provider"]) is str
@@ -313,6 +324,12 @@ def test_guide_states_interpretation_guardrails_without_unsupported_inference():
         "empty day proves unsupported",
     ):
         assert forbidden not in lower
+
+
+def test_guide_pins_offline_synthetic_test_boundary():
+    lower = " ".join(_docs().lower().split())
+    assert "normal tests use synthetic/offline clients/data" in lower
+    assert "do not require a live garmin account" in lower
 
 
 def test_guide_pins_read_only_calls_and_explicit_workflow_distinctions():

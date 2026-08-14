@@ -127,7 +127,7 @@ contain no real user data.
       "available": true,
       "summary": {"resting_hr_bpm": 45, "min_hr_bpm": 41, "max_hr_bpm": 166, "seven_day_avg_resting_hr_bpm": 46},
       "time_provenance": {"local_offset_minutes": 120, "local_time_available": true},
-      "sampling": {"source_points": 3, "valid_bpm_points": 2, "null_bpm_points": 1, "returned_points": 3, "observed_median_interval_seconds": 120.0, "duration_from_sample_count_valid": false},
+      "sampling": {"source_points": 3, "valid_bpm_points": 2, "null_bpm_points": 1, "returned_points": 3, "observed_median_interval_seconds": 120, "duration_from_sample_count_valid": false},
       "points": [
         {"time_local": "2026-08-10T19:00:00+02:00", "time_utc": "2026-08-10T17:00:00Z", "bpm": 138},
         {"time_local": "2026-08-10T19:02:00+02:00", "time_utc": "2026-08-10T17:02:00Z", "bpm": null},
@@ -158,12 +158,12 @@ the local form is included only when its daily offset is unambiguous.
       "available": true,
       "summary": {"resting_hr_bpm": 45, "min_hr_bpm": 41, "max_hr_bpm": 166, "seven_day_avg_resting_hr_bpm": 46},
       "time_provenance": {"local_offset_minutes": 120, "local_time_available": true},
-      "sampling": {"source_points": 4, "valid_bpm_points": 4, "null_bpm_points": 0, "returned_points": 2, "observed_median_interval_seconds": 120.0, "duration_from_sample_count_valid": false},
+      "sampling": {"source_points": 4, "valid_bpm_points": 4, "null_bpm_points": 0, "returned_points": 2, "observed_median_interval_seconds": 120, "duration_from_sample_count_valid": false},
       "points": [
         {"start_time_local": "2026-08-10T19:00:00+02:00", "end_time_local": "2026-08-10T19:05:00+02:00", "start_time_utc": "2026-08-10T17:00:00Z", "end_time_utc": "2026-08-10T17:05:00Z", "min_bpm": 126, "mean_bpm": 139.4, "max_bpm": 151, "sample_count": 3},
         {"start_time_local": "2026-08-10T19:15:00+02:00", "end_time_local": "2026-08-10T19:20:00+02:00", "start_time_utc": "2026-08-10T17:15:00Z", "end_time_utc": "2026-08-10T17:20:00Z", "min_bpm": 133, "mean_bpm": 136.0, "max_bpm": 139, "sample_count": 1}
       ],
-      "gaps": [{"start_time_local": "2026-08-10T19:05:00+02:00", "end_time_local": "2026-08-10T19:15:00+02:00", "start_time_utc": "2026-08-10T17:05:00Z", "end_time_utc": "2026-08-10T17:15:00Z", "elapsed_minutes": 10.0}]
+      "gaps": [{"start_time_local": "2026-08-10T19:04:00+02:00", "end_time_local": "2026-08-10T19:15:00+02:00", "start_time_utc": "2026-08-10T17:04:00Z", "end_time_utc": "2026-08-10T17:15:00Z", "elapsed_minutes": 11.0}]
     }
   ],
   "warnings": []
@@ -173,6 +173,9 @@ the local form is included only when its daily offset is unambiguous.
 Binned `min_bpm`, `mean_bpm`, `max_bpm`, and `sample_count` describe only
 valid samples Garmin returned in that bin. There is no `coverage` field and
 no claim of continuous coverage. No coverage is reported.
+In the example, the two bins contain three and one valid samples; the gap
+starts at the last valid sample at 19:04 and ends at the next valid sample at
+19:15, rather than starting at a bin boundary.
 
 ### Partial success and a failed date
 
@@ -340,3 +343,6 @@ The exact `ai-coach` profile has 15 names:
 The broad upstream `get_heart_rates` and `get_heart_rates_summary` tools stay
 outside this profile. Explicit `GARMIN_ENABLED_TOOLS` still takes precedence,
 and `GARMIN_DISABLED_TOOLS` subtracts from a selected profile.
+
+Normal tests use synthetic/offline clients/data and do not require a live
+Garmin account.
