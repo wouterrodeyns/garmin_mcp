@@ -270,9 +270,13 @@ def test_guide_distinguishes_per_date_results_from_global_refusals():
         "request validation",
         "client_unavailable",
         "global raw/bin/output-size refusals",
+        "request validation and client errors may precede reads",
+        "global raw/bin/output-size refusals do not retain per-date results in the returned envelope",
+        "even when a limit is discovered after temporary normalization/reduction",
         "availability {}, days [], warnings []",
     ):
         assert phrase in lower
+    assert "before a per-date result exists" not in lower
 
 
 def test_guide_states_interpretation_guardrails_without_unsupported_inference():

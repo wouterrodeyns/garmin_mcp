@@ -67,9 +67,11 @@ fixed `{code, message}` object. `period` has exactly
 After provider reads are attempted, ordinary success and partial_success, and
 an all-date provider/malformed/local-required total failure, retain one day
 and availability boolean per requested date in date order, including failed
-dates, with dated warnings. Request validation, `client_unavailable`, and
-global raw/bin/output-size refusals happen before a per-date result exists and
-return `availability {}`, `days []`, and `warnings []`.
+dates, with dated warnings. Request validation and client errors may precede reads.
+Global raw/bin/output-size refusals do not retain per-date results in the
+returned envelope, even when a limit is discovered after temporary
+normalization/reduction; they return `availability {}`, `days []`, and
+`warnings []`.
 The global empty envelope is availability {}, days [], warnings [].
 
 ```text
