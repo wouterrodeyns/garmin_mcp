@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import inspect
 from typing import Any
 
 import pytest
@@ -734,6 +735,66 @@ def test_utc_and_local_time_projection_use_verified_plus_two_hour_offset():
         "time_utc": "2026-08-14T00:00:00Z",
         "bpm": 48,
     }
+
+
+def test_raw_utc_projection_preserves_exact_negative_and_near_maximum_milliseconds():
+    payload = canonical_payload(
+        heart_rate_values=[[-1, 48], [253402300799999, 49]],
+        startTimestampGMT=None,
+    )
+
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"2026-08-14": payload}), "2026-08-14"
+    )
+
+    assert result["status"] == "success"
+    assert [point["time_utc"] for point in result["days"][0]["points"]] == [
+        "1969-12-31T23:59:59.999000Z",
+        "9999-12-31T23:59:59.999000Z",
+    ]
+    assert [point["time_local"] for point in result["days"][0]["points"]] == [None, None]
+
+
+def test_local_projection_overflow_is_a_sanitized_invalid_provider_response():
+    payload = canonical_payload(heart_rate_values=[[253402300799999, 49]])
+
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"2026-08-14": payload}), "2026-08-14"
+    )
+
+    assert_invalid_dto(result, "2026-08-14")
+
+
+def test_exact_dict_with_hostile_colliding_key_is_rejected_before_field_lookup():
+    class HostileCollidingKey:
+        def __init__(self):
+            self.armed = False
+
+        def __hash__(self) -> int:
+            return hash("restingHeartRate")
+
+        def __eq__(self, other: object) -> bool:
+            if self.armed:
+                raise AssertionError("hostile key comparison must not run")
+            return False
+
+    hostile_key = HostileCollidingKey()
+    payload: dict[Any, Any] = {hostile_key: "secret-colliding-key"}
+    payload.update(canonical_payload())
+    hostile_key.armed = True
+
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"2026-08-14": payload}), "2026-08-14"
+    )
+
+    assert_invalid_dto(result, "2026-08-14", secret="secret-colliding-key")
+
+
+def test_timestamp_projection_source_contains_no_float_epoch_conversion_path():
+    source = inspect.getsource(heart_rate)
+
+    assert "timestamp_ms / 1000" not in source
+    assert "fromtimestamp(" not in source
 
 
 @pytest.mark.parametrize(

@@ -183,6 +183,26 @@ _SUMMARY_FIELDS = {
 }
 _LOCAL_TIME_WARNING = "Local wellness heart-rate time is unavailable for this date."
 _INVALID_DTO_WARNING = "Wellness heart-rate data had an unexpected shape for this date."
+_UTC_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _utc_datetime(timestamp_ms: int) -> datetime:
+    """Convert exact epoch milliseconds without a floating-point round trip."""
+    seconds, milliseconds = divmod(timestamp_ms, 1000)
+    return _UTC_EPOCH + timedelta(seconds=seconds, milliseconds=milliseconds)
+
+
+def _local_datetime(timestamp_ms: int, offset_minutes: int) -> datetime:
+    """Project a validated UTC instant into one fixed Garmin-local offset."""
+    zone = timezone(timedelta(minutes=offset_minutes))
+    return (_utc_datetime(timestamp_ms) + timedelta(minutes=offset_minutes)).replace(tzinfo=zone)
+
+
+def _require_exact_string_keys(raw: dict[Any, Any]) -> None:
+    """Reject non-string keys before any string-key lookup can compare them."""
+    for key in raw:
+        if type(key) is not str:
+            raise InvalidProviderResponse
 
 
 def _summary_facts(raw: dict[Any, Any]) -> dict[str, int | None]:
@@ -245,8 +265,8 @@ def _validate_timestamp(timestamp_ms: Any) -> int:
     if type(timestamp_ms) is not int:
         raise InvalidProviderResponse
     try:
-        datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
-    except (ValueError, OverflowError, OSError):
+        _utc_datetime(timestamp_ms)
+    except OverflowError:
         raise InvalidProviderResponse from None
     return timestamp_ms
 
@@ -264,6 +284,7 @@ def _normalize_day_facts(raw: Any, date_text: str, resolution: str) -> DayFacts:
     if type(raw) is not dict:
         raise InvalidProviderResponse
 
+    _require_exact_string_keys(raw)
     summary = _summary_facts(raw)
     values = raw.get("heartRateValues")
     if values is None:
@@ -288,24 +309,31 @@ def _normalize_day_facts(raw: Any, date_text: str, resolution: str) -> DayFacts:
             indexed_samples.sort(key=lambda item: (item[0], item[1]))
             samples = tuple(item[2] for item in indexed_samples)
 
+    offset_minutes = _local_offset_minutes(raw)
+    if offset_minutes is not None:
+        for sample in samples:
+            try:
+                _local_datetime(sample.timestamp_ms, offset_minutes)
+            except OverflowError:
+                raise InvalidProviderResponse from None
+
     return DayFacts(
         date=date_text,
         summary=summary,
-        offset_minutes=_local_offset_minutes(raw),
+        offset_minutes=offset_minutes,
         samples=samples,
         source_points=source_points,
     )
 
 
 def _utc_iso(timestamp_ms: int) -> str:
-    return datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+    return _utc_datetime(timestamp_ms).isoformat().replace("+00:00", "Z")
 
 
 def _local_iso(timestamp_ms: int, offset_minutes: int | None) -> str | None:
     if offset_minutes is None:
         return None
-    zone = timezone(timedelta(minutes=offset_minutes))
-    return datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).astimezone(zone).isoformat()
+    return _local_datetime(timestamp_ms, offset_minutes).isoformat()
 
 
 def _selected_samples(
@@ -317,12 +345,11 @@ def _selected_samples(
     """Select complete validated samples by a Garmin-local wall-clock window."""
     if start_time is None or end_time is None:
         return samples
-    zone = timezone(timedelta(minutes=offset_minutes))
     selected: list[Sample] = []
     for sample in samples:
-        local_wall_time = datetime.fromtimestamp(
-            sample.timestamp_ms / 1000, timezone.utc
-        ).astimezone(zone).replace(tzinfo=None).time()
+        local_wall_time = _local_datetime(sample.timestamp_ms, offset_minutes).replace(
+            tzinfo=None
+        ).time()
         if start_time <= local_wall_time < end_time:
             selected.append(sample)
     return tuple(selected)
