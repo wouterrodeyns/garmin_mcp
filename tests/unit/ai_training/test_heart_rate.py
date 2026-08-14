@@ -22,6 +22,22 @@ from garmin_mcp.ai_training.heart_rate import (
 from garmin_mcp.ai_training.providers import ProviderResult
 
 
+PUBLIC_ERROR_MESSAGES = {
+    "invalid_start_date": "start_date must be a real calendar date in YYYY-MM-DD format.",
+    "invalid_end_date": "end_date must be null or a real calendar date in YYYY-MM-DD format.",
+    "invalid_date_range": "start_date must be on or before end_date.",
+    "date_range_too_large": "The inclusive date range must contain at most 7 dates.",
+    "invalid_resolution": "resolution must be one of: daily, raw, 5m, 15m, 30m, 60m.",
+    "raw_requires_single_date": "raw resolution requires a single calendar date.",
+    "invalid_time_window": "start_time and end_time must be paired HH:MM values with start_time earlier than end_time; daily resolution does not accept a window.",
+    "request_too_large": "The requested bin count exceeds 1000; shorten the date/time range or use a coarser resolution.",
+    "client_unavailable": "The Garmin client is unavailable.",
+    "wellness_heart_rate_unavailable": "Wellness heart-rate data is unavailable for every requested date.",
+    "raw_response_too_large": "The raw result exceeds 1000 points; narrow the time window or choose a binned resolution.",
+    "response_too_large": "The normalized result exceeds 262144 bytes; narrow the time window or choose a coarser resolution.",
+}
+
+
 @dataclass
 class RecordingClient:
     """A small client fake that makes provider access observable."""
@@ -50,7 +66,7 @@ def assert_envelope(result: dict[str, Any]) -> None:
 def assert_error(result: dict[str, Any], code: str) -> None:
     assert_envelope(result)
     assert result["status"] == "error"
-    assert result["error"] == {"code": code, "message": heart_rate.ERROR_MESSAGES[code]}
+    assert result["error"] == {"code": code, "message": PUBLIC_ERROR_MESSAGES[code]}
     assert result["availability"] == {}
     assert result["days"] == []
     assert result["warnings"] == []
@@ -69,6 +85,10 @@ def test_public_constants_and_stable_envelope_are_pinned():
     result = get_wellness_heart_rate_service(None, "bad-date")
 
     assert_error(result, "invalid_start_date")
+
+
+def test_public_error_messages_match_the_approved_literal_contract():
+    assert heart_rate.ERROR_MESSAGES == PUBLIC_ERROR_MESSAGES
 
 
 @pytest.mark.parametrize(
@@ -199,6 +219,25 @@ def test_exact_seven_day_boundary_is_accepted_when_projected_bins_fit():
     ]
 
 
+def test_oversized_date_range_is_rejected_before_date_list_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    requested_dates_calls: list[tuple[object, object]] = []
+
+    def unexpected_requested_dates(start: object, end: object) -> list[str]:
+        requested_dates_calls.append((start, end))
+        raise AssertionError("oversized ranges must not materialize date strings")
+
+    monkeypatch.setattr(heart_rate, "_requested_dates", unexpected_requested_dates)
+    client = RecordingClient()
+
+    result = get_wellness_heart_rate_service(client, "0001-01-01", "9999-12-31", "daily")
+
+    assert_error(result, "date_range_too_large")
+    assert requested_dates_calls == []
+    assert client.calls == []
+
+
 def test_binned_projection_cap_precedes_client_access(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(heart_rate, "MAX_RETURNED_BINS", 2)
     client = RecordingClient()
@@ -275,7 +314,7 @@ def test_all_failed_provider_dates_return_one_stable_unavailable_error(
     assert result["status"] == "error"
     assert result["error"] == {
         "code": "wellness_heart_rate_unavailable",
-        "message": heart_rate.ERROR_MESSAGES["wellness_heart_rate_unavailable"],
+        "message": PUBLIC_ERROR_MESSAGES["wellness_heart_rate_unavailable"],
     }
     assert result["warnings"] == [
         {"provider": "wellness_heart_rate", "code": "provider_unavailable", "message": "Unavailable", "date": "2026-01-01"},

@@ -114,9 +114,10 @@ def _validate_request(
     if parsed_start > parsed_end:
         return "invalid_date_range", None
 
-    requested_dates = _requested_dates(parsed_start, parsed_end)
-    if len(requested_dates) > MAX_DAYS:
+    requested_day_count = (parsed_end - parsed_start).days + 1
+    if requested_day_count > MAX_DAYS:
         return "date_range_too_large", None
+    requested_dates = _requested_dates(parsed_start, parsed_end)
 
     if type(resolution) is not str or resolution not in RESOLUTIONS:
         return "invalid_resolution", None
