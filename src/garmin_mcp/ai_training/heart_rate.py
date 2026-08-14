@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+import json
 from math import ceil
 from statistics import median
 from typing import Any
@@ -115,6 +116,14 @@ def _error(result: dict[str, Any], code: str) -> dict[str, Any]:
     return result
 
 
+def _global_error(result: dict[str, Any], code: str) -> dict[str, Any]:
+    """Return a global refusal without retaining a partial normalized series."""
+    result["availability"] = {}
+    result["days"] = []
+    result["warnings"] = []
+    return _error(result, code)
+
+
 def _requested_dates(start_date: date, end_date: date) -> list[str]:
     days = (end_date - start_date).days + 1
     return [(start_date + timedelta(days=offset)).isoformat() for offset in range(days)]
@@ -183,6 +192,7 @@ _SUMMARY_FIELDS = {
 }
 _LOCAL_TIME_WARNING = "Local wellness heart-rate time is unavailable for this date."
 _INVALID_DTO_WARNING = "Wellness heart-rate data had an unexpected shape for this date."
+_PROVIDER_UNAVAILABLE_WARNING = "Wellness heart-rate data is unavailable for this date."
 _UTC_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
@@ -336,6 +346,11 @@ def _local_iso(timestamp_ms: int, offset_minutes: int | None) -> str | None:
     return _local_datetime(timestamp_ms, offset_minutes).isoformat()
 
 
+def _utc_datetime_iso(value: datetime) -> str:
+    """Format an aware boundary as the stable UTC-Z public representation."""
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _selected_samples(
     samples: tuple[Sample, ...],
     offset_minutes: int,
@@ -371,13 +386,14 @@ def _sampling(
     source_points: int,
     selected: tuple[Sample, ...],
     resolution: str,
+    returned_points: int,
 ) -> dict[str, int | float | bool | None]:
     if resolution == "daily":
         return {
             "source_points": source_points,
             "valid_bpm_points": None,
             "null_bpm_points": None,
-            "returned_points": 0,
+            "returned_points": returned_points,
             "observed_median_interval_seconds": None,
             "duration_from_sample_count_valid": False,
         }
@@ -387,9 +403,86 @@ def _sampling(
         "source_points": source_points,
         "valid_bpm_points": valid_bpm_points,
         "null_bpm_points": null_bpm_points,
-        "returned_points": len(selected) if resolution == "raw" else 0,
+        "returned_points": returned_points,
         "observed_median_interval_seconds": _median_interval_seconds(selected),
         "duration_from_sample_count_valid": False,
+    }
+
+
+def _binned_points(
+    selected: tuple[Sample, ...], resolution: str, offset_minutes: int
+) -> list[dict[str, str | int | float]]:
+    """Reduce valid selected samples into fixed Garmin-local wall-clock bins."""
+    bin_minutes = BIN_MINUTES[resolution]
+    values_by_start: dict[datetime, list[int]] = {}
+    for sample in selected:
+        if sample.bpm is None:
+            continue
+        local = _local_datetime(sample.timestamp_ms, offset_minutes)
+        local_midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+        local_minute = local.hour * 60 + local.minute
+        start = local_midnight + timedelta(minutes=(local_minute // bin_minutes) * bin_minutes)
+        values_by_start.setdefault(start, []).append(sample.bpm)
+
+    points: list[dict[str, str | int | float]] = []
+    for start in sorted(values_by_start):
+        values = values_by_start[start]
+        end = start + timedelta(minutes=bin_minutes)
+        points.append({
+            "start_time_local": start.isoformat(),
+            "end_time_local": end.isoformat(),
+            "start_time_utc": _utc_datetime_iso(start),
+            "end_time_utc": _utc_datetime_iso(end),
+            "min_bpm": min(values),
+            "mean_bpm": round(sum(values) / len(values), 1),
+            "max_bpm": max(values),
+            "sample_count": len(values),
+        })
+    return points
+
+
+def _gap_points(
+    selected: tuple[Sample, ...], offset_minutes: int | None
+) -> list[dict[str, str | float | None]]:
+    """Describe only observed 300-second-or-longer valid-bpm intervals."""
+    valid_samples = tuple(sample for sample in selected if sample.bpm is not None)
+    gaps: list[dict[str, str | float | None]] = []
+    for previous, current in zip(valid_samples, valid_samples[1:]):
+        elapsed_ms = current.timestamp_ms - previous.timestamp_ms
+        if elapsed_ms < GAP_THRESHOLD_SECONDS * 1000:
+            continue
+        gaps.append({
+            "start_time_local": _local_iso(previous.timestamp_ms, offset_minutes),
+            "end_time_local": _local_iso(current.timestamp_ms, offset_minutes),
+            "start_time_utc": _utc_iso(previous.timestamp_ms),
+            "end_time_utc": _utc_iso(current.timestamp_ms),
+            "elapsed_minutes": round(elapsed_ms / 60_000, 1),
+        })
+    return gaps
+
+
+def _empty_day(date_text: str) -> dict[str, Any]:
+    """Return the fixed no-data schema for one failed requested date."""
+    return {
+        "date": date_text,
+        "available": False,
+        "summary": {
+            "resting_hr_bpm": None,
+            "min_hr_bpm": None,
+            "max_hr_bpm": None,
+            "seven_day_avg_resting_hr_bpm": None,
+        },
+        "time_provenance": {"local_offset_minutes": None, "local_time_available": False},
+        "sampling": {
+            "source_points": 0,
+            "valid_bpm_points": None,
+            "null_bpm_points": None,
+            "returned_points": 0,
+            "observed_median_interval_seconds": None,
+            "duration_from_sample_count_valid": False,
+        },
+        "points": [],
+        "gaps": [],
     }
 
 
@@ -398,21 +491,32 @@ def _day_result(
     resolution: str,
     selected: tuple[Sample, ...],
 ) -> dict[str, Any]:
+    """Build a complete public day from trusted normalized source facts."""
     summary_available = any(value is not None for value in facts.summary.values())
+    if resolution == "raw":
+        points: list[dict[str, Any]] = [
+            {
+                "time_local": _local_iso(sample.timestamp_ms, facts.offset_minutes),
+                "time_utc": _utc_iso(sample.timestamp_ms),
+                "bpm": sample.bpm,
+            }
+            for sample in selected
+        ]
+    elif resolution in BIN_MINUTES:
+        assert facts.offset_minutes is not None
+        points = _binned_points(selected, resolution, facts.offset_minutes)
+    else:
+        points = []
+
     if resolution == "daily":
         available = summary_available
+        gaps: list[dict[str, Any]] = []
     elif resolution == "raw":
         available = bool(selected) or summary_available
+        gaps = _gap_points(selected, facts.offset_minutes)
     else:
-        available = summary_available
-    points = [
-        {
-            "time_local": _local_iso(sample.timestamp_ms, facts.offset_minutes),
-            "time_utc": _utc_iso(sample.timestamp_ms),
-            "bpm": sample.bpm,
-        }
-        for sample in selected
-    ] if resolution == "raw" else []
+        available = bool(points) or summary_available
+        gaps = _gap_points(selected, facts.offset_minutes)
     return {
         "date": facts.date,
         "available": available,
@@ -421,9 +525,9 @@ def _day_result(
             "local_offset_minutes": facts.offset_minutes,
             "local_time_available": facts.offset_minutes is not None,
         },
-        "sampling": _sampling(facts.source_points, selected, resolution),
+        "sampling": _sampling(facts.source_points, selected, resolution, len(points)),
         "points": points,
-        "gaps": [],
+        "gaps": gaps,
     }
 
 
@@ -436,19 +540,9 @@ def _dated_warning(date_text: str, code: str, message: str) -> dict[str, str]:
     }
 
 
-def _append_provider_warnings(
-    result: dict[str, Any], provider_result: ProviderResult, date_text: str
-) -> None:
-    for warning in provider_result.warnings:
-        if not isinstance(warning, dict):
-            continue
-        provider = warning.get("provider")
-        code = warning.get("code")
-        message = warning.get("message")
-        if all(type(value) is str for value in (provider, code, message)):
-            result["warnings"].append(
-                {"provider": provider, "code": code, "message": message, "date": date_text}
-            )
+def _compact_size(result: dict[str, Any]) -> int:
+    """Measure the exact compact UTF-8 wire representation without suppressing errors."""
+    return len(json.dumps(result, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
 
 def get_wellness_heart_rate_service(
@@ -476,16 +570,25 @@ def get_wellness_heart_rate_service(
     failed_dates = 0
     for date_text in dates:
         provider_result = get_wellness_heart_rate_day(client, date_text)
-        result["availability"][date_text] = False
         if provider_result.failed:
             failed_dates += 1
-            _append_provider_warnings(result, provider_result, date_text)
+            day = _empty_day(date_text)
+            result["days"].append(day)
+            result["availability"][date_text] = day["available"]
+            result["warnings"].append(
+                _dated_warning(
+                    date_text, "provider_unavailable", _PROVIDER_UNAVAILABLE_WARNING
+                )
+            )
             continue
 
         try:
             facts = _normalize_day_facts(provider_result.data, date_text, resolution)
         except InvalidProviderResponse:
             failed_dates += 1
+            day = _empty_day(date_text)
+            result["days"].append(day)
+            result["availability"][date_text] = day["available"]
             result["warnings"].append(
                 _dated_warning(date_text, "invalid_provider_response", _INVALID_DTO_WARNING)
             )
@@ -498,6 +601,9 @@ def get_wellness_heart_rate_service(
             )
             if requires_local_time:
                 failed_dates += 1
+                day = _empty_day(date_text)
+                result["days"].append(day)
+                result["availability"][date_text] = day["available"]
                 continue
             selected = facts.samples
         else:
@@ -506,12 +612,11 @@ def get_wellness_heart_rate_service(
             )
 
         if resolution == "raw" and len(selected) > MAX_RAW_POINTS:
-            result["availability"] = {}
-            result["days"] = []
-            result["warnings"] = []
-            return _error(result, "raw_response_too_large")
+            return _global_error(result, "raw_response_too_large")
 
         day = _day_result(facts, resolution, selected)
+        if resolution in BIN_MINUTES and day["sampling"]["returned_points"] > MAX_RETURNED_BINS:
+            return _global_error(result, "request_too_large")
         result["availability"][date_text] = day["available"]
         result["days"].append(day)
 
@@ -519,4 +624,6 @@ def get_wellness_heart_rate_service(
         return _error(result, "wellness_heart_rate_unavailable")
     if failed_dates:
         result["status"] = "partial_success"
+    if _compact_size(result) > MAX_SERIALIZED_BYTES:
+        return _global_error(result, "response_too_large")
     return result

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import inspect
+import json
 from typing import Any
 
 import pytest
@@ -92,6 +93,37 @@ def normalized_warning(date_text: str, code: str, message: str) -> dict[str, str
 
 LOCAL_TIME_WARNING = "Local wellness heart-rate time is unavailable for this date."
 INVALID_DTO_WARNING = "Wellness heart-rate data had an unexpected shape for this date."
+PROVIDER_UNAVAILABLE_WARNING = "Wellness heart-rate data is unavailable for this date."
+
+
+def empty_day(date_text: str) -> dict[str, Any]:
+    """The stable unavailable per-date object required after a failed read."""
+    return {
+        "date": date_text,
+        "available": False,
+        "summary": {
+            "resting_hr_bpm": None,
+            "min_hr_bpm": None,
+            "max_hr_bpm": None,
+            "seven_day_avg_resting_hr_bpm": None,
+        },
+        "time_provenance": {"local_offset_minutes": None, "local_time_available": False},
+        "sampling": {
+            "source_points": 0,
+            "valid_bpm_points": None,
+            "null_bpm_points": None,
+            "returned_points": 0,
+            "observed_median_interval_seconds": None,
+            "duration_from_sample_count_valid": False,
+        },
+        "points": [],
+        "gaps": [],
+    }
+
+
+def utc_ms(minute: int, second: int = 0, day_offset: int = 0) -> int:
+    """Epoch milliseconds from the canonical payload's UTC midnight."""
+    return 1786665600000 + ((day_offset * 24 * 60 + minute) * 60 + second) * 1000
 
 
 def assert_envelope(result: dict[str, Any]) -> None:
@@ -367,9 +399,11 @@ def test_all_failed_provider_dates_return_one_stable_unavailable_error(
         "message": PUBLIC_ERROR_MESSAGES["wellness_heart_rate_unavailable"],
     }
     assert result["warnings"] == [
-        {"provider": "wellness_heart_rate", "code": "provider_unavailable", "message": "Unavailable", "date": "2026-01-01"},
-        {"provider": "wellness_heart_rate", "code": "provider_unavailable", "message": "Unavailable", "date": "2026-01-02"},
+        normalized_warning("2026-01-01", "provider_unavailable", PROVIDER_UNAVAILABLE_WARNING),
+        normalized_warning("2026-01-02", "provider_unavailable", PROVIDER_UNAVAILABLE_WARNING),
     ]
+    assert result["days"] == [empty_day("2026-01-01"), empty_day("2026-01-02")]
+    assert result["availability"] == {"2026-01-01": False, "2026-01-02": False}
 
 
 def test_mixed_provider_results_are_partial_success_and_keep_only_safe_warnings(
@@ -387,9 +421,10 @@ def test_mixed_provider_results_are_partial_success_and_keep_only_safe_warnings(
     assert result["status"] == "partial_success"
     assert result["error"] is None
     assert result["availability"] == {"2026-01-01": False, "2026-01-02": True}
-    assert [day["date"] for day in result["days"]] == ["2026-01-02"]
+    assert [day["date"] for day in result["days"]] == ["2026-01-01", "2026-01-02"]
+    assert result["days"][0] == empty_day("2026-01-01")
     assert result["warnings"] == [
-        {"provider": "wellness_heart_rate", "code": "provider_unavailable", "message": "Unavailable", "date": "2026-01-01"},
+        normalized_warning("2026-01-01", "provider_unavailable", PROVIDER_UNAVAILABLE_WARNING),
     ]
 
 
@@ -579,7 +614,7 @@ def assert_invalid_dto(result: dict[str, Any], date_text: str, secret: str = "")
         "code": "wellness_heart_rate_unavailable",
         "message": PUBLIC_ERROR_MESSAGES["wellness_heart_rate_unavailable"],
     }
-    assert result["days"] == []
+    assert result["days"] == [empty_day(date_text)]
     assert result["warnings"] == [
         normalized_warning(date_text, "invalid_provider_response", INVALID_DTO_WARNING)
     ]
@@ -655,7 +690,8 @@ def test_invalid_date_is_sanitized_and_a_later_valid_date_is_kept():
     assert result["status"] == "partial_success"
     assert result["error"] is None
     assert result["availability"] == {"2026-08-14": False, "2026-08-15": True}
-    assert [day["date"] for day in result["days"]] == ["2026-08-15"]
+    assert [day["date"] for day in result["days"]] == ["2026-08-14", "2026-08-15"]
+    assert result["days"][0] == empty_day("2026-08-14")
     assert result["warnings"] == [
         normalized_warning("2026-08-14", "invalid_provider_response", INVALID_DTO_WARNING)
     ]
@@ -883,7 +919,7 @@ def test_explicit_window_and_binned_modes_fail_date_when_local_time_is_unavailab
         "message": PUBLIC_ERROR_MESSAGES["wellness_heart_rate_unavailable"],
     }
     assert result["availability"] == {"2026-08-14": False}
-    assert result["days"] == []
+    assert result["days"] == [empty_day("2026-08-14")]
     assert result["warnings"] == [
         normalized_warning("2026-08-14", "local_time_unavailable", LOCAL_TIME_WARNING)
     ]
@@ -963,7 +999,7 @@ def test_raw_sampling_counts_and_median_use_selected_sorted_samples_and_positive
                 max_heart_rate=None,
                 seven_day_average=None,
             ),
-            False,
+            True,
         ),
     ],
 )
@@ -978,8 +1014,8 @@ def test_task_three_availability_rules_distinguish_summary_samples_and_empty_day
     assert result["availability"] == {"2026-08-14": expected_available}
     assert result["days"][0]["available"] is expected_available
     if resolution == "5m":
-        assert result["days"][0]["points"] == []
-        assert result["days"][0]["sampling"]["returned_points"] == 0
+        assert result["days"][0]["points"][0]["sample_count"] == 1
+        assert result["days"][0]["sampling"]["returned_points"] == 1
 
 
 def test_internal_normalizer_runtime_error_is_not_sanitized_as_provider_data(
@@ -993,4 +1029,314 @@ def test_internal_normalizer_runtime_error_is_not_sanitized_as_provider_data(
     with pytest.raises(RuntimeError, match="trusted normalizer fault"):
         get_wellness_heart_rate_service(
             RecordingClient(payloads={"2026-08-14": canonical_payload()}), "2026-08-14"
+        )
+
+
+@pytest.mark.parametrize(
+    ("resolution", "start_local", "end_local", "start_utc", "end_utc"),
+    [
+        ("5m", "2026-08-14T02:05:00+02:00", "2026-08-14T02:10:00+02:00", "2026-08-14T00:05:00Z", "2026-08-14T00:10:00Z"),
+        ("15m", "2026-08-14T02:00:00+02:00", "2026-08-14T02:15:00+02:00", "2026-08-14T00:00:00Z", "2026-08-14T00:15:00Z"),
+        ("30m", "2026-08-14T02:00:00+02:00", "2026-08-14T02:30:00+02:00", "2026-08-14T00:00:00Z", "2026-08-14T00:30:00Z"),
+        ("60m", "2026-08-14T02:00:00+02:00", "2026-08-14T03:00:00+02:00", "2026-08-14T00:00:00Z", "2026-08-14T01:00:00Z"),
+    ],
+)
+def test_binned_points_align_to_fixed_garmin_local_boundaries(
+    resolution: str, start_local: str, end_local: str, start_utc: str, end_utc: str,
+):
+    source = [
+        [utc_ms(9), 102],
+        [utc_ms(7, 30), 101],
+        [utc_ms(16), None],
+        [utc_ms(8), 102],
+    ]
+    original = [entry[:] for entry in source]
+
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"2026-08-14": canonical_payload(heart_rate_values=source)}),
+        "2026-08-14",
+        resolution=resolution,
+    )
+
+    point = result["days"][0]["points"][0]
+    assert list(point) == [
+        "start_time_local", "end_time_local", "start_time_utc", "end_time_utc",
+        "min_bpm", "mean_bpm", "max_bpm", "sample_count",
+    ]
+    assert point == {
+        "start_time_local": start_local,
+        "end_time_local": end_local,
+        "start_time_utc": start_utc,
+        "end_time_utc": end_utc,
+        "min_bpm": 101,
+        "mean_bpm": 101.7,
+        "max_bpm": 102,
+        "sample_count": 3,
+    }
+    assert source == original
+
+
+def test_binned_reducer_excludes_nulls_and_empty_bins_and_keeps_deterministic_order():
+    source = [
+        [utc_ms(21), 80],
+        [utc_ms(16), None],
+        [utc_ms(7), 101],
+        [utc_ms(8), 102],
+        [utc_ms(9), 102],
+    ]
+
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"2026-08-14": canonical_payload(heart_rate_values=source)}),
+        "2026-08-14",
+        resolution="5m",
+    )
+
+    points = result["days"][0]["points"]
+    assert [point["start_time_utc"] for point in points] == [
+        "2026-08-14T00:05:00Z", "2026-08-14T00:20:00Z",
+    ]
+    assert points[0]["mean_bpm"] == 101.7
+    assert points[1]["sample_count"] == 1
+    assert result["days"][0]["sampling"] == {
+        "source_points": 5,
+        "valid_bpm_points": 4,
+        "null_bpm_points": 1,
+        "returned_points": 2,
+        "observed_median_interval_seconds": 180,
+        "duration_from_sample_count_valid": False,
+    }
+    forbidden = {"coverage", "zone", "zone_seconds", "duration", "duration_seconds"}
+    assert all(not (set(point) & forbidden) for point in points)
+
+
+def test_binned_availability_uses_bins_or_summary_and_null_only_data_stays_unavailable():
+    no_summary = {
+        "resting_heart_rate": None,
+        "min_heart_rate": None,
+        "max_heart_rate": None,
+        "seven_day_average": None,
+    }
+    client = RecordingClient(payloads={
+        "2026-08-14": canonical_payload(heart_rate_values=[[utc_ms(7), 48]], **no_summary),
+        "2026-08-15": canonical_payload(heart_rate_values=[],),
+        "2026-08-16": canonical_payload(heart_rate_values=[[utc_ms(7), None]], **no_summary),
+    })
+
+    result = get_wellness_heart_rate_service(
+        client, "2026-08-14", "2026-08-16", resolution="5m"
+    )
+
+    by_date = {day["date"]: day for day in result["days"]}
+    assert result["status"] == "success"
+    assert result["availability"] == {
+        "2026-08-14": True, "2026-08-15": True, "2026-08-16": False,
+    }
+    assert by_date["2026-08-14"]["sampling"]["returned_points"] == 1
+    assert by_date["2026-08-15"]["points"] == []
+    assert by_date["2026-08-16"]["sampling"] == {
+        "source_points": 1,
+        "valid_bpm_points": 0,
+        "null_bpm_points": 1,
+        "returned_points": 0,
+        "observed_median_interval_seconds": None,
+        "duration_from_sample_count_valid": False,
+    }
+
+
+@pytest.mark.parametrize("elapsed_seconds", [299, 300, 301])
+def test_raw_gaps_use_only_adjacent_valid_samples_at_the_exact_threshold(elapsed_seconds: int):
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "2026-08-14": canonical_payload(heart_rate_values=[
+                [utc_ms(0), 48], [utc_ms(0, elapsed_seconds), 49],
+            ]),
+        }),
+        "2026-08-14",
+    )
+
+    expected = [] if elapsed_seconds < GAP_THRESHOLD_SECONDS else [{
+        "start_time_local": "2026-08-14T02:00:00+02:00",
+        "end_time_local": f"2026-08-14T02:{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}+02:00",
+        "start_time_utc": "2026-08-14T00:00:00Z",
+        "end_time_utc": f"2026-08-14T00:{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}Z",
+        "elapsed_minutes": round(elapsed_seconds / 60, 1),
+    }]
+    assert result["days"][0]["gaps"] == expected
+
+
+def test_gaps_ignore_nulls_duplicates_and_out_of_order_input_without_inventing_boundaries():
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "2026-08-14": canonical_payload(heart_rate_values=[
+                [utc_ms(5), 51], [utc_ms(0), 48], [utc_ms(2), None], [utc_ms(0), 49],
+            ]),
+        }),
+        "2026-08-14",
+    )
+
+    assert result["days"][0]["gaps"] == [{
+        "start_time_local": "2026-08-14T02:00:00+02:00",
+        "end_time_local": "2026-08-14T02:05:00+02:00",
+        "start_time_utc": "2026-08-14T00:00:00Z",
+        "end_time_utc": "2026-08-14T00:05:00Z",
+        "elapsed_minutes": 5.0,
+    }]
+
+
+def test_gaps_are_calculated_after_window_filtering_and_can_have_unknown_raw_local_time():
+    windowed = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "2026-08-14": canonical_payload(heart_rate_values=[
+                [utc_ms(0), 48], [utc_ms(2), 49], [utc_ms(7), 50], [utc_ms(10), 51],
+            ]),
+        }),
+        "2026-08-14",
+        start_time="02:02",
+        end_time="02:10",
+    )
+    local_unknown = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "2026-08-14": canonical_payload(
+                heart_rate_values=[[utc_ms(0), 48], [utc_ms(5), 49]], startTimestampGMT=None,
+            ),
+        }),
+        "2026-08-14",
+    )
+    daily = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"2026-08-14": canonical_payload()}), "2026-08-14", resolution="daily"
+    )
+
+    assert windowed["days"][0]["gaps"] == [{
+        "start_time_local": "2026-08-14T02:02:00+02:00",
+        "end_time_local": "2026-08-14T02:07:00+02:00",
+        "start_time_utc": "2026-08-14T00:02:00Z",
+        "end_time_utc": "2026-08-14T00:07:00Z",
+        "elapsed_minutes": 5.0,
+    }]
+    assert local_unknown["days"][0]["gaps"][0] == {
+        "start_time_local": None,
+        "end_time_local": None,
+        "start_time_utc": "2026-08-14T00:00:00Z",
+        "end_time_utc": "2026-08-14T00:05:00Z",
+        "elapsed_minutes": 5.0,
+    }
+    assert daily["days"][0]["gaps"] == []
+
+
+def test_failed_dates_keep_fixed_empty_days_warnings_in_date_order_and_later_reads_continue(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[str] = []
+    outcomes = iter((
+        ProviderResult(data=None, failed=True, warnings=({"secret": "provider-token"},)),
+        ProviderResult(data={"heartRateValues": "payload-secret"}),
+        ProviderResult(data=canonical_payload(startTimestampGMT=None)),
+        ProviderResult(data=canonical_payload(heart_rate_values=[[utc_ms(7), 48]])),
+    ))
+
+    def next_outcome(_client: Any, date_text: str) -> ProviderResult:
+        calls.append(date_text)
+        return next(outcomes)
+
+    monkeypatch.setattr(heart_rate, "get_wellness_heart_rate_day", next_outcome)
+    result = get_wellness_heart_rate_service(
+        RecordingClient(), "2026-08-14", "2026-08-17", resolution="60m"
+    )
+
+    assert calls == ["2026-08-14", "2026-08-15", "2026-08-16", "2026-08-17"]
+    assert result["status"] == "partial_success"
+    assert [day["date"] for day in result["days"]] == calls
+    assert result["days"][:3] == [empty_day(date_text) for date_text in calls[:3]]
+    assert result["availability"] == {
+        day["date"]: day["available"] for day in result["days"]
+    }
+    assert result["warnings"] == [
+        normalized_warning("2026-08-14", "provider_unavailable", PROVIDER_UNAVAILABLE_WARNING),
+        normalized_warning("2026-08-15", "invalid_provider_response", INVALID_DTO_WARNING),
+        normalized_warning("2026-08-16", "local_time_unavailable", LOCAL_TIME_WARNING),
+    ]
+    serialized = json.dumps(result, separators=(",", ":"), ensure_ascii=False)
+    assert "provider-token" not in serialized
+    assert "payload-secret" not in serialized
+
+
+def test_all_legitimately_empty_dates_are_a_success_with_complete_unavailable_days():
+    no_summary = {
+        "resting_heart_rate": None,
+        "min_heart_rate": None,
+        "max_heart_rate": None,
+        "seven_day_average": None,
+    }
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "2026-08-14": canonical_payload(heart_rate_values=[], **no_summary),
+            "2026-08-15": canonical_payload(heart_rate_values=[], **no_summary),
+        }),
+        "2026-08-14",
+        "2026-08-15",
+        resolution="daily",
+    )
+
+    assert result["status"] == "success"
+    assert result["error"] is None
+    assert result["availability"] == {"2026-08-14": False, "2026-08-15": False}
+    assert [day["date"] for day in result["days"]] == ["2026-08-14", "2026-08-15"]
+    assert result["warnings"] == []
+
+
+def test_serialized_result_cap_accepts_the_exact_size_and_refuses_one_byte_over(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = RecordingClient(payloads={"2026-08-14": canonical_payload()})
+    baseline = get_wellness_heart_rate_service(client, "2026-08-14")
+    byte_count = len(json.dumps(baseline, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+    monkeypatch.setattr(heart_rate, "MAX_SERIALIZED_BYTES", byte_count)
+    assert get_wellness_heart_rate_service(client, "2026-08-14") == baseline
+
+    monkeypatch.setattr(heart_rate, "MAX_SERIALIZED_BYTES", byte_count - 1)
+    refused = get_wellness_heart_rate_service(client, "2026-08-14")
+    assert_error(refused, "response_too_large")
+
+
+def test_binned_actual_cap_never_silently_truncates_even_when_projection_allows_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(heart_rate, "MAX_RETURNED_BINS", 1)
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "2026-08-14": canonical_payload(heart_rate_values=[
+                [utc_ms(0), 48], [utc_ms(0, day_offset=1), 49],
+            ]),
+        }),
+        "2026-08-14",
+        resolution="5m",
+        start_time="02:00",
+        end_time="02:05",
+    )
+
+    assert_error(result, "request_too_large")
+
+
+@pytest.mark.parametrize("target", ["bin", "gap", "compact", "dumps"])
+def test_local_reducer_and_serializer_runtime_errors_are_not_sanitized(
+    monkeypatch: pytest.MonkeyPatch, target: str,
+):
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(f"trusted {target} fault")
+
+    kwargs: dict[str, Any] = {}
+    if target == "bin":
+        monkeypatch.setattr(heart_rate, "_binned_points", fail, raising=False)
+        kwargs["resolution"] = "5m"
+    elif target == "gap":
+        monkeypatch.setattr(heart_rate, "_gap_points", fail, raising=False)
+    elif target == "compact":
+        monkeypatch.setattr(heart_rate, "_compact_size", fail, raising=False)
+    else:
+        monkeypatch.setattr(heart_rate.json, "dumps", fail)
+
+    with pytest.raises(RuntimeError, match=f"trusted {target} fault"):
+        get_wellness_heart_rate_service(
+            RecordingClient(payloads={"2026-08-14": canonical_payload()}), "2026-08-14", **kwargs
         )
