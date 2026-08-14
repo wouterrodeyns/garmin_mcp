@@ -1242,6 +1242,35 @@ def test_completed_day_offset_mismatch_remains_unavailable_even_when_requested_t
     ]
 
 
+def test_maximum_current_day_local_bound_is_sanitized_when_provisional_end_overflows():
+    payload = provisional_current_day_payload(
+        calendar_date="9999-12-31",
+        start_gmt="9999-12-30T22:00:00.0",
+        start_local="9999-12-31T00:00:00.0",
+        end_gmt="9999-12-31T11:40:00.0",
+        end_local="9999-12-31T00:00:00.0",
+    )
+
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={"9999-12-31": payload}),
+        "9999-12-31",
+        start_time="02:00",
+        end_time="02:05",
+        today=date(9999, 12, 31),
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == {
+        "code": "wellness_heart_rate_unavailable",
+        "message": PUBLIC_ERROR_MESSAGES["wellness_heart_rate_unavailable"],
+    }
+    assert result["availability"] == {"9999-12-31": False}
+    assert result["days"] == [empty_day("9999-12-31", source_points=3)]
+    assert result["warnings"] == [
+        normalized_warning("9999-12-31", "local_time_unavailable", LOCAL_TIME_WARNING)
+    ]
+
+
 def test_injected_today_requires_an_exact_date_instance():
     with pytest.raises(
         TypeError, match=r"^today must be an exact datetime\.date instance or None$"

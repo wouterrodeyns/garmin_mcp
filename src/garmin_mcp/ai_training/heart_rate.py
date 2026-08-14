@@ -306,11 +306,16 @@ def _local_time_provenance(
     end_offset = _whole_minute_offset(end_gmt, end_local)
     if start_offset is not None and start_offset == end_offset:
         return start_offset, "complete_bounds"
+    if date_text != effective_today.isoformat() or start_offset is None:
+        return None, None
+    try:
+        full_day_end_local = start_local + timedelta(days=1)
+        full_day_end_gmt = start_gmt + timedelta(days=1)
+    except OverflowError:
+        return None, None
     if (
-        date_text == effective_today.isoformat()
-        and start_offset is not None
-        and end_local == start_local + timedelta(days=1)
-        and start_gmt <= end_gmt < start_gmt + timedelta(days=1)
+        end_local == full_day_end_local
+        and start_gmt <= end_gmt < full_day_end_gmt
     ):
         return start_offset, "current_day_start_bound"
     return None, None
