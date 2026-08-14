@@ -1318,6 +1318,46 @@ def test_binned_actual_cap_never_silently_truncates_even_when_projection_allows_
     assert_error(result, "request_too_large")
 
 
+def test_binned_actual_cap_is_request_scoped_across_completed_dates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(heart_rate, "MAX_RETURNED_BINS", 4)
+    monkeypatch.setattr(heart_rate, "MAX_SERIALIZED_BYTES", 10_000_000)
+    accepted_client = RecordingClient(payloads={
+        "2026-08-14": canonical_payload(heart_rate_values=[
+            [utc_ms(0, day_offset=0), 48], [utc_ms(0, day_offset=1), 49],
+        ]),
+        "2026-08-15": canonical_payload(heart_rate_values=[
+            [utc_ms(0, day_offset=2), 50], [utc_ms(0, day_offset=3), 51],
+        ]),
+    })
+    rejected_client = RecordingClient(payloads={
+        "2026-08-14": canonical_payload(heart_rate_values=[
+            [utc_ms(0, day_offset=0), 48], [utc_ms(0, day_offset=1), 49],
+        ]),
+        "2026-08-15": canonical_payload(heart_rate_values=[
+            [utc_ms(0, day_offset=2), 50], [utc_ms(0, day_offset=3), 51],
+            [utc_ms(0, day_offset=4), 52],
+        ]),
+    })
+    request = {
+        "start_date": "2026-08-14",
+        "end_date": "2026-08-15",
+        "resolution": "5m",
+        "start_time": "02:00",
+        "end_time": "02:10",
+    }
+
+    accepted = get_wellness_heart_rate_service(accepted_client, **request)
+    rejected = get_wellness_heart_rate_service(rejected_client, **request)
+
+    assert accepted["status"] == "success"
+    assert [day["sampling"]["returned_points"] for day in accepted["days"]] == [2, 2]
+    assert accepted_client.calls == ["2026-08-14", "2026-08-15"]
+    assert_error(rejected, "request_too_large")
+    assert rejected_client.calls == ["2026-08-14", "2026-08-15"]
+
+
 @pytest.mark.parametrize("target", ["bin", "gap", "compact", "dumps"])
 def test_local_reducer_and_serializer_runtime_errors_are_not_sanitized(
     monkeypatch: pytest.MonkeyPatch, target: str,

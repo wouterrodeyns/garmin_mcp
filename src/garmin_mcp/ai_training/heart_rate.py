@@ -568,6 +568,7 @@ def get_wellness_heart_rate_service(
     parsed_end_time = _strict_time(end_time) if end_time is not None else None
     has_window = parsed_start_time is not None and parsed_end_time is not None
     failed_dates = 0
+    returned_bin_count = 0
     for date_text in dates:
         provider_result = get_wellness_heart_rate_day(client, date_text)
         if provider_result.failed:
@@ -619,6 +620,10 @@ def get_wellness_heart_rate_service(
             return _global_error(result, "request_too_large")
         result["availability"][date_text] = day["available"]
         result["days"].append(day)
+        if resolution in BIN_MINUTES:
+            returned_bin_count += day["sampling"]["returned_points"]
+            if returned_bin_count > MAX_RETURNED_BINS:
+                return _global_error(result, "request_too_large")
 
     if failed_dates == len(dates):
         return _error(result, "wellness_heart_rate_unavailable")
