@@ -287,8 +287,31 @@ def _whole_minute_offset(gmt: datetime, local: datetime) -> int | None:
     return minutes if -1439 <= minutes <= 1439 else None
 
 
+def _current_host_time_facts(now: datetime | None) -> tuple[date, int]:
+    """Return the trusted current host date and fixed whole-minute UTC offset."""
+    if now is None:
+        effective_now = datetime.now().astimezone()
+    elif type(now) is datetime:
+        effective_now = now
+    else:
+        raise TypeError("now must be an exact aware datetime with a whole-minute UTC offset")
+
+    offset = effective_now.utcoffset()
+    if type(offset) is not timedelta:
+        raise TypeError("now must be an exact aware datetime with a whole-minute UTC offset")
+    microseconds = (
+        (offset.days * 86_400 + offset.seconds) * 1_000_000 + offset.microseconds
+    )
+    if microseconds % 60_000_000:
+        raise TypeError("now must be an exact aware datetime with a whole-minute UTC offset")
+    minutes = microseconds // 60_000_000
+    if not -1439 <= minutes <= 1439:
+        raise TypeError("now must be an exact aware datetime with a whole-minute UTC offset")
+    return effective_now.date(), minutes
+
+
 def _local_time_provenance(
-    raw: dict[Any, Any], date_text: str, effective_today: date
+    raw: dict[Any, Any], date_text: str, effective_today: date, current_host_offset: int
 ) -> tuple[int | None, str | None]:
     """Resolve complete Garmin bounds, with a narrow current-day start fallback."""
     start_gmt = _parse_naive_bound(raw, "startTimestampGMT")
@@ -306,7 +329,11 @@ def _local_time_provenance(
     end_offset = _whole_minute_offset(end_gmt, end_local)
     if start_offset is not None and start_offset == end_offset:
         return start_offset, "complete_bounds"
-    if date_text != effective_today.isoformat() or start_offset is None:
+    if (
+        date_text != effective_today.isoformat()
+        or start_offset is None
+        or start_offset != current_host_offset
+    ):
         return None, None
     try:
         full_day_end_local = start_local + timedelta(days=1)
@@ -341,7 +368,11 @@ def _validate_bpm(bpm: Any) -> int | None:
 
 
 def _normalize_day_facts(
-    raw: Any, date_text: str, resolution: str, effective_today: date
+    raw: Any,
+    date_text: str,
+    resolution: str,
+    effective_today: date,
+    current_host_offset: int,
 ) -> DayFacts:
     """Copy a strictly valid Garmin DTO into immutable local facts."""
     if type(raw) is not dict:
@@ -376,7 +407,9 @@ def _normalize_day_facts(
             indexed_samples.sort(key=lambda item: (item[0], item[1]))
             samples = tuple(item[2] for item in indexed_samples)
 
-    offset_minutes, local_time_basis = _local_time_provenance(raw, date_text, effective_today)
+    offset_minutes, local_time_basis = _local_time_provenance(
+        raw, date_text, effective_today, current_host_offset
+    )
     if offset_minutes is not None:
         for sample in samples:
             try:
@@ -630,12 +663,10 @@ def get_wellness_heart_rate_service(
     start_time: Any = None,
     end_time: Any = None,
     *,
-    today: date | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Validate and orchestrate bounded daily wellness-HR reads."""
-    if today is not None and type(today) is not date:
-        raise TypeError("today must be an exact datetime.date instance or None")
-    effective_today = date.today() if today is None else today
+    effective_today, current_host_offset = _current_host_time_facts(now)
     result = _base_envelope(start_date, end_date, resolution, start_time, end_time)
     error_code, dates = _validate_request(start_date, end_date, resolution, start_time, end_time)
     if error_code is not None:
@@ -667,7 +698,11 @@ def get_wellness_heart_rate_service(
 
         try:
             facts = _normalize_day_facts(
-                provider_result.data, date_text, resolution, effective_today
+                provider_result.data,
+                date_text,
+                resolution,
+                effective_today,
+                current_host_offset,
             )
         except InvalidProviderResponse:
             failed_dates += 1

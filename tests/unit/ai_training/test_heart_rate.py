@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import inspect
 import json
 from typing import Any
@@ -152,6 +152,13 @@ def empty_day(date_text: str, source_points: int = 0) -> dict[str, Any]:
 def utc_ms(minute: int, second: int = 0, day_offset: int = 0) -> int:
     """Epoch milliseconds from the canonical payload's UTC midnight."""
     return 1786665600000 + ((day_offset * 24 * 60 + minute) * 60 + second) * 1000
+
+
+def aware_now(year: int, month: int, day: int, offset_minutes: int) -> datetime:
+    """Return an explicit fixed-offset host-local instant for time-provenance tests."""
+    return datetime(
+        year, month, day, 12, tzinfo=timezone(timedelta(minutes=offset_minutes))
+    )
 
 
 def assert_envelope(result: dict[str, Any]) -> None:
@@ -913,7 +920,9 @@ def test_raw_cap_applies_after_window_filtering_and_never_returns_partial_points
 
 def test_utc_and_local_time_projection_use_verified_plus_two_hour_offset():
     result = get_wellness_heart_rate_service(
-        RecordingClient(payloads={"2026-08-14": canonical_payload()}), "2026-08-14"
+        RecordingClient(payloads={"2026-08-14": canonical_payload()}),
+        "2026-08-14",
+        now=aware_now(2026, 1, 1, 60),
     )
 
     day = result["days"][0]
@@ -1111,7 +1120,7 @@ def test_current_day_provisional_start_bound_selects_raw_window_in_garmin_local_
         "2026-08-14",
         start_time="02:00",
         end_time="02:03",
-        today=date(2026, 8, 14),
+        now=aware_now(2026, 8, 14, 120),
     )
 
     assert client.calls == ["2026-08-14"]
@@ -1157,7 +1166,7 @@ def test_current_day_provisional_start_bound_aligns_binned_points_in_garmin_loca
         }),
         "2026-08-14",
         resolution="5m",
-        today=date(2026, 8, 14),
+        now=aware_now(2026, 8, 14, 120),
     )
 
     assert result["status"] == "success"
@@ -1181,6 +1190,60 @@ def test_current_day_provisional_start_bound_aligns_binned_points_in_garmin_loca
     ]
 
 
+def test_spring_forward_current_day_start_offset_mismatch_fails_closed():
+    client = RecordingClient(payloads={
+        "2026-03-29": provisional_current_day_payload(
+            calendar_date="2026-03-29",
+            start_gmt="2026-03-28T23:00:00.0",
+            start_local="2026-03-29T00:00:00.0",
+            end_gmt="2026-03-29T11:40:00.0",
+            end_local="2026-03-30T00:00:00.0",
+            # At 01:30 UTC, the stale +01 start offset would label this 02:30.
+            heart_rate_values=[[1774747800000, 48]],
+        ),
+    })
+
+    result = get_wellness_heart_rate_service(
+        client,
+        "2026-03-29",
+        start_time="02:00",
+        end_time="03:00",
+        now=aware_now(2026, 3, 29, 120),
+    )
+
+    assert client.calls == ["2026-03-29"]
+    assert result["status"] == "error"
+    assert result["days"] == [empty_day("2026-03-29", source_points=1)]
+    assert result["warnings"] == [
+        normalized_warning("2026-03-29", "local_time_unavailable", LOCAL_TIME_WARNING)
+    ]
+
+
+def test_fall_back_current_day_start_offset_mismatch_fails_closed():
+    result = get_wellness_heart_rate_service(
+        RecordingClient(payloads={
+            "2026-10-25": provisional_current_day_payload(
+                calendar_date="2026-10-25",
+                start_gmt="2026-10-24T22:00:00.0",
+                start_local="2026-10-25T00:00:00.0",
+                end_gmt="2026-10-25T11:40:00.0",
+                end_local="2026-10-26T00:00:00.0",
+                heart_rate_values=[[1792891800000, 48]],
+            ),
+        }),
+        "2026-10-25",
+        start_time="02:00",
+        end_time="03:00",
+        now=aware_now(2026, 10, 25, 60),
+    )
+
+    assert result["status"] == "error"
+    assert result["days"] == [empty_day("2026-10-25", source_points=1)]
+    assert result["warnings"] == [
+        normalized_warning("2026-10-25", "local_time_unavailable", LOCAL_TIME_WARNING)
+    ]
+
+
 @pytest.mark.parametrize("resolution", ["raw", "5m"])
 def test_noncurrent_incomplete_bounds_keep_source_count_when_local_time_is_required(
     resolution: str,
@@ -1198,7 +1261,7 @@ def test_noncurrent_incomplete_bounds_keep_source_count_when_local_time_is_requi
         RecordingClient(payloads={"2026-08-13": payload}),
         "2026-08-13",
         resolution=resolution,
-        today=date(2026, 8, 14),
+        now=aware_now(2026, 8, 14, 120),
         **kwargs,
     )
 
@@ -1232,7 +1295,7 @@ def test_completed_day_offset_mismatch_remains_unavailable_even_when_requested_t
         "2026-08-14",
         start_time="02:00",
         end_time="02:05",
-        today=date(2026, 8, 14),
+        now=aware_now(2026, 8, 14, 120),
     )
 
     assert result["status"] == "error"
@@ -1256,7 +1319,7 @@ def test_maximum_current_day_local_bound_is_sanitized_when_provisional_end_overf
         "9999-12-31",
         start_time="02:00",
         end_time="02:05",
-        today=date(9999, 12, 31),
+        now=aware_now(9999, 12, 31, 120),
     )
 
     assert result["status"] == "error"
@@ -1271,13 +1334,25 @@ def test_maximum_current_day_local_bound_is_sanitized_when_provisional_end_overf
     ]
 
 
-def test_injected_today_requires_an_exact_date_instance():
+@pytest.mark.parametrize(
+    "now",
+    [
+        date(2026, 8, 14),
+        "2026-08-14",
+        datetime(2026, 8, 14, 12),
+        datetime(2026, 8, 14, 12, tzinfo=timezone(timedelta(seconds=1))),
+    ],
+)
+def test_injected_now_requires_an_exact_aware_datetime_with_whole_minute_offset(now: Any):
+    client = RecordingClient()
     with pytest.raises(
-        TypeError, match=r"^today must be an exact datetime\.date instance or None$"
+        TypeError,
+        match=r"^now must be an exact aware datetime with a whole-minute UTC offset$",
     ):
         get_wellness_heart_rate_service(
-            RecordingClient(), "2026-08-14", today="2026-08-14"
+            client, "2026-08-14", now=now
         )
+    assert client.calls == []
 
 
 def test_raw_sampling_counts_and_median_use_selected_sorted_samples_and_positive_intervals_only():
