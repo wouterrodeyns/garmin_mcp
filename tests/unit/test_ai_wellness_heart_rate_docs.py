@@ -99,7 +99,7 @@ def _docs() -> str:
 
 def _json_examples() -> list[dict[str, object]]:
     blocks = re.findall(r"^```json\s*\n(.*?)^```\s*$", _docs(), re.MULTILINE | re.DOTALL)
-    assert len(blocks) >= 4, "daily, raw, binned, and partial-success examples required"
+    assert len(blocks) >= 5, "daily, raw, binned, partial-success, and global-error examples required"
     values = [json.loads(block) for block in blocks]
     assert all(isinstance(value, dict) for value in values)
     return values  # type: ignore[return-value]
@@ -159,16 +159,31 @@ def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types():
         assert list(example) == TOP_KEYS
         assert example["status"] in {"success", "partial_success", "error"}
         assert list(example["period"]) == PERIOD_KEYS  # type: ignore[arg-type]
+        period = example["period"]
+        assert type(period["start_date"]) is str
+        assert type(period["end_date"]) is str
+        assert period["start_time"] is None or type(period["start_time"]) is str
+        assert period["end_time"] is None or type(period["end_time"]) is str
+        assert type(example["resolution"]) is str
         assert isinstance(example["availability"], dict)
+        assert all(type(value) is bool for value in example["availability"].values())
         assert isinstance(example["days"], list)
         assert isinstance(example["warnings"], list)
         for day in example["days"]:  # type: ignore[union-attr]
             _assert_day_shape(day)
             assert type(day["date"]) is str
             assert type(day["available"]) is bool
+            summary = day["summary"]
+            assert all(value is None or type(value) is int for value in summary.values())
+            provenance = day["time_provenance"]
+            assert provenance["local_offset_minutes"] is None or type(provenance["local_offset_minutes"]) is int
+            assert type(provenance["local_time_available"]) is bool
             sampling = day["sampling"]
             assert type(sampling["source_points"]) is int
+            assert sampling["valid_bpm_points"] is None or type(sampling["valid_bpm_points"]) is int
+            assert sampling["null_bpm_points"] is None or type(sampling["null_bpm_points"]) is int
             assert type(sampling["returned_points"]) is int
+            assert sampling["observed_median_interval_seconds"] is None or type(sampling["observed_median_interval_seconds"]) is float
             assert type(sampling["duration_from_sample_count_valid"]) is bool
             assert sampling["duration_from_sample_count_valid"] is False
             for point in day["points"]:
@@ -179,6 +194,8 @@ def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types():
                     assert point["bpm"] is None or type(point["bpm"]) is int
                 else:
                     assert list(point) == BIN_KEYS
+                    for key in ("start_time_local", "end_time_local", "start_time_utc", "end_time_utc"):
+                        assert point[key] is None or type(point[key]) is str
                     assert type(point["sample_count"]) is int
                     assert type(point["min_bpm"]) is int
                     assert type(point["mean_bpm"]) is float
@@ -186,12 +203,31 @@ def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types():
                     assert "coverage" not in point
             for gap in day["gaps"]:
                 assert list(gap) == GAP_KEYS
+                for key in ("start_time_local", "end_time_local", "start_time_utc", "end_time_utc"):
+                    assert gap[key] is None or type(gap[key]) is str
                 assert type(gap["elapsed_minutes"]) is float
         for warning in example["warnings"]:
             assert list(warning) == ["provider", "date", "code", "message"]
+            assert type(warning["provider"]) is str
+            assert type(warning["date"]) is str
+            assert type(warning["code"]) is str
+            assert type(warning["message"]) is str
             assert warning["provider"] == "wellness_heart_rate"
         if example["error"] is not None:
             assert list(example["error"]) == ["code", "message"]  # type: ignore[arg-type]
+            assert type(example["error"]["code"]) is str  # type: ignore[index]
+            assert type(example["error"]["message"]) is str  # type: ignore[index]
+
+    global_errors = [
+        example
+        for example in examples
+        if example["status"] == "error" and example["availability"] == {}
+    ]
+    assert global_errors, "a global refusal example must have empty date fields"
+    for example in global_errors:
+        assert example["days"] == []
+        assert example["warnings"] == []
+        assert example["error"] is not None
 
 
 def test_guide_covers_nulls_provenance_statuses_and_sync_caveat():
@@ -201,10 +237,14 @@ def test_guide_covers_nulls_provenance_statuses_and_sync_caveat():
         "null bpm",
         "local iso 8601",
         "numeric offset",
-        "utc always",
+        "utc is present for every returned timestamped raw/bin/gap fact",
+        "daily mode is sample-free",
+        "points and gaps are empty",
+        "unwindowed raw may return utc with local null",
+        "bins and explicit windows return an unavailable empty day",
+        "not utc-only bins",
         "local_time_unavailable",
         "offset transition",
-        "daily mode is sample-free",
         "success",
         "partial_success",
         "error",
@@ -215,6 +255,22 @@ def test_guide_covers_nulls_provenance_statuses_and_sync_caveat():
         "does not establish unsupported account/device",
         "fixed",
         "sanitized",
+    ):
+        assert phrase in lower
+    assert "utc always remains available" not in lower
+
+
+def test_guide_distinguishes_per_date_results_from_global_refusals():
+    lower = " ".join(_docs().lower().split())
+    for phrase in (
+        "after provider reads are attempted",
+        "ordinary success and partial_success",
+        "one day and availability boolean per requested date",
+        "dated warnings",
+        "request validation",
+        "client_unavailable",
+        "global raw/bin/output-size refusals",
+        "availability {}, days [], warnings []",
     ):
         assert phrase in lower
 
@@ -288,6 +344,12 @@ def test_current_docs_publish_exact_fifteen_tool_profile_and_no_stale_count():
     profile = re.search(r"^## AI-coach tool profile\s*$([\s\S]*?)(?=^## |\Z)", readme, re.MULTILINE)
     assert profile is not None
     assert set(re.findall(r"^`([^`]+)`$", profile.group(1), re.MULTILINE)) == PROFILE_TOOLS
+    guide_profile = re.search(r"^## AI-coach profile\s*$([\s\S]*?)(?=^## |\Z)", _docs(), re.MULTILINE)
+    assert guide_profile is not None
+    guide_tools = re.findall(r"^`([^`]+)`$", guide_profile.group(1), re.MULTILINE)
+    assert len(guide_tools) == 15
+    assert set(guide_tools) == PROFILE_TOOLS
+    assert set(guide_tools) == TOOL_PROFILES["ai-coach"]
 
 
 def test_current_docs_link_wellness_guide_and_distinguish_activity_evidence():

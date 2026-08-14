@@ -54,7 +54,7 @@ These are product safety limits, not claimed Garmin API limits.
 
 ## Response contract
 
-Every result has the same top-level keys, in this order:
+Every outcome has the same top-level keys, in this order:
 
 ```text
 status, error, period, resolution, availability, days, warnings
@@ -62,9 +62,15 @@ status, error, period, resolution, availability, days, warnings
 
 `status` is `success`, `partial_success`, or `error`. `error` is null or a
 fixed `{code, message}` object. `period` has exactly
-`start_date`, `end_date`, `start_time`, and `end_time`. `availability` has one
-boolean per requested date. Every requested date has a stable day object in
-date order, including failed dates:
+`start_date`, `end_date`, `start_time`, and `end_time`.
+
+After provider reads are attempted, ordinary success and partial_success, and
+an all-date provider/malformed/local-required total failure, retain one day
+and availability boolean per requested date in date order, including failed
+dates, with dated warnings. Request validation, `client_unavailable`, and
+global raw/bin/output-size refusals happen before a per-date result exists and
+return `availability {}`, `days []`, and `warnings []`.
+The global empty envelope is availability {}, days [], warnings [].
 
 ```text
 date, available, summary, time_provenance, sampling, points, gaps
@@ -202,6 +208,23 @@ no claim of continuous coverage. No coverage is reported.
 Failed dates keep the stable empty day. A legitimate empty date is not itself
 a failure: it stays unavailable without fabricated zeros or a provider warning.
 
+### Global refusal
+
+Validation and global size refusals have the same top-level shape but no
+per-date entries:
+
+```json
+{
+  "status": "error",
+  "error": {"code": "invalid_date_range", "message": "start_date must be on or before end_date."},
+  "period": {"start_date": "2026-08-11", "end_date": "2026-08-10", "start_time": null, "end_time": null},
+  "resolution": "raw",
+  "availability": {},
+  "days": [],
+  "warnings": []
+}
+```
+
 ## Interpretation guardrails
 
 Daily summary facts are Garmin-only: `resting_hr_bpm`, `min_hr_bpm`,
@@ -226,15 +249,18 @@ in zone, cardiovascular drift, recovery, stress, or coaching conclusions.
 
 ## Time provenance
 
-When Garmin's daily GMT/local bounds establish one unambiguous numeric offset,
-local ISO 8601 timestamps are returned (for example
-`2026-08-10T19:02:00+02:00`); UTC is always returned as exact `Z` timestamps.
-UTC always remains available even when local provenance is unavailable.
+UTC is present for every returned timestamped raw/bin/gap fact as an exact `Z`
+timestamp. Daily mode is sample-free: points and gaps are empty, so daily
+responses have no timestamps. When Garmin's daily GMT/local bounds establish
+one unambiguous numeric offset, local ISO 8601 timestamps are also returned
+(for example `2026-08-10T19:02:00+02:00`).
 If local provenance is missing, malformed, or contains an offset transition,
-raw/daily responses retain UTC and set local timestamps to null with one
-`local_time_unavailable` warning. Bins and explicit windows cannot use an
-unknown local wall clock: that date is unavailable rather than filtered or
-binned in UTC.
+an unwindowed raw response may return UTC with local timestamps null and one
+`local_time_unavailable` warning. Daily remains sample-free. Binned and
+explicit-window requests cannot use an unknown local wall clock: they return
+an unavailable empty day rather than UTC-only bins.
+Unwindowed raw may return UTC with local null. Bins and explicit windows return
+an unavailable empty day, not UTC-only bins.
 
 ## Statuses, warnings, and missing dates
 
