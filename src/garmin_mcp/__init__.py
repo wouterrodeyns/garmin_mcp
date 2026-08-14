@@ -112,6 +112,7 @@ def _parse_tool_set(value):
 TOOL_PROFILES = {
     "ai-coach": {
         "get_training_context",
+        "get_wellness_heart_rate",
         "analyze_activity",
         "get_activity_timeseries",
         "create_workout",
