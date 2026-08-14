@@ -294,3 +294,20 @@ def get_training_readiness(client: Any, date: str) -> Any:
 
 def get_training_status(client: Any, date: str) -> Any:
     return client.get_training_status(date)
+
+
+def get_wellness_heart_rate_day(client: Any, date: str) -> ProviderResult:
+    """Fetch one daily wellness-HR DTO through the pinned read-only client."""
+    try:
+        data = client.get_heart_rates(date)
+    except Exception:
+        return ProviderResult(
+            data=None,
+            failed=True,
+            warnings=_warning(
+                "wellness_heart_rate",
+                "provider_unavailable",
+                "Wellness heart-rate data is unavailable for this date.",
+            ),
+        )
+    return ProviderResult(data=data)

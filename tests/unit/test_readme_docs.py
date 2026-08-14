@@ -105,6 +105,7 @@ def test_setup_client_config_fences_are_credential_free():
 README_PATH = ROOT / "README.md"
 PROFILE_TOOLS = {
     "get_training_context",
+    "get_wellness_heart_rate",
     "analyze_activity",
     "get_activity_timeseries",
     "create_workout",
@@ -158,10 +159,10 @@ def test_readme_profile_and_filter_contract():
     assert "broad upstream-compatible registration remains available" in lower
 
 
-def test_readme_pins_fourteen_tools_and_in_place_update_semantics():
+def test_readme_pins_fifteen_tools_and_in_place_update_semantics():
     lower = " ".join(_readme().lower().split())
     for expected in (
-        "14-tool surface",
+        "15-tool surface",
         "update_workout",
         "in-place",
         "preserves",

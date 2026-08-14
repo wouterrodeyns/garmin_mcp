@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
+from pydantic import StrictStr
+
+from .heart_rate import get_wellness_heart_rate_service
 from .service import get_training_context_service
 
 
@@ -18,7 +21,7 @@ def configure(client: Any) -> None:
 
 
 def register_tools(app: Any) -> Any:
-    """Register the compact, read-only training-context tool."""
+    """Register compact, read-only AI training tools."""
 
     @app.tool()
     async def get_training_context(days: int = 14) -> str:
@@ -38,5 +41,38 @@ def register_tools(app: Any) -> Any:
         """
         result = get_training_context_service(garmin_client, days)
         return json.dumps(result, indent=2)
+
+    @app.tool()
+    async def get_wellness_heart_rate(
+        start_date: StrictStr,
+        end_date: StrictStr | None = None,
+        resolution: Literal["daily", "raw", "5m", "15m", "30m", "60m"] = "raw",
+        start_time: StrictStr | None = None,
+        end_time: StrictStr | None = None,
+    ) -> str:
+        """Return bounded read-only all-day wellness heart-rate evidence.
+
+        This evidence is fetched explicitly when detailed evidence is needed. Requests
+        cover at most seven dates. Raw mode is limited to one date and refuses
+        results above 1,000 points rather than truncating them.
+        Every returned raw, bin, or gap timestamp includes UTC; local ISO is
+        included only when unambiguous. Samples can be irregular or missing; sample
+        count times cadence is not duration, and this does not establish time in
+        zone. Wellness samples are distinct from FIT activity HR and cannot be
+        assumed to use the same sensor, smoothing, samples, or zones. Gaps have
+        no inferred cause. Bins summarize returned samples, not continuous
+        coverage. Do not infer drift, recovery, stress, or coaching conclusions
+        from this tool alone. Garmin, device, account, and sync availability can
+        vary.
+        """
+        result = get_wellness_heart_rate_service(
+            garmin_client,
+            start_date,
+            end_date,
+            resolution,
+            start_time,
+            end_time,
+        )
+        return json.dumps(result, separators=(",", ":"), ensure_ascii=False)
 
     return app

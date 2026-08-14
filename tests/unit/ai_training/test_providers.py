@@ -24,6 +24,7 @@ from garmin_mcp.ai_training.providers import (
     get_sleep,
     get_training_readiness,
     get_training_status,
+    get_wellness_heart_rate_day,
 )
 
 
@@ -432,3 +433,69 @@ def test_raw_delegates_do_not_catch_exceptions(provider, method, args):
     with pytest.raises(GarminConnectConnectionError, match="pass through"):
         provider(garmin, *args)
     getattr(garmin, method).assert_called_once_with(*args)
+
+
+class WellnessHeartRateClient:
+    def __init__(self, payload: object = None, error: Exception | None = None):
+        self.payload = payload
+        self.error = error
+        self.dates: list[str] = []
+
+    def get_heart_rates(self, date: str) -> object:
+        self.dates.append(date)
+        if self.error is not None:
+            raise self.error
+        return self.payload
+
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"forbidden Garmin access: {name}")
+
+
+def test_wellness_heart_rate_day_uses_only_bounded_one_date_client_method():
+    payload = {"calendarDate": "2026-08-14", "heartRateValues": []}
+    wellness = WellnessHeartRateClient(payload=payload)
+
+    result = get_wellness_heart_rate_day(wellness, "2026-08-14")
+
+    assert result == ProviderResult(data=payload)
+    assert wellness.dates == ["2026-08-14"]
+
+
+def test_wellness_heart_rate_day_sanitizes_provider_exception():
+    wellness = WellnessHeartRateClient(error=RuntimeError("token=private"))
+
+    result = get_wellness_heart_rate_day(wellness, "2026-08-14")
+
+    assert result == ProviderResult(
+        data=None,
+        failed=True,
+        warnings=(
+            {
+                "provider": "wellness_heart_rate",
+                "code": "provider_unavailable",
+                "message": "Wellness heart-rate data is unavailable for this date.",
+            },
+        ),
+    )
+    assert "token=private" not in repr(result)
+    assert wellness.dates == ["2026-08-14"]
+
+
+def test_wellness_heart_rate_day_passes_hostile_payload_through_untouched():
+    class HostilePayload:
+        def __iter__(self):
+            raise AssertionError("payload was iterated")
+
+        def __getitem__(self, key):
+            raise AssertionError(f"payload was indexed: {key}")
+
+        def __len__(self):
+            raise AssertionError("payload length was inspected")
+
+    payload = HostilePayload()
+    wellness = WellnessHeartRateClient(payload=payload)
+
+    result = get_wellness_heart_rate_day(wellness, "2026-08-14")
+
+    assert result.data is payload
+    assert wellness.dates == ["2026-08-14"]

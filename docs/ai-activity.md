@@ -13,6 +13,13 @@ bounded evidence bins. That follow-up is not a replacement for this overview,
 and is a narrow follow-up read. It does not return raw FIT or GPS data, and it
 does not make a coaching judgement.
 
+Wellness heart rate is a separate all-day Garmin wellness evidence source. Use
+[`get_wellness_heart_rate`](ai-wellness-heart-rate.md) for an explicit daily,
+raw, or binned read; do not merge it with this activity's FIT heart-rate
+series, sensor sampling, smoothing, or heart-rate zones. Activity analysis is
+completed-activity/FIT evidence, while wellness evidence remains read-only and
+device/account/sync dependent.
+
 ## Argument, source, and call budget
 
 The only tool argument is `activity_id`: a positive integer or decimal string

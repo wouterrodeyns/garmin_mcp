@@ -15,6 +15,11 @@ short sequence of heart-rate, speed, pace, cadence, power, altitude, or grade
 bins. The time-series read makes no coaching recommendation, comparison, or
 workout mutation.
 
+This is completed-activity FIT evidence, not all-day wellness evidence. Use
+[`get_wellness_heart_rate`](ai-wellness-heart-rate.md) for an explicit Garmin
+wellness heart-rate request; its samples must not be treated as the activity
+sensor series, smoothing, or zones, and the two sources are not merged.
+
 The workflow is literal: analyze_activity(activity_id) first, then use
 get_activity_timeseries only for concrete short interval evidence.
 

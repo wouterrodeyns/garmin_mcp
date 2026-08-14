@@ -22,6 +22,7 @@ SETUP_PATH = ROOT / "docs" / "setup.md"
 
 PROFILE_TOOLS = {
     "get_training_context",
+    "get_wellness_heart_rate",
     "analyze_activity",
     "get_activity_timeseries",
     "create_workout",
