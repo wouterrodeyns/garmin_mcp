@@ -63,7 +63,12 @@ SUMMARY_KEYS = [
     "max_hr_bpm",
     "seven_day_avg_resting_hr_bpm",
 ]
-PROVENANCE_KEYS = ["local_offset_minutes", "local_time_available"]
+PROVENANCE_KEYS = [
+    "local_offset_minutes",
+    "local_time_available",
+    "local_time_basis",
+]
+LOCAL_TIME_BASES = {"complete_bounds", "current_day_start_bound", None}
 SAMPLING_KEYS = [
     "source_points",
     "valid_bpm_points",
@@ -178,6 +183,13 @@ def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types():
             provenance = day["time_provenance"]
             assert provenance["local_offset_minutes"] is None or type(provenance["local_offset_minutes"]) is int
             assert type(provenance["local_time_available"]) is bool
+            basis = provenance["local_time_basis"]
+            assert basis in LOCAL_TIME_BASES
+            assert basis is None or type(basis) is str
+            if provenance["local_time_available"]:
+                assert basis in {"complete_bounds", "current_day_start_bound"}
+            else:
+                assert basis is None
             sampling = day["sampling"]
             assert type(sampling["source_points"]) is int
             assert sampling["valid_bpm_points"] is None or type(sampling["valid_bpm_points"]) is int
@@ -224,6 +236,17 @@ def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types():
             assert type(warning["code"]) is str
             assert type(warning["message"]) is str
             assert warning["provider"] == "wellness_heart_rate"
+            assert warning["code"] in {
+                "provider_unavailable",
+                "invalid_provider_response",
+                "local_time_unavailable",
+                "local_time_provisional",
+            }
+            if warning["code"] == "local_time_provisional":
+                assert warning["message"] == (
+                    "Current-day local wellness heart-rate time uses Garmin's "
+                    "provisional start-bound offset."
+                )
         if example["error"] is not None:
             assert list(example["error"]) == ["code", "message"]  # type: ignore[arg-type]
             assert type(example["error"]["code"]) is str  # type: ignore[index]
@@ -255,6 +278,8 @@ def test_guide_covers_nulls_provenance_statuses_and_sync_caveat():
         "bins and explicit windows return an unavailable empty day",
         "not utc-only bins",
         "local_time_unavailable",
+        "local_time_provisional",
+        "current-day local wellness heart-rate time uses garmin's provisional start-bound offset.",
         "offset transition",
         "success",
         "partial_success",
@@ -288,6 +313,25 @@ def test_guide_distinguishes_per_date_results_from_global_refusals():
     ):
         assert phrase in lower
     assert "before a per-date result exists" not in lower
+
+
+def test_guide_explains_current_day_provenance_safety_and_never_uses_utc_shortcuts():
+    lower = " ".join(_docs().lower().split())
+    for phrase in (
+        "complete agreeing bounds are preferred",
+        "incomplete current day",
+        "garmin's provisional start-bound offset",
+        "matches the mcp host's current local utc offset",
+        "spring/fall",
+        "remote-host mismatch",
+        "fail closed",
+        "conservative, not garmin-authoritative",
+        "never borrows the previous day's offset",
+        "never interprets a requested local window as utc",
+        "one garmin heart-rate read per requested date",
+        "response caps and bin schema do not change",
+    ):
+        assert phrase in lower
 
 
 def test_guide_states_interpretation_guardrails_without_unsupported_inference():
