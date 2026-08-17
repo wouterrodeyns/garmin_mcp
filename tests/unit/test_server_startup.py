@@ -192,6 +192,27 @@ def test_main_rejects_unknown_profile_before_authentication(monkeypatch, capsys)
     authentication.assert_not_called()
 
 
+def test_main_rejects_remote_http_before_authentication(monkeypatch, capsys):
+    authentication = Mock()
+    monkeypatch.setenv("GARMIN_MCP_TRANSPORT", "streamable-http")
+    monkeypatch.setenv("GARMIN_MCP_HOST", "192.168.1.2")
+    monkeypatch.delenv("GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE", raising=False)
+    _clear_tool_filter_environment(monkeypatch)
+    monkeypatch.setattr(garmin_mcp, "init_api", authentication)
+
+    with pytest.raises(SystemExit) as error:
+        garmin_mcp.main()
+
+    assert error.value.code == 1
+    assert capsys.readouterr().err == (
+        "Refusing unauthenticated remote HTTP binding because this server does "
+        "not provide HTTP authentication. Use an authenticating reverse proxy, "
+        "or explicitly set GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE=true to "
+        "accept this danger.\n"
+    )
+    authentication.assert_not_called()
+
+
 def test_main_explicit_allowlist_overrides_unknown_profile(monkeypatch):
     run_calls = []
     monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai_coach")

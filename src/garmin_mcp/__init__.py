@@ -5,6 +5,7 @@ Modular MCP Server for Garmin Connect Data
 import os
 import sys
 import base64
+import ipaddress
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -191,6 +192,23 @@ def _resolve_tool_filters_from_environment():
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
+_HTTP_TRANSPORTS = ("streamable-http", "sse")
+_REMOTE_HTTP_BIND_ERROR = (
+    "Refusing unauthenticated remote HTTP binding because this server does not "
+    "provide HTTP authentication. Use an authenticating reverse proxy, or "
+    "explicitly set GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE=true to accept "
+    "this danger."
+)
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether a host is localhost or a loopback IP literal."""
+    if host.lower() in ("localhost", "localhost."):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class _GarminProxy:
@@ -247,9 +265,19 @@ def _parse_transport_config() -> tuple[str, str, int]:
         )
     # Bind to loopback by default: the HTTP transport performs no authentication,
     # so a 0.0.0.0 default would expose full read/write access to the user's
-    # Garmin account to the whole network. Opt in explicitly with GARMIN_MCP_HOST.
-    http_host = os.getenv("GARMIN_MCP_HOST", "127.0.0.1")
+    # Garmin account to the whole network.
+    http_host = os.getenv("GARMIN_MCP_HOST", "127.0.0.1").strip()
     http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
+    allow_unauthenticated_remote = (
+        os.getenv("GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE", "").strip().lower()
+        in ("true", "1", "yes")
+    )
+    if (
+        transport in _HTTP_TRANSPORTS
+        and not _is_loopback_host(http_host)
+        and not allow_unauthenticated_remote
+    ):
+        raise ValueError(_REMOTE_HTTP_BIND_ERROR)
     return transport, http_host, http_port
 
 
@@ -483,6 +511,7 @@ def main():
     #   GARMIN_MCP_TRANSPORT - stdio (default) | streamable-http | sse
     #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 127.0.0.1)
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
+    #   GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE - dangerous remote HTTP opt-in
     try:
         transport, http_host, http_port = _parse_transport_config()
     except ValueError as exc:

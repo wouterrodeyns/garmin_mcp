@@ -55,3 +55,76 @@ class TestParseTransportConfig:
         with patch.dict(os.environ, {"GARMIN_MCP_PORT": "not-a-number"}):
             with pytest.raises(ValueError):
                 _parse_transport_config()
+
+    @pytest.mark.parametrize("transport", ("streamable-http", "sse"))
+    @pytest.mark.parametrize(
+        "host",
+        ("localhost", "LOCALHOST.", "127.0.0.1", "127.0.0.42", "::1"),
+    )
+    def test_http_transports_accept_loopback_hosts(self, transport, host):
+        with patch.dict(
+            os.environ,
+            {"GARMIN_MCP_TRANSPORT": transport, "GARMIN_MCP_HOST": host},
+            clear=True,
+        ):
+            assert _parse_transport_config() == (transport, host, 8000)
+
+    @pytest.mark.parametrize("transport", ("streamable-http", "sse"))
+    @pytest.mark.parametrize(
+        "host",
+        ("", "   ", "0.0.0.0", "::", "192.168.1.2", "8.8.8.8", "example.com"),
+    )
+    def test_http_transports_reject_nonloopback_hosts_by_default(self, transport, host):
+        with patch.dict(
+            os.environ,
+            {"GARMIN_MCP_TRANSPORT": transport, "GARMIN_MCP_HOST": host},
+            clear=True,
+        ):
+            with pytest.raises(ValueError) as error:
+                _parse_transport_config()
+
+        assert str(error.value) == (
+            "Refusing unauthenticated remote HTTP binding because this server does "
+            "not provide HTTP authentication. Use an authenticating reverse proxy, "
+            "or explicitly set GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE=true to "
+            "accept this danger."
+        )
+
+    @pytest.mark.parametrize("transport", ("streamable-http", "sse"))
+    @pytest.mark.parametrize("override", ("true", " TRUE ", "1", "yes", "YeS"))
+    def test_true_override_allows_remote_http_hosts(self, transport, override):
+        with patch.dict(
+            os.environ,
+            {
+                "GARMIN_MCP_TRANSPORT": transport,
+                "GARMIN_MCP_HOST": " 192.168.1.2 ",
+                "GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE": override,
+            },
+            clear=True,
+        ):
+            assert _parse_transport_config() == (transport, "192.168.1.2", 8000)
+
+    @pytest.mark.parametrize("override", (None, "false", "0", "no", "off", "maybe"))
+    def test_missing_false_or_garbage_override_rejects_remote_http_host(self, override):
+        environment = {
+            "GARMIN_MCP_TRANSPORT": "streamable-http",
+            "GARMIN_MCP_HOST": "192.168.1.2",
+        }
+        if override is not None:
+            environment["GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE"] = override
+
+        with patch.dict(os.environ, environment, clear=True):
+            with pytest.raises(ValueError):
+                _parse_transport_config()
+
+    @pytest.mark.parametrize("override", (None, "false", "true", "garbage"))
+    def test_stdio_ignores_nonloopback_host_regardless_of_override(self, override):
+        environment = {
+            "GARMIN_MCP_TRANSPORT": "stdio",
+            "GARMIN_MCP_HOST": " 0.0.0.0 ",
+        }
+        if override is not None:
+            environment["GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE"] = override
+
+        with patch.dict(os.environ, environment, clear=True):
+            assert _parse_transport_config() == ("stdio", "0.0.0.0", 8000)
