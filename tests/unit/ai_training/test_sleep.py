@@ -583,7 +583,12 @@ class SentinelHostileDict(dict[Any, Any]):
 
     _PRIVATE_URL = "https://private.example/hostile"
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.protocol_attempts: list[str] = []
+
     def _explode(self, protocol: str) -> None:
+        self.protocol_attempts.append(protocol)
         raise RuntimeError(f"token={protocol}-private {self._PRIVATE_URL}")
 
     def __bool__(self) -> bool:
@@ -597,6 +602,15 @@ class SentinelHostileDict(dict[Any, Any]):
 
     def __iter__(self) -> Any:
         self._explode("iteration")
+
+    def items(self) -> Any:
+        self._explode("items")
+
+    def values(self) -> Any:
+        self._explode("values")
+
+    def keys(self) -> Any:
+        self._explode("keys")
 
     def __eq__(self, other: Any) -> bool:
         self._explode("equality")
@@ -612,6 +626,7 @@ def test_sleep_trend_sanitizes_untrusted_failure_sentinels_from_public_results()
     oversized_payload["dailySleepDTO"]["sleepScores"]["overall"]["qualifierKey"] = (
         oversized_qualifier
     )
+    hostile_daily = SentinelHostileDict()
     client = RecordingSleepClient({
         "2026-08-10": complete_sleep_payload("2026-08-10"),
         "2026-08-11": None,
@@ -630,7 +645,7 @@ def test_sleep_trend_sanitizes_untrusted_failure_sentinels_from_public_results()
             },
         },
         "2026-08-16": oversized_payload,
-        "2026-08-17": {"dailySleepDTO": SentinelHostileDict()},
+        "2026-08-17": {"dailySleepDTO": hostile_daily},
     })
 
     result = get_sleep_trend_service(client, 8, today=date(2026, 8, 17))
@@ -658,6 +673,7 @@ def test_sleep_trend_sanitizes_untrusted_failure_sentinels_from_public_results()
     assert len(result["warnings"]) == sum(
         not available for available in result["availability"].values()
     )
+    assert hostile_daily.protocol_attempts == []
 
     serialized = json.dumps(result)
     for sentinel in (
@@ -670,6 +686,9 @@ def test_sleep_trend_sanitizes_untrusted_failure_sentinels_from_public_results()
         "token=get-private",
         "token=length-private",
         "token=iteration-private",
+        "token=items-private",
+        "token=values-private",
+        "token=keys-private",
         "token=equality-private",
         "token=repr-private",
         private_url,
@@ -712,39 +731,56 @@ def test_aggregate_sleep_facts_uses_raw_values_before_rounding_with_per_metric_c
 
 def test_sleep_trend_propagates_normalizer_defects(monkeypatch: pytest.MonkeyPatch) -> None:
     client = RecordingSleepClient({"2026-08-17": complete_sleep_payload()})
+    defect = RuntimeError("normalizer internal defect")
 
     def explode(raw: Any, requested_date: str | None) -> SleepNightFacts | None:
-        raise RuntimeError("internal defect")
+        raise defect
 
     monkeypatch.setattr(sleep_module, "normalize_sleep_night", explode)
-    with pytest.raises(RuntimeError, match="internal defect"):
+    with pytest.raises(RuntimeError) as excinfo:
         get_sleep_trend_service(client, 1, today=date(2026, 8, 17))
+    assert excinfo.value is defect
     assert client.calls == ["2026-08-17"]
 
 
 def test_sleep_trend_propagates_projection_defects(monkeypatch: pytest.MonkeyPatch) -> None:
     client = RecordingSleepClient({"2026-08-17": complete_sleep_payload()})
+    defect = RuntimeError("projection internal defect")
 
     def explode(facts: SleepNightFacts) -> dict[str, Any]:
-        raise RuntimeError("internal defect")
+        raise defect
 
     monkeypatch.setattr(sleep_module, "project_sleep_night", explode)
 
-    with pytest.raises(RuntimeError, match="internal defect"):
+    with pytest.raises(RuntimeError) as excinfo:
         get_sleep_trend_service(client, 1, today=date(2026, 8, 17))
+    assert excinfo.value is defect
     assert client.calls == ["2026-08-17"]
 
 
 def test_sleep_trend_propagates_aggregation_defects(monkeypatch: pytest.MonkeyPatch) -> None:
     client = RecordingSleepClient({"2026-08-17": complete_sleep_payload()})
+    defect = RuntimeError("aggregation internal defect")
 
     def explode(
         facts: list[SleepNightFacts], nights_requested: int
     ) -> dict[str, Any]:
-        raise RuntimeError("internal defect")
+        raise defect
 
     monkeypatch.setattr(sleep_module, "aggregate_sleep_facts", explode)
 
-    with pytest.raises(RuntimeError, match="internal defect"):
+    with pytest.raises(RuntimeError) as excinfo:
         get_sleep_trend_service(client, 1, today=date(2026, 8, 17))
+    assert excinfo.value is defect
+    assert client.calls == ["2026-08-17"]
+
+
+def test_sleep_trend_propagates_unexpected_provider_seam_defects() -> None:
+    defect = RuntimeError("unexpected provider seam defect")
+    client = RecordingSleepClient({"2026-08-17": defect})
+
+    with pytest.raises(RuntimeError) as excinfo:
+        get_sleep_trend_service(client, 1, today=date(2026, 8, 17))
+
+    assert excinfo.value is defect
     assert client.calls == ["2026-08-17"]
