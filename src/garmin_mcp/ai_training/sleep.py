@@ -177,7 +177,11 @@ def get_sleep_trend_service(
     elif type(today) is not date:
         raise TypeError("today must be an exact date")
 
-    dates = [today - timedelta(days=offset) for offset in range(days - 1, -1, -1)]
+    try:
+        oldest_date = today - timedelta(days=days - 1)
+    except OverflowError:
+        raise TypeError("today cannot represent the requested sleep period") from None
+    dates = [oldest_date + timedelta(days=offset) for offset in range(days)]
     date_texts = [item.isoformat() for item in dates]
     period = {"days": days, "start_date": date_texts[0], "end_date": date_texts[-1]}
     if client is None:

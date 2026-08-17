@@ -517,6 +517,38 @@ def test_empty_current_night_is_visible_without_shifting_or_an_extra_read() -> N
     assert result["warnings"] == [{"provider": "sleep", "date": "2026-08-17", "code": "sleep_data_unavailable", "message": SLEEP_WARNINGS["sleep_data_unavailable"]}]
 
 
+def test_all_successful_sleep_nights_return_the_success_envelope() -> None:
+    client = RecordingSleepClient({
+        "2026-08-15": complete_sleep_payload("2026-08-15"),
+        "2026-08-16": complete_sleep_payload("2026-08-16"),
+        "2026-08-17": complete_sleep_payload("2026-08-17"),
+    })
+    result = get_sleep_trend_service(client, 3, today=date(2026, 8, 17))
+
+    assert result["status"] == "success"
+    assert result["error"] is None
+    assert result["availability"] == {
+        "2026-08-15": True, "2026-08-16": True, "2026-08-17": True,
+    }
+    assert [night["date"] for night in result["nights"]] == [
+        "2026-08-15", "2026-08-16", "2026-08-17",
+    ]
+    assert result["warnings"] == []
+    assert client.calls == ["2026-08-15", "2026-08-16", "2026-08-17"]
+
+
+def test_date_min_supports_one_day_but_rejects_an_unrepresentable_period() -> None:
+    client = RecordingSleepClient({"0001-01-01": complete_sleep_payload("0001-01-01")})
+    result = get_sleep_trend_service(client, 1, today=date.min)
+    assert result["status"] == "success"
+    assert client.calls == ["0001-01-01"]
+
+    unavailable_period_client = RecordingSleepClient({})
+    with pytest.raises(TypeError, match="^today cannot represent the requested sleep period$"):
+        get_sleep_trend_service(unavailable_period_client, 2, today=date.min)
+    assert unavailable_period_client.calls == []
+
+
 def test_mixed_sleep_results_continue_and_never_serialize_provider_sentinels() -> None:
     client = RecordingSleepClient({
         "2026-08-15": complete_sleep_payload("2026-08-15"),
