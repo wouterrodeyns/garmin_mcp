@@ -467,7 +467,7 @@ Run:
 uv run pytest -q tests/unit/test_security_defaults.py
 ```
 
-Expected: four tests pass.
+Expected: all security-default tests pass.
 
 - [ ] **Step 5: Commit Task 3**
 
