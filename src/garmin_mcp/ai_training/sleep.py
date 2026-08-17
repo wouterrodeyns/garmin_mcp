@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from math import isfinite
 from typing import Any
+
+from .providers import get_sleep_night
 
 
 DEFAULT_SLEEP_DAYS = 7
 MAX_SLEEP_DAYS = 30
 MAX_SLEEP_TEXT_LENGTH = 64
+
+PUBLIC_SLEEP_ERRORS = {
+    "invalid_days": "days must be an integer from 1 through 30.",
+    "client_unavailable": "Garmin client is unavailable.",
+    "sleep_trend_unavailable": "Sleep trend is unavailable for the requested period.",
+}
+
+SLEEP_WARNINGS = {
+    "sleep_data_unavailable": "Sleep data is unavailable for this date.",
+    "provider_unavailable": "Sleep data could not be retrieved for this date.",
+    "invalid_provider_response": "Sleep data returned an invalid response for this date.",
+}
 
 
 class InvalidSleepResponse(ValueError):
@@ -37,6 +51,189 @@ class SleepNightFacts:
     restless_moments_count: int | None
     average_spo2_percent: int | float | None
     lowest_spo2_percent: int | float | None
+
+
+def empty_sleep_night(date_text: str) -> dict[str, Any]:
+    """Return the stable public representation for an unavailable night."""
+    return {
+        "date": date_text,
+        "available": False,
+        "duration_hours": None,
+        "nap_minutes": None,
+        "score": None,
+        "score_qualifier": None,
+        "stages": {
+            "deep_minutes": None,
+            "light_minutes": None,
+            "rem_minutes": None,
+            "awake_minutes": None,
+        },
+        "resting_hr_bpm": None,
+        "overnight_hrv_ms": None,
+        "average_sleep_stress": None,
+        "awake_count": None,
+        "restless_moments_count": None,
+        "spo2": {"average_percent": None, "lowest_percent": None},
+    }
+
+
+def _minutes(seconds: int | float | None) -> float | None:
+    return None if seconds is None else round(seconds / 60, 1)
+
+
+def _hours(seconds: int | float | None) -> float | None:
+    return None if seconds is None else round(seconds / 3600, 1)
+
+
+def project_sleep_night(facts: SleepNightFacts) -> dict[str, Any]:
+    """Project validated sleep facts into the stable public night DTO."""
+    return {
+        "date": facts.date,
+        "available": True,
+        "duration_hours": _hours(facts.sleep_seconds),
+        "nap_minutes": _minutes(facts.nap_seconds),
+        "score": facts.score,
+        "score_qualifier": facts.score_qualifier,
+        "stages": {
+            "deep_minutes": _minutes(facts.deep_seconds),
+            "light_minutes": _minutes(facts.light_seconds),
+            "rem_minutes": _minutes(facts.rem_seconds),
+            "awake_minutes": _minutes(facts.awake_seconds),
+        },
+        "resting_hr_bpm": facts.resting_hr_bpm,
+        "overnight_hrv_ms": facts.overnight_hrv_ms,
+        "average_sleep_stress": facts.average_sleep_stress,
+        "awake_count": facts.awake_count,
+        "restless_moments_count": facts.restless_moments_count,
+        "spo2": {
+            "average_percent": facts.average_spo2_percent,
+            "lowest_percent": facts.lowest_spo2_percent,
+        },
+    }
+
+
+def _average(values: list[int | float], divisor: int = 1) -> dict[str, int | float | None]:
+    if not values:
+        return {"value": None, "nights": 0}
+    return {"value": round(sum(values) / len(values) / divisor, 1), "nights": len(values)}
+
+
+def aggregate_sleep_facts(
+    facts: list[SleepNightFacts], nights_requested: int
+) -> dict[str, Any]:
+    """Aggregate raw validated values, delaying conversion and rounding."""
+    return {
+        "nights_requested": nights_requested,
+        "nights_available": len(facts),
+        "averages": {
+            "duration_hours": _average(
+                [fact.sleep_seconds for fact in facts if fact.sleep_seconds is not None],
+                3600,
+            ),
+            "score": _average([fact.score for fact in facts if fact.score is not None]),
+            "resting_hr_bpm": _average(
+                [fact.resting_hr_bpm for fact in facts if fact.resting_hr_bpm is not None]
+            ),
+            "overnight_hrv_ms": _average(
+                [fact.overnight_hrv_ms for fact in facts if fact.overnight_hrv_ms is not None]
+            ),
+            "spo2_percent": _average(
+                [fact.average_spo2_percent for fact in facts if fact.average_spo2_percent is not None]
+            ),
+        },
+    }
+
+
+def _warning(date_text: str, code: str) -> dict[str, str]:
+    return {
+        "provider": "sleep",
+        "date": date_text,
+        "code": code,
+        "message": SLEEP_WARNINGS[code],
+    }
+
+
+def _error(code: str) -> dict[str, str]:
+    return {"code": code, "message": PUBLIC_SLEEP_ERRORS[code]}
+
+
+def get_sleep_trend_service(
+    client: Any, days: Any = DEFAULT_SLEEP_DAYS, *, today: date | None = None
+) -> dict[str, Any]:
+    """Read one sleep DTO per requested date and return a stable trend envelope."""
+    if type(days) is not int or days < 1 or days > MAX_SLEEP_DAYS:
+        return {
+            "status": "error",
+            "error": _error("invalid_days"),
+            "period": {"days": None, "start_date": None, "end_date": None},
+            "availability": {},
+            "summary": aggregate_sleep_facts([], 0),
+            "nights": [],
+            "warnings": [],
+        }
+
+    if today is None:
+        today = date.today()
+    elif type(today) is not date:
+        raise TypeError("today must be an exact date")
+
+    dates = [today - timedelta(days=offset) for offset in range(days - 1, -1, -1)]
+    date_texts = [item.isoformat() for item in dates]
+    period = {"days": days, "start_date": date_texts[0], "end_date": date_texts[-1]}
+    if client is None:
+        return {
+            "status": "error",
+            "error": _error("client_unavailable"),
+            "period": period,
+            "availability": {date_text: False for date_text in date_texts},
+            "summary": aggregate_sleep_facts([], days),
+            "nights": [empty_sleep_night(date_text) for date_text in date_texts],
+            "warnings": [],
+        }
+
+    available_facts: list[SleepNightFacts] = []
+    availability: dict[str, bool] = {}
+    nights: list[dict[str, Any]] = []
+    warnings: list[dict[str, str]] = []
+    for date_text in date_texts:
+        provider_result = get_sleep_night(client, date_text)
+        if provider_result.failed:
+            availability[date_text] = False
+            nights.append(empty_sleep_night(date_text))
+            warnings.append(_warning(date_text, "provider_unavailable"))
+            continue
+        try:
+            facts = normalize_sleep_night(provider_result.data, date_text)
+        except InvalidSleepResponse:
+            availability[date_text] = False
+            nights.append(empty_sleep_night(date_text))
+            warnings.append(_warning(date_text, "invalid_provider_response"))
+            continue
+        if facts is None:
+            availability[date_text] = False
+            nights.append(empty_sleep_night(date_text))
+            warnings.append(_warning(date_text, "sleep_data_unavailable"))
+            continue
+        available_facts.append(facts)
+        availability[date_text] = True
+        nights.append(project_sleep_night(facts))
+
+    summary = aggregate_sleep_facts(available_facts, days)
+    if summary["nights_available"] == days:
+        status, error = "success", None
+    elif summary["nights_available"]:
+        status, error = "partial_success", None
+    else:
+        status, error = "error", _error("sleep_trend_unavailable")
+    return {
+        "status": status,
+        "error": error,
+        "period": period,
+        "availability": availability,
+        "summary": summary,
+        "nights": nights,
+        "warnings": warnings,
+    }
 
 
 _MISSING = object()

@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date, datetime
 from math import inf, nan
 from typing import Any
 
 import pytest
+from garminconnect import GarminConnectConnectionError
 
+import garmin_mcp.ai_training.sleep as sleep_module
 from garmin_mcp.ai_training.sleep import (
     DEFAULT_SLEEP_DAYS,
     MAX_SLEEP_DAYS,
     MAX_SLEEP_TEXT_LENGTH,
     InvalidSleepResponse,
+    PUBLIC_SLEEP_ERRORS,
+    SLEEP_WARNINGS,
     SleepNightFacts,
+    aggregate_sleep_facts,
+    empty_sleep_night,
+    get_sleep_trend_service,
     normalize_sleep_night,
+    project_sleep_night,
 )
 
 
@@ -353,3 +362,218 @@ def test_unknown_fields_are_not_retained_or_echoed() -> None:
 
     assert facts == normalized_facts()
     assert "secret" not in repr(facts)
+
+
+class RecordingSleepClient:
+    """A small real provider seam that records sequential Garmin calls."""
+
+    def __init__(self, responses: dict[str, Any]):
+        self.responses = responses
+        self.calls: list[str] = []
+
+    def get_sleep_data(self, date_text: str) -> Any:
+        self.calls.append(date_text)
+        response = self.responses.get(date_text)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def expected_empty_summary(requested: int) -> dict[str, Any]:
+    return {
+        "nights_requested": requested,
+        "nights_available": 0,
+        "averages": {
+            "duration_hours": {"value": None, "nights": 0},
+            "score": {"value": None, "nights": 0},
+            "resting_hr_bpm": {"value": None, "nights": 0},
+            "overnight_hrv_ms": {"value": None, "nights": 0},
+            "spo2_percent": {"value": None, "nights": 0},
+        },
+    }
+
+
+def test_public_sleep_errors_and_empty_night_have_stable_contract() -> None:
+    assert PUBLIC_SLEEP_ERRORS == {
+        "invalid_days": "days must be an integer from 1 through 30.",
+        "client_unavailable": "Garmin client is unavailable.",
+        "sleep_trend_unavailable": "Sleep trend is unavailable for the requested period.",
+    }
+    assert SLEEP_WARNINGS == {
+        "sleep_data_unavailable": "Sleep data is unavailable for this date.",
+        "provider_unavailable": "Sleep data could not be retrieved for this date.",
+        "invalid_provider_response": "Sleep data returned an invalid response for this date.",
+    }
+    assert empty_sleep_night("2026-08-17") == {
+        "date": "2026-08-17", "available": False, "duration_hours": None,
+        "nap_minutes": None, "score": None, "score_qualifier": None,
+        "stages": {"deep_minutes": None, "light_minutes": None, "rem_minutes": None, "awake_minutes": None},
+        "resting_hr_bpm": None, "overnight_hrv_ms": None,
+        "average_sleep_stress": None, "awake_count": None,
+        "restless_moments_count": None,
+        "spo2": {"average_percent": None, "lowest_percent": None},
+    }
+
+
+@pytest.mark.parametrize("invalid_days", [True, False, "7", 0, -1, 31, 1.0, None])
+def test_sleep_trend_rejects_invalid_days_before_client_or_date_reads(invalid_days: Any) -> None:
+    client = RecordingSleepClient({})
+
+    result = get_sleep_trend_service(client, invalid_days, today="not a date")
+
+    assert result == {
+        "status": "error",
+        "error": {"code": "invalid_days", "message": PUBLIC_SLEEP_ERRORS["invalid_days"]},
+        "period": {"days": None, "start_date": None, "end_date": None},
+        "availability": {}, "summary": expected_empty_summary(0), "nights": [], "warnings": [],
+    }
+    assert tuple(result) == ("status", "error", "period", "availability", "summary", "nights", "warnings")
+    assert client.calls == []
+
+
+class _TodaySubclass(date):
+    pass
+
+
+@pytest.mark.parametrize("invalid_today", [datetime(2026, 8, 17), "2026-08-17", _TodaySubclass(2026, 8, 17)])
+def test_sleep_trend_requires_an_exact_date_when_today_is_supplied(invalid_today: Any) -> None:
+    client = RecordingSleepClient({})
+    with pytest.raises(TypeError):
+        get_sleep_trend_service(client, 1, today=invalid_today)
+    assert client.calls == []
+
+
+def test_sleep_trend_uses_default_seven_and_inclusive_chronological_dates() -> None:
+    client = RecordingSleepClient({})
+    result = get_sleep_trend_service(client, today=date(2026, 8, 17))
+
+    assert client.calls == [f"2026-08-{day:02d}" for day in range(11, 18)]
+    assert [night["date"] for night in result["nights"]] == client.calls
+    assert list(result["availability"]) == client.calls
+
+
+def test_sleep_trend_honors_the_thirty_day_bound_without_extra_reads() -> None:
+    client = RecordingSleepClient({})
+    result = get_sleep_trend_service(client, 30, today=date(2026, 8, 17))
+    assert len(client.calls) == 30
+    assert client.calls[0] == "2026-07-19"
+    assert client.calls[-1] == "2026-08-17"
+    assert result["period"] == {"days": 30, "start_date": "2026-07-19", "end_date": "2026-08-17"}
+
+
+def test_sleep_trend_with_no_client_has_a_known_date_envelope_without_reads() -> None:
+    result = get_sleep_trend_service(None, 2, today=date(2026, 8, 17))
+    assert result == {
+        "status": "error",
+        "error": {"code": "client_unavailable", "message": PUBLIC_SLEEP_ERRORS["client_unavailable"]},
+        "period": {"days": 2, "start_date": "2026-08-16", "end_date": "2026-08-17"},
+        "availability": {"2026-08-16": False, "2026-08-17": False},
+        "summary": expected_empty_summary(2),
+        "nights": [empty_sleep_night("2026-08-16"), empty_sleep_night("2026-08-17")],
+        "warnings": [],
+    }
+
+
+def test_project_sleep_night_has_exact_order_and_unit_conversions() -> None:
+    night = project_sleep_night(normalized_facts())
+    assert night == {
+        "date": "2026-08-17", "available": True, "duration_hours": 7.4,
+        "nap_minutes": 15.0, "score": 82, "score_qualifier": "GOOD",
+        "stages": {"deep_minutes": 88.0, "light_minutes": 251.0, "rem_minutes": 105.0, "awake_minutes": 20.0},
+        "resting_hr_bpm": 44, "overnight_hrv_ms": 94,
+        "average_sleep_stress": 14, "awake_count": 3,
+        "restless_moments_count": 12,
+        "spo2": {"average_percent": 96, "lowest_percent": 93},
+    }
+    assert tuple(night) == tuple(empty_sleep_night("2026-08-17"))
+
+
+def test_projected_unavailable_metrics_stay_null_while_valid_zeroes_are_preserved() -> None:
+    night = project_sleep_night(normalized_facts(
+        sleep_seconds=None, nap_seconds=0, score=0, deep_seconds=0,
+        light_seconds=0, rem_seconds=0, awake_seconds=0, resting_hr_bpm=None,
+        overnight_hrv_ms=None, average_sleep_stress=0, awake_count=0,
+        restless_moments_count=0, average_spo2_percent=0, lowest_spo2_percent=0,
+    ))
+    assert night["duration_hours"] is None
+    assert night["resting_hr_bpm"] is None
+    assert night["overnight_hrv_ms"] is None
+    assert night["nap_minutes"] == 0.0
+    assert night["stages"] == {
+        "deep_minutes": 0.0, "light_minutes": 0.0,
+        "rem_minutes": 0.0, "awake_minutes": 0.0,
+    }
+    assert night["score"] == night["average_sleep_stress"] == 0
+    assert night["awake_count"] == night["restless_moments_count"] == 0
+    assert night["spo2"] == {"average_percent": 0, "lowest_percent": 0}
+
+
+def test_empty_current_night_is_visible_without_shifting_or_an_extra_read() -> None:
+    client = RecordingSleepClient({"2026-08-15": complete_sleep_payload("2026-08-15"), "2026-08-16": complete_sleep_payload("2026-08-16"), "2026-08-17": None})
+    result = get_sleep_trend_service(client, 3, today=date(2026, 8, 17))
+    assert client.calls == ["2026-08-15", "2026-08-16", "2026-08-17"]
+    assert result["status"] == "partial_success"
+    assert result["nights"][-1] == empty_sleep_night("2026-08-17")
+    assert result["warnings"] == [{"provider": "sleep", "date": "2026-08-17", "code": "sleep_data_unavailable", "message": SLEEP_WARNINGS["sleep_data_unavailable"]}]
+
+
+def test_mixed_sleep_results_continue_and_never_serialize_provider_sentinels() -> None:
+    client = RecordingSleepClient({
+        "2026-08-15": complete_sleep_payload("2026-08-15"),
+        "2026-08-16": GarminConnectConnectionError("private provider detail"),
+        "2026-08-17": {"dailySleepDTO": {"sleepTimeSeconds": True}, "secret": object()},
+    })
+    result = get_sleep_trend_service(client, 3, today=date(2026, 8, 17))
+    assert client.calls == ["2026-08-15", "2026-08-16", "2026-08-17"]
+    assert result["status"] == "partial_success"
+    assert result["availability"] == {"2026-08-15": True, "2026-08-16": False, "2026-08-17": False}
+    assert result["warnings"] == [
+        {"provider": "sleep", "date": "2026-08-16", "code": "provider_unavailable", "message": SLEEP_WARNINGS["provider_unavailable"]},
+        {"provider": "sleep", "date": "2026-08-17", "code": "invalid_provider_response", "message": SLEEP_WARNINGS["invalid_provider_response"]},
+    ]
+    assert "private provider detail" not in repr(result)
+    assert "object at" not in repr(result)
+
+
+def test_all_unavailable_sleep_nights_preserve_data_and_raise_trend_error() -> None:
+    client = RecordingSleepClient({
+        "2026-08-15": None,
+        "2026-08-16": GarminConnectConnectionError("private"),
+        "2026-08-17": {"dailySleepDTO": {"sleepTimeSeconds": True}},
+    })
+    result = get_sleep_trend_service(client, 3, today=date(2026, 8, 17))
+    assert result["status"] == "error"
+    assert result["error"] == {"code": "sleep_trend_unavailable", "message": PUBLIC_SLEEP_ERRORS["sleep_trend_unavailable"]}
+    assert result["nights"] == [empty_sleep_night("2026-08-15"), empty_sleep_night("2026-08-16"), empty_sleep_night("2026-08-17")]
+    assert [warning["code"] for warning in result["warnings"]] == ["sleep_data_unavailable", "provider_unavailable", "invalid_provider_response"]
+
+
+def test_aggregate_sleep_facts_uses_raw_values_before_rounding_with_per_metric_counts() -> None:
+    assert project_sleep_night(normalized_facts(sleep_seconds=30601))["duration_hours"] == 8.5
+    first = normalized_facts(sleep_seconds=30384, score=0, resting_hr_bpm=1, overnight_hrv_ms=None, average_spo2_percent=0)
+    second = normalized_facts(date="2026-08-16", sleep_seconds=30776, score=1, resting_hr_bpm=2, overnight_hrv_ms=101, average_spo2_percent=1)
+    summary = aggregate_sleep_facts([first, second], 3)
+    assert summary == {
+        "nights_requested": 3, "nights_available": 2,
+        "averages": {
+            "duration_hours": {"value": 8.5, "nights": 2},
+            "score": {"value": 0.5, "nights": 2},
+            "resting_hr_bpm": {"value": 1.5, "nights": 2},
+            "overnight_hrv_ms": {"value": 101.0, "nights": 1},
+            "spo2_percent": {"value": 0.5, "nights": 2},
+        },
+    }
+    assert round((8.4 + 8.5) / 2, 1) == 8.4
+    assert tuple(summary) == ("nights_requested", "nights_available", "averages")
+
+
+def test_sleep_trend_does_not_hide_unexpected_normalization_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = RecordingSleepClient({"2026-08-17": complete_sleep_payload()})
+
+    def explode(raw: Any, requested_date: str | None) -> SleepNightFacts | None:
+        raise RuntimeError("unexpected defect")
+
+    monkeypatch.setattr(sleep_module, "normalize_sleep_night", explode)
+    with pytest.raises(RuntimeError, match="unexpected defect"):
+        get_sleep_trend_service(client, 1, today=date(2026, 8, 17))
+    assert client.calls == ["2026-08-17"]
