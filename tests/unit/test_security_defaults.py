@@ -56,6 +56,16 @@ def test_dockerignore_is_portable_and_preserves_docker_build_inputs():
     assert "/secrets/" in gitignore.read_text().splitlines()
 
 
+def test_dockerfile_describes_explicit_dockerignore_policy():
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+
+    assert "symlinked to .gitignore" not in dockerfile
+    assert (
+        ".dockerignore explicitly excludes local secrets and build artifacts."
+        in dockerfile
+    )
+
+
 def test_stale_dxt_artifacts_are_absent():
     assert not (REPO_ROOT / "garmin-mcp.dxt").exists()
     assert not (REPO_ROOT / "dxt" / "manifest.json").exists()
