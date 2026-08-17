@@ -25,6 +25,7 @@ docs/superpowers/*
 !docs/superpowers/specs/
 !docs/superpowers/plans/
 !docs/ai-workouts.md
+!docs/ai-sleep-trend.md
 .gitignore
 playground/*
 scratch/*

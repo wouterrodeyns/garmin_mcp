@@ -20,6 +20,7 @@ explicit wellness evidence as a separate read:
 | Tool | Role |
 |---|---|
 | [`get_training_context(days=14)`](docs/ai-training.md) | Context eyes: a compact, read-only factual snapshot before making a recommendation. |
+| [`get_sleep_trend(days=7)`](docs/ai-sleep-trend.md) | Explicit, read-only multi-night sleep evidence when the compact snapshot is not enough. |
 | [`get_wellness_heart_rate(...)`](docs/ai-wellness-heart-rate.md) | Explicit, read-only all-day wellness heart-rate evidence when detailed samples are needed. |
 | [`analyze_activity(activity_id)`](docs/ai-activity.md) | Completed-session feedback read: bounded facts for the AI to interpret. |
 | [`get_activity_timeseries(activity_id, ...)`](docs/ai-activity-timeseries.md) | Narrow follow-up evidence read for a concrete short interval; it does not replace the overview. |
@@ -88,10 +89,11 @@ Garmin Connect China, and token recovery, see the
 
 ## AI-coach tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 15-tool surface:
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 16-tool surface:
 
 ```text
 `get_training_context`
+`get_sleep_trend`
 `get_wellness_heart_rate`
 `analyze_activity`
 `get_activity_timeseries`
@@ -143,6 +145,8 @@ AI-facing default.
 
 - [Training context](docs/ai-training.md) documents aggregation windows,
   normalized fields, optional metrics, and structured warning/status behavior.
+- [Sleep trend evidence](docs/ai-sleep-trend.md) documents explicit bounded
+  multi-night sleep facts, visible gaps, denominators, and interpretation limits.
 - [Wellness heart-rate evidence](docs/ai-wellness-heart-rate.md) documents the
   explicit all-day read, bounded raw/binned samples, provenance, and guardrails.
 - [Activity analysis](docs/ai-activity.md) documents the completed-session

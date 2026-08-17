@@ -22,6 +22,7 @@ CURRENT_DOCS = (
 
 PROFILE_TOOLS = {
     "get_training_context",
+    "get_sleep_trend",
     "get_wellness_heart_rate",
     "analyze_activity",
     "get_activity_timeseries",
@@ -398,9 +399,9 @@ def test_guide_pins_read_only_calls_and_explicit_workflow_distinctions():
         assert phrase in lower
 
 
-def test_current_docs_publish_exact_fifteen_tool_profile_and_no_stale_count():
+def test_current_docs_publish_exact_sixteen_tool_profile_and_no_stale_count():
     assert PROFILE_TOOLS == TOOL_PROFILES["ai-coach"]
-    assert len(PROFILE_TOOLS) == 15
+    assert len(PROFILE_TOOLS) == 16
     for path in CURRENT_DOCS:
         text = path.read_text().lower()
         for stale in ("exactly 14", "14-tool", "exact 14", "14 tools"):
@@ -412,7 +413,7 @@ def test_current_docs_publish_exact_fifteen_tool_profile_and_no_stale_count():
     guide_profile = re.search(r"^## AI-coach profile\s*$([\s\S]*?)(?=^## |\Z)", _docs(), re.MULTILINE)
     assert guide_profile is not None
     guide_tools = re.findall(r"^`([^`]+)`$", guide_profile.group(1), re.MULTILINE)
-    assert len(guide_tools) == 15
+    assert len(guide_tools) == 16
     assert set(guide_tools) == PROFILE_TOOLS
     assert set(guide_tools) == TOOL_PROFILES["ai-coach"]
 

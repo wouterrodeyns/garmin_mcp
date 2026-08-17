@@ -371,10 +371,11 @@ analysis for a completed session, and workout writes only after confirmation.
 
 ## AI-coach profile
 
-The exact `ai-coach` profile has 15 names:
+The exact `ai-coach` profile has 16 names:
 
 ```text
 `get_training_context`
+`get_sleep_trend`
 `get_wellness_heart_rate`
 `analyze_activity`
 `get_activity_timeseries`
