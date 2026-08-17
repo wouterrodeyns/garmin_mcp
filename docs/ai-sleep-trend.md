@@ -4,8 +4,10 @@
 coach. It answers questions such as “was poor sleep a one-off or a pattern?”
 by returning bounded nightly facts and request-level averages. It is
 deliberately separate from `get_training_context`: the context tool remains a
-compact current snapshot with the last available night/default fallback, while
-this tool fetches detailed multi-night evidence on demand.
+compact current snapshot. Its sleep/HRV/readiness reads query today, then
+yesterday only when today's response is legitimately empty; failed or
+malformed responses do not trigger that fallback. This tool fetches detailed
+multi-night evidence on demand.
 
 ## Call and date rules
 
@@ -16,7 +18,11 @@ get_sleep_trend(days=7)
 ```
 
 `days` must be an integer from 1 through 30; booleans and numeric strings are
-not accepted. The service uses a fixed inclusive period that ends today, where
+not accepted. At the MCP boundary, StrictInt validation raises MCP ToolError
+for a bool, string, float, or null before the service or Garmin is called. An
+exact integer such as 0 or 31 reaches the service and returns the
+stable invalid_days envelope. The integer 0 or 31 returns the stable invalid_days
+envelope. The service uses a fixed inclusive period that ends today, where
 “today” is the MCP host's local calendar date. A request for seven nights
 ending 2026-08-17 therefore covers 2026-08-11 through 2026-08-17.
 
@@ -28,7 +34,9 @@ the watch synchronizes. The date stays in the requested period either way.
 
 ## Recommended workflow
 
-Use the smallest evidence read that answers the question:
+The three primary coaching roles are context eyes, completed-session feedback,
+and workout hands. Sleep trend and wellness heart-rate are deliberate
+evidence reads that support those roles:
 
 ```text
 get_training_context  -> compact current snapshot
@@ -198,11 +206,13 @@ unavailable, or no requested night is available.
 
 | Situation | `status` | Error code |
 | --- | --- | --- |
-| `days` is outside 1 through 30 or not an integer | `error` | `invalid_days` |
+| MCP `StrictInt` rejects a bool, string, float, or null | `ToolError` before the service | no envelope |
+| Integer `days` is outside 1 through 30 (for example 0 or 31) | `error` | `invalid_days` |
 | No Garmin client is configured | `error` | `client_unavailable` |
 | No requested night is available | `error` | `sleep_trend_unavailable` |
 
-Warnings are sanitized, per-date objects with exactly `provider`, `date`,
+Fixed expected provider failures are converted to fixed, sanitized
+per-date warning codes/messages. Warnings have exactly `provider`, `date`,
 `code`, and `message`. Their fixed codes are:
 
 - `sleep_data_unavailable`: the DTO was legitimately empty or absent;
@@ -211,17 +221,21 @@ Warnings are sanitized, per-date objects with exactly `provider`, `date`,
 - `invalid_provider_response`: a supported field or calendar date was
   malformed or unsafe.
 
-Private exception text, raw responses, URLs, request IDs, tokens, headers, and
-credentials never appear in the response.
+Raw responses and provider exception details are not copied into these fixed
+errors or warnings. Unexpected internal/programming exceptions propagate
+intentionally for diagnosis; the public contract does not promise that those
+unexpected exceptions are sanitized.
 
 ## Read-only and Garmin caveats
 
-The path is read-only. It accesses only `client.get_sleep_data(date)` through
-the existing provider seam, does not invoke another MCP tool, and performs no
-workout, schedule, HTTP, session, authentication, or credential operation.
+The path performs authenticated reads through `client.get_sleep_data(date)` via
+the existing provider seam. It performs no workout or schedule mutations and
+no credential-management operations. This path does not directly access raw
+raw connectapi, garth, session, or HTTP verbs, and it does not invoke another
+MCP tool.
 
-Garmin metric availability varies by device, account, and sync state (and may
-also vary by subscription). A missing metric or night is not evidence that a device or account
+Garmin metric availability varies by device, account, and sync state. A missing
+metric or night is not evidence that a device or account
 cannot support it. Sleep timestamps are not returned because some Garmin
 China/UTC+8 responses have documented local timestamp ambiguity; nightly totals
 do not require that timestamp interpretation. This guide does not replace

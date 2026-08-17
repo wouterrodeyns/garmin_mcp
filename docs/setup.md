@@ -136,7 +136,8 @@ context is the coach's eyes/current context, `analyze_activity` is the
 completed-session feedback overview, and `get_activity_timeseries` is its
 narrow follow-up for concrete short-interval evidence. Workout creation and
 in-place update (`create_workout` and `update_workout`) are the coach's
-hands/write operations. Activity analysis and time-series evidence are
+hands/write operations; `get_sleep_trend` and `get_wellness_heart_rate` are
+deliberate evidence reads for those roles. Activity analysis and time-series evidence are
 read-only and do not replace the low-level `get_activity`
 compatibility/targeted read.
 

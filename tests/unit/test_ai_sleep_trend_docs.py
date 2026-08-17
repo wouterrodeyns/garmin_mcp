@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from pathlib import Path
 
 from garmin_mcp import TOOL_PROFILES
+from garmin_mcp.ai_training.sleep import get_sleep_trend_service
 
 
 ROOT = Path(__file__).parents[2]
@@ -104,6 +106,11 @@ def test_guide_pins_call_bounds_cost_and_interpretation_guardrails() -> None:
         "does not establish causation, readiness, recovery",
         "read-only",
         "sleep timestamps are not returned",
+        "strictint",
+        "mcp toolerror",
+        "bool, string, float, or null",
+        "0 or 31",
+        "invalid_days envelope",
     ):
         assert phrase in lower
 
@@ -166,6 +173,68 @@ def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types() -> None:
             }
 
 
+def test_guide_example_relationships_match_a_seeded_service_envelope() -> None:
+    example = _json_examples()[0]
+    assert example["status"] == "partial_success"
+    assert example["error"] is None
+    period = example["period"]
+    summary = example["summary"]
+    assert summary["nights_requested"] == period["days"]
+    assert len(example["nights"]) == period["days"]
+    assert set(example["availability"]) == {
+        night["date"] for night in example["nights"]
+    }
+    assert summary["nights_available"] == sum(example["availability"].values())
+    assert all(
+        example["availability"][night["date"]] is night["available"]
+        for night in example["nights"]
+    )
+    warning_dates = {warning["date"] for warning in example["warnings"]}
+    assert warning_dates == {
+        night["date"]
+        for night in example["nights"]
+        if night["available"] is False
+    }
+
+    class SeededClient:
+        def get_sleep_data(self, date_text: str) -> dict[str, object]:
+            if date_text == "2026-08-17":
+                return {}
+            first = date_text == "2026-08-15"
+            return {
+                "dailySleepDTO": {
+                    "calendarDate": date_text,
+                    "sleepTimeSeconds": 25_920 if first else 27_360,
+                    "napTimeSeconds": 0 if first else 600,
+                    "deepSleepSeconds": 5_280 if first else 5_520,
+                    "lightSleepSeconds": 15_060 if first else 15_600,
+                    "remSleepSeconds": 6_300 if first else 6_600,
+                    "awakeSleepSeconds": 1_320 if first else 1_440,
+                    "restingHeartRate": 45,
+                    "avgSleepStress": 15 if first else 13,
+                    "awakeCount": 3 if first else 2,
+                    "restlessMomentsCount": 10 if first else 8,
+                    "sleepScores": {
+                        "overall": {
+                            "value": 80 if first else 82,
+                            "qualifierKey": "GOOD",
+                        }
+                    },
+                },
+                "avgOvernightHrv": 91 if first else 93,
+                "wellnessSpO2SleepSummaryDTO": {
+                    "calendarDate": date_text,
+                    "averageSpo2": 96,
+                    "lowestSpo2": 94 if first else 95,
+                },
+            }
+
+    actual = get_sleep_trend_service(
+        SeededClient(), days=3, today=date(2026, 8, 17)
+    )
+    assert actual == example
+
+
 def test_documented_profile_matches_runtime_exactly_and_has_no_stale_count() -> None:
     assert TOOL_PROFILES["ai-coach"] == EXPECTED_PROFILE
     readme = README_PATH.read_text()
@@ -178,10 +247,22 @@ def test_documented_profile_matches_runtime_exactly_and_has_no_stale_count() -> 
     names = re.findall(r"^`([^`]+)`$", profile.group(1), re.MULTILINE)
     assert len(names) == 16
     assert set(names) == TOOL_PROFILES["ai-coach"]
+    setup = (ROOT / "docs" / "setup.md").read_text()
+    setup_profile = re.search(
+        r"The `ai-coach` profile exposes exactly 16 tools:\s*\n\n(.*?)\n\nOther runtime variables",
+        setup,
+        re.DOTALL,
+    )
+    assert setup_profile is not None
+    setup_names = re.findall(r"`([^`]+)`", setup_profile.group(1))
+    assert len(setup_names) == 16
+    assert set(setup_names) == TOOL_PROFILES["ai-coach"]
     combined = "\n".join(path.read_text() for path in PUBLIC_DOC_PATHS).lower()
     assert "15-tool surface" not in combined
     assert "exactly 15 tools" not in combined
     assert "exactly these 15 tools" not in combined
+    for stale in ("14-tool", "exactly 14", "15-tool", "15 tools", "fifteen tools"):
+        assert stale not in combined
 
 
 def test_guide_pins_metrics_units_availability_status_and_read_only_boundary() -> None:
@@ -203,8 +284,23 @@ def test_guide_pins_metrics_units_availability_status_and_read_only_boundary() -
         "invalid_provider_response",
         "device, account, and sync state",
         "does not invoke another mcp tool",
-        "tokens",
-        "credentials",
+        "fixed expected provider failures",
+        "unexpected internal/programming exceptions propagate",
+        "credential-management",
+        "raw connectapi",
+        "garth",
+        "session",
+        "http verbs",
         "china",
     ):
         assert phrase in lower
+
+
+def test_docs_cross_reference_real_schema_validation_and_envelope_tests() -> None:
+    integration = (
+        ROOT / "tests" / "integration" / "test_ai_sleep_trend_tools.py"
+    ).read_text()
+    lower = " ".join(_guide().lower().split())
+    assert "test_get_sleep_trend_rejects_json_invalid_types_before_garmin_reads" in integration
+    assert "strictint validation raises mcp toolerror" in lower
+    assert "integer 0 or 31 returns the stable invalid_days envelope" in lower

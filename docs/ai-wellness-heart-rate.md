@@ -358,12 +358,15 @@ It does not call `connectapi`.
 | Tool | Use |
 | --- | --- |
 | `get_training_context` | Compact automatic context at the start of coaching. |
+| `get_sleep_trend` | Explicit recent multi-night sleep evidence when a pattern question needs it. |
 | `get_wellness_heart_rate` | Explicit all-day wellness heart-rate evidence, with daily/raw/binned resolution. |
 | `analyze_activity` | Facts from a completed Garmin activity/FIT record (completed activity evidence). |
 | `get_activity_timeseries` | Narrow completed-activity/FIT evidence for a concrete interval. |
 | `create_workout` / `update_workout` | Writes only after the user confirms the proposed workout or change; only after user confirmation. |
 
-`get_wellness_heart_rate` is explicit all-day evidence, not automatic context.
+The three primary coaching roles are context, completed-session feedback, and
+workout hands; sleep trend and wellness heart-rate are deliberate evidence
+reads that support those roles. `get_wellness_heart_rate` is explicit all-day evidence, not automatic context.
 `analyze_activity` and `get_activity_timeseries` provide completed activity/FIT evidence.
 Use the smallest evidence read that answers the question: context first,
 wellness only when detailed all-day heart rate is explicitly needed, activity

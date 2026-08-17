@@ -157,6 +157,37 @@ async def test_get_sleep_trend_rejects_json_booleans_before_garmin_reads(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("days", ["7", 7.0, None])
+async def test_get_sleep_trend_rejects_json_invalid_types_before_garmin_reads(
+    days: object,
+):
+    client = ReadOnlySleepClient()
+    app = registered_app(client)
+
+    with pytest.raises(ToolError, match="days"):
+        await app.call_tool("get_sleep_trend", {"days": days})
+
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("days", [0, 31])
+async def test_get_sleep_trend_returns_invalid_days_envelope_for_integer_bounds(
+    days: int,
+):
+    client = ReadOnlySleepClient()
+    app = registered_app(client)
+
+    payload = json.loads(
+        response_text(await app.call_tool("get_sleep_trend", {"days": days}))
+    )
+
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "invalid_days"
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_get_sleep_trend_description_states_period_cost_and_interpretation_limits():
     app = registered_app(None)
     tool = next(tool for tool in await app.list_tools() if tool.name == "get_sleep_trend")

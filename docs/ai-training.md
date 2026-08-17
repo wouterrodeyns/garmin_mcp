@@ -240,14 +240,14 @@ Warnings never include raw Garmin responses, tokens, or credentials.
 
 ## AI-coach profile and workflow
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 16 tools. The four
-high-level coaching roles are context eyes (`get_training_context`),
-explicit recent multi-night sleep evidence (`get_sleep_trend`),
-explicit all-day wellness evidence (`get_wellness_heart_rate`),
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 16 tools. The three
+primary coaching roles are context eyes (`get_training_context`),
 completed-session feedback (`analyze_activity`, with the narrow
-`get_activity_timeseries` follow-up for concrete short-interval evidence), and workout hands
-(`create_workout` plus in-place `update_workout`). The full profile also
-preserves compatibility for focused reads and calendar operations:
+`get_activity_timeseries` follow-up for concrete short-interval evidence), and
+workout hands (`create_workout` plus in-place `update_workout`). Deliberate
+sleep-trend (`get_sleep_trend`) and all-day wellness-heart-rate
+(`get_wellness_heart_rate`) reads provide evidence for those roles. The full
+profile also preserves compatibility for focused reads and calendar operations:
 
 The compact snapshot does not imply a multi-night sleep pattern. The workflow
 is `get_training_context` for the current snapshot, then an explicit

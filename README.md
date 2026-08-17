@@ -9,13 +9,14 @@ installed from
 
 It uses the unofficial
 [python-garminconnect](https://github.com/cyberjunky/python-garminconnect)
-client. Garmin data and metric availability vary by account, device,
-subscription, and sync state.
+client. Garmin data and metric availability vary by account, device, and sync
+state.
 
 ## Designed AI-coach workflow
 
-The recommended experience centers on three high-level coaching roles, with
-explicit wellness evidence as a separate read:
+The recommended experience centers on three primary coaching roles (context,
+completed-session feedback, and workout hands), with deliberate sleep and
+wellness evidence reads:
 
 | Tool | Role |
 |---|---|
