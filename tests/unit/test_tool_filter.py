@@ -102,9 +102,10 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
 
     assert enabled == TOOL_PROFILES["ai-coach"]
     assert disabled == set()
-    assert len(enabled) == 15
+    assert len(enabled) == 16
     assert enabled == {
         "get_training_context",
+        "get_sleep_trend",
         "get_wellness_heart_rate",
         "analyze_activity",
         "get_activity_timeseries",

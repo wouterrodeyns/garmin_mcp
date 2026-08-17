@@ -209,6 +209,7 @@ def test_main_registers_exact_ai_coach_profile(monkeypatch):
 
     assert run_calls == [{
         "get_training_context",
+        "get_sleep_trend",
         "get_wellness_heart_rate",
         "analyze_activity",
         "get_activity_timeseries",
@@ -242,6 +243,7 @@ def test_ai_coach_profile_equals_actual_registered_tool_names(monkeypatch):
 
     assert run_calls == [{
         "get_training_context",
+        "get_sleep_trend",
         "get_wellness_heart_rate",
         "analyze_activity",
         "get_activity_timeseries",
@@ -257,7 +259,7 @@ def test_ai_coach_profile_equals_actual_registered_tool_names(monkeypatch):
         "unschedule_workout",
         "delete_workout",
     }]
-    assert len(run_calls[0]) == 15
+    assert len(run_calls[0]) == 16
     assert run_calls[0] == garmin_mcp.TOOL_PROFILES["ai-coach"]
     assert "get_activity_fit_data" not in run_calls[0]
     assert "move_workout" not in run_calls[0]
