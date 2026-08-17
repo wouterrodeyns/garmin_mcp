@@ -199,6 +199,58 @@ def test_mismatched_and_disagreeing_calendar_dates_are_rejected() -> None:
         normalize_sleep_night(payload, None)
 
 
+_INVALID_CALENDAR_DATES = ("not-a-date", "2026-02-30", "2026-8-7")
+
+
+@pytest.mark.parametrize("invalid_date", _INVALID_CALENDAR_DATES)
+@pytest.mark.parametrize("source", ["dailySleepDTO", "wellnessSpO2SleepSummaryDTO"])
+def test_invalid_source_calendar_dates_are_rejected_when_requested_date_matches(
+    source: str, invalid_date: str
+) -> None:
+    payload = complete_sleep_payload()
+    payload[source]["calendarDate"] = invalid_date
+    other_source = (
+        "wellnessSpO2SleepSummaryDTO"
+        if source == "dailySleepDTO"
+        else "dailySleepDTO"
+    )
+    payload[other_source] = None
+
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(payload, invalid_date)
+
+
+@pytest.mark.parametrize("invalid_date", _INVALID_CALENDAR_DATES)
+@pytest.mark.parametrize("source", ["dailySleepDTO", "wellnessSpO2SleepSummaryDTO"])
+def test_invalid_source_calendar_dates_are_rejected_without_requested_date(
+    source: str, invalid_date: str
+) -> None:
+    payload = complete_sleep_payload()
+    payload[source]["calendarDate"] = invalid_date
+    other_source = (
+        "wellnessSpO2SleepSummaryDTO"
+        if source == "dailySleepDTO"
+        else "dailySleepDTO"
+    )
+    payload[other_source] = None
+
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(payload, None)
+
+
+class _DateSubclass(str):
+    pass
+
+
+@pytest.mark.parametrize(
+    "requested_date",
+    ["not-a-date", "2026-02-30", "2026-8-7", 17, _DateSubclass("2026-08-17")],
+)
+def test_requested_date_must_be_an_exact_canonical_iso_date(requested_date: Any) -> None:
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night({"avgOvernightHrv": 94}, requested_date)
+
+
 class _PrivateDictError(RuntimeError):
     pass
 

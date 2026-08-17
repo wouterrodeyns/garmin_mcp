@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from math import isfinite
 from typing import Any
 
@@ -81,13 +82,24 @@ def _optional_count(parent: dict[Any, Any], key: str) -> int | None:
     return value
 
 
+def _canonical_date(value: Any) -> str:
+    """Return an exact canonical ISO calendar date from untrusted text."""
+    if type(value) is not str:
+        raise InvalidSleepResponse
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        raise InvalidSleepResponse from None
+    if parsed.isoformat() != value:
+        raise InvalidSleepResponse
+    return value
+
+
 def _calendar_date(parent: dict[Any, Any]) -> str | None:
     value = parent.get("calendarDate", _MISSING)
     if value is _MISSING:
         return None
-    if type(value) is not str:
-        raise InvalidSleepResponse
-    return value
+    return _canonical_date(value)
 
 
 def _qualifier(overall: dict[Any, Any]) -> str | None:
@@ -133,6 +145,8 @@ def normalize_sleep_night(raw: Any, requested_date: str | None) -> SleepNightFac
     if len(raw) == 0:
         return None
     _require_string_keys(raw)
+    if requested_date is not None:
+        requested_date = _canonical_date(requested_date)
 
     daily = _optional_dict(raw, "dailySleepDTO")
     scores = _optional_dict(daily, "sleepScores")
