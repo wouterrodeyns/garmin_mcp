@@ -171,7 +171,9 @@ and MCP Inspector. HTTP deployments use:
 GARMIN_MCP_TRANSPORT=streamable-http garmin-mcp
 ```
 
-HTTP clients connect to `/mcp`; `GET /healthz` provides liveness/readiness.
+Streamable-http clients connect to `/mcp`; SSE clients connect to `/sse`. The
+SSE message endpoint is protocol-managed at `/messages/`. `GET /healthz`
+provides liveness/readiness.
 Loopback hosts are allowed for `streamable-http` and `sse`; by default, the
 server refuses non-loopback binds. The MCP server does not authenticate its HTTP
 endpoint. `GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE=true` is a dangerous
@@ -185,6 +187,16 @@ Docker credentials and file secrets are for non-interactive deployments and
 require appropriate secret management; they are not Claude Desktop configuration.
 Prefer persisted tokens created through interactive authentication when
 practical.
+
+The Docker commands below are local/container stdio examples; they do not
+expose a reachable network service. The image defaults to stdio and these
+examples publish no HTTP port. Credentials and tokens must be provisioned before
+container start using a persisted token volume or managed secrets.
+
+An HTTP container deployment requires explicit transport/host acknowledgement
+and must run behind an authenticating reverse proxy. Set the transport and host
+explicitly for that deployment and apply the remote acknowledgement only with
+that proxy protection.
 
 Start the included Compose deployment and inspect its logs with:
 

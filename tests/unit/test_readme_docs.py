@@ -105,11 +105,30 @@ def test_setup_transport_section_pins_fail_closed_remote_http_defaults():
     )
     assert "streamable-http" in transport
     assert "sse" in transport
+    assert "streamable-http clients connect to /mcp" in transport
+    assert "sse clients connect to /sse" in transport
+    assert "sse message endpoint is protocol-managed at /messages/" in transport
+    assert not re.search(r"(?:^|[.;]\s*)http clients connect to /mcp", transport)
     assert "refuses non-loopback" in transport
     assert "garmin_mcp_allow_unauthenticated_remote=true" in transport
     assert "does not add auth" in transport
     assert "only behind an authenticating reverse proxy" in transport
     assert "0.0.0.0 requires the same explicit override" in transport
+
+
+def test_setup_docker_section_describes_local_stdio_and_safe_http_provisioning():
+    docker = " ".join(
+        _section(_setup(), "Docker and non-interactive deployments").lower().split()
+    ).replace("`", "")
+    assert "local/container stdio examples" in docker
+    assert "do not expose a reachable network service" in docker
+    assert "credentials and tokens must be provisioned before container start" in docker
+    assert (
+        "http container deployment requires explicit transport/host acknowledgement"
+        in docker
+    )
+    assert "behind an authenticating reverse proxy" in docker
+    assert "0.0.0.0" not in docker
 
 
 def test_setup_client_config_fences_are_credential_free():

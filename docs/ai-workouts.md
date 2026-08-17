@@ -134,7 +134,9 @@ Typical concise responses are:
 
 ## The `ai-coach` tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 16 tools:
+ai-coach is the default profile when `GARMIN_TOOL_PROFILE` is unset or empty.
+Set `GARMIN_TOOL_PROFILE=ai-coach` explicitly when documenting that intent. The
+profile exposes exactly these 16 tools:
 
 1. `get_training_context`
 2. `get_sleep_trend`
@@ -153,11 +155,18 @@ Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 16 tools:
 15. `unschedule_workout`
 16. `delete_workout`
 
-Profile precedence is explicit: an explicitly configured
-`GARMIN_ENABLED_TOOLS` allowlist overrides the profile; otherwise a profile
-starts with its exact list and subtracts `GARMIN_DISABLED_TOOLS`. With the
-profile unset, the default remains full upstream tool registration. The
-`ai-coach` profile intentionally hides raw `upload_workout`, bulk
+Profile precedence is explicit:
+
+1. A non-empty `GARMIN_ENABLED_TOOLS` allowlist wins; the selected profile and
+   denylist are both ignored while the explicit allowlist is active.
+2. Without an explicit allowlist, `GARMIN_DISABLED_TOOLS` subtracts tools from
+   the selected or default profile.
+3. Otherwise, the selected profile controls registration. Full upstream tool
+   registration is an explicit choice: complete upstream-compatible registration
+   requires explicitly setting `GARMIN_TOOL_PROFILE=upstream-full`.
+4. When `GARMIN_TOOL_PROFILE` is unset or empty, `ai-coach` applies by default.
+
+The `ai-coach` profile intentionally hides raw `upload_workout`, bulk
 `upload_workouts`, and unrelated health, nutrition, device, and management
 tools. `analyze_activity` remains the first/default activity overview;
 `get_activity_timeseries` is a narrow follow-up evidence read, documented in
@@ -251,6 +260,6 @@ coach's hands/write operations after confirmation.
 ## Upstream compatibility
 
 The new `ai_workouts` package is a minimal workouts seam. Existing
-authentication and default registration remain unchanged, as do unrelated
-upstream tools; adopting the feature is additive unless
-`GARMIN_TOOL_PROFILE` is set.
+authentication and unrelated upstream tools remain available through the
+explicit `GARMIN_TOOL_PROFILE=upstream-full` profile; adopting the feature is
+additive.
