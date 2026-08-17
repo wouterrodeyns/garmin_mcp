@@ -141,6 +141,15 @@ def test_explicit_enabled_tools_override_profile_and_disabled_tools():
     assert disabled == set()
 
 
+@pytest.mark.parametrize("enabled_value", [",", ",,  ,", " , , "])
+def test_nonblank_allowlist_without_tool_names_is_rejected(enabled_value):
+    with pytest.raises(
+        ValueError,
+        match="^GARMIN_ENABLED_TOOLS must contain at least one tool name$",
+    ):
+        _resolve_tool_filters("upstream-full", enabled_value, None)
+
+
 def test_ai_coach_profile_subtracts_disabled_tools():
     enabled, disabled = _resolve_tool_filters(
         "AI-COACH", None, " GET_WORKOUTS, analyze_activity "

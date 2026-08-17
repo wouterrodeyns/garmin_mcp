@@ -149,6 +149,8 @@ def _resolve_tool_filters(profile_value, enabled_value, disabled_value):
     explicit_enabled = _parse_tool_set(enabled_value)
     if explicit_enabled:
         return explicit_enabled, set()
+    if enabled_value is not None and enabled_value.strip():
+        raise ValueError("GARMIN_ENABLED_TOOLS must contain at least one tool name")
 
     disabled = _parse_tool_set(disabled_value)
     profile_name = _normalized_profile_name(profile_value)

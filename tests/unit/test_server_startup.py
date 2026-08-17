@@ -87,6 +87,25 @@ def test_main_registers_normalized_upstream_full_profile(monkeypatch, capsys):
     assert "Tool filter: full upstream-compatible tool surface active." in capsys.readouterr().err
 
 
+def test_main_rejects_empty_explicit_allowlist_before_authentication(monkeypatch, capsys):
+    authentication = Mock()
+    _set_safe_stdio_transport_environment(monkeypatch)
+    monkeypatch.setenv("GARMIN_TOOL_PROFILE", "upstream-full")
+    monkeypatch.setenv("GARMIN_ENABLED_TOOLS", ",,  ,")
+    monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
+    monkeypatch.setattr(garmin_mcp, "init_api", authentication)
+
+    with pytest.raises(SystemExit) as error:
+        garmin_mcp.main()
+
+    assert error.value.code == 1
+    assert (
+        capsys.readouterr().err
+        == "GARMIN_ENABLED_TOOLS must contain at least one tool name\n"
+    )
+    authentication.assert_not_called()
+
+
 def test_main_configures_and_registers_ai_workouts(monkeypatch):
     configured = []
     registered = []
