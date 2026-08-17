@@ -144,16 +144,24 @@ Only these verified fields cross the abstraction boundary:
 | `dailySleepDTO.lightSleepSeconds` | `stages.light_minutes` | Seconds / 60, one decimal |
 | `dailySleepDTO.remSleepSeconds` | `stages.rem_minutes` | Seconds / 60, one decimal |
 | `dailySleepDTO.awakeSleepSeconds` | `stages.awake_minutes` | Seconds / 60, one decimal |
-| `dailySleepDTO.restingHeartRate` | `resting_hr_bpm` | Numeric value |
+| `dailySleepDTO.restingHeartRate` or top-level `restingHeartRate` | `resting_hr_bpm` | Numeric value; accept either compatible Garmin shape |
 | `dailySleepDTO.avgSleepStress` | `average_sleep_stress` | Numeric value |
 | `dailySleepDTO.awakeCount` | `awake_count` | Integer count |
 | `dailySleepDTO.restlessMomentsCount` | `restless_moments_count` | Integer count |
 | top-level `avgOvernightHrv` | `overnight_hrv_ms` | Numeric value |
 | `wellnessSpO2SleepSummaryDTO.calendarDate` | secondary date provenance | If present it must equal the requested date |
-| `wellnessSpO2SleepSummaryDTO.averageSpo2` | `spo2.average_percent` | Numeric value |
-| `wellnessSpO2SleepSummaryDTO.lowestSpo2` | `spo2.lowest_percent` | Numeric value |
+| `wellnessSpO2SleepSummaryDTO.averageSpo2` or `.averageSPO2` | `spo2.average_percent` | Numeric value; accept either compatible Garmin casing |
+| `wellnessSpO2SleepSummaryDTO.lowestSpo2` or `.lowestSPO2` | `spo2.lowest_percent` | Numeric value; accept either compatible Garmin casing |
 
 Unknown Garmin fields are ignored and never echoed.
+
+Garmin currently returns different compatible response shapes across accounts.
+For the same requested night, Forerunner 265 data was observed with resting heart
+rate at the response root and sleep SpO2 under the all-caps `SPO2` keys, while
+the original contract fixtures use the nested/lowercase-`o` variants. The
+normalizer accepts both shapes without adding another Garmin request. If two
+variants are simultaneously non-null, their values must agree; conflicting or
+malformed variants make the complete date `invalid_provider_response`.
 
 Missing supported fields become `null`; they do not make an otherwise usable
 night invalid. If a supported field is present with a malformed type or unsafe
