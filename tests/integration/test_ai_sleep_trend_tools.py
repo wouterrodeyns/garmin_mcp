@@ -256,7 +256,9 @@ async def test_get_sleep_trend_description_states_period_cost_and_interpretation
         "fixed inclusive period ending today",
         "1 through 30 nights",
         "detailed sleep evidence is fetched explicitly",
-        "one sequential garmin read per requested date",
+        "one sequential garmin client call per requested date",
+        "may retry transient network or 5xx failures",
+        "physical http attempts can therefore exceed the requested night count",
         "missing dates remain visible and are not replaced",
         "current/today data may be unavailable until the watch synchronizes",
         "per-metric averages include their actual denominator (nights used)",
@@ -264,6 +266,8 @@ async def test_get_sleep_trend_description_states_period_cost_and_interpretation
         "do not infer causation, readiness, recovery, or make recommendations solely from sleep data",
     ):
         assert phrase in description
+
+    assert "one sequential garmin read per requested date" not in description
 
 
 @pytest.mark.asyncio

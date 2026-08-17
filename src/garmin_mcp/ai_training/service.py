@@ -391,7 +391,11 @@ def _sleep_metrics(raw: Any, requested_date: str) -> tuple[dict[str, Any] | None
     if facts.sleep_seconds is None and facts.score is None and facts.score_qualifier is None:
         return None, True
     return {
-        "date": facts.date,
+        # Preserve the legacy snapshot's Garmin-source provenance. The shared
+        # normalizer uses the requested date to validate the response and to
+        # key trend entries, but a missing Garmin calendarDate remains missing
+        # in the compact training-context snapshot.
+        "date": _iso_day(dto.get("calendarDate")),
         "duration_hours": (
             round(facts.sleep_seconds / 3600, 1)
             if facts.sleep_seconds is not None else None

@@ -25,11 +25,16 @@ stable invalid_days envelope. The service uses a fixed inclusive period that end
 “today” is the MCP host's local calendar date. A request for seven nights
 ending 2026-08-17 therefore covers 2026-08-11 through 2026-08-17.
 
-Dates are read oldest to newest with one sequential Garmin read per requested
-date. The maximum 30 means a maximum of 30 reads: there is no pagination,
-retry, previous-day fallback, parallel burst, or hidden replacement date. If
-today's sleep is not synchronized yet, today's sleep may be unavailable until
-the watch synchronizes. The date stays in the requested period either way.
+Dates are read oldest to newest with one sequential Garmin client call per
+requested date. The tool layer adds no pagination, retry, previous-day
+fallback, parallel burst, or hidden replacement date. The pinned Garmin client
+may retry transient network or 5xx failures and currently defaults to three
+retries. Physical HTTP attempts can therefore exceed the requested night
+count: the maximum 30-night request means 30 client method calls, not a
+guarantee of only 30 HTTP attempts. Authentication errors, rate limits, and
+other 4xx responses fail fast. If today's sleep is not synchronized yet,
+today's sleep may be unavailable until the watch synchronizes. The date stays
+in the requested period either way.
 
 ## Recommended workflow
 

@@ -517,12 +517,12 @@ def test_sleep_empty_today_retries_shared_normalizer_with_previous_provenance(
 
     normalizer.assert_called_once_with(raw_yesterday, "2026-02-13")
     assert result["sleep"] == {
-        "date": "2026-02-13", "duration_hours": 7.0,
+        "date": None, "duration_hours": 7.0,
         "score": 71, "score_qualifier": None,
     }
 
 
-def test_sleep_supported_metrics_without_calendar_date_use_queried_date(
+def test_sleep_supported_metrics_without_calendar_date_keep_missing_provenance(
     providers: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
 ):
     raw = {"dailySleepDTO": {"sleepTimeSeconds": 25200, "sleepScores": {"overall": {"value": 70}}}}
@@ -535,7 +535,7 @@ def test_sleep_supported_metrics_without_calendar_date_use_queried_date(
 
     normalizer.assert_called_once_with(raw, "2026-02-14")
     assert result["sleep"] == {
-        "date": "2026-02-14", "duration_hours": 7.0,
+        "date": None, "duration_hours": 7.0,
         "score": 70, "score_qualifier": None,
     }
 

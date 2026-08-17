@@ -49,9 +49,11 @@ def register_tools(app: Any) -> Any:
 
         The fixed inclusive period ending today covers 1 through 30 nights.
         Detailed sleep evidence is fetched explicitly rather than included in
-        the default training context. There is one sequential Garmin read per
-        requested date. Missing dates remain visible and are not replaced;
-        current/today data may be unavailable until the watch synchronizes.
+        the default training context. There is one sequential Garmin client call
+        per requested date. The pinned Garmin client may retry transient network
+        or 5xx failures; physical HTTP attempts can therefore exceed the requested
+        night count. Missing dates remain visible and are not replaced; current/today
+        data may be unavailable until the watch synchronizes.
         Per-metric averages include their actual denominator (nights used).
         Availability varies by device, account, and sync state. Do not infer
         causation, readiness, recovery, or make recommendations solely from sleep

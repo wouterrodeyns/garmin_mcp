@@ -98,7 +98,10 @@ def test_guide_pins_call_bounds_cost_and_interpretation_guardrails() -> None:
         "get_sleep_trend(days=7)",
         "fixed inclusive period",
         "ends today",
-        "one sequential garmin read per requested date",
+        "one sequential garmin client call per requested date",
+        "may retry transient network or 5xx failures",
+        "defaults to three retries",
+        "physical http attempts can therefore exceed the requested night count",
         "maximum 30",
         "today's sleep may be unavailable until the watch synchronizes",
         "missing dates remain visible",
@@ -113,6 +116,10 @@ def test_guide_pins_call_bounds_cost_and_interpretation_guardrails() -> None:
         "invalid_days envelope",
     ):
         assert phrase in lower
+
+    assert "one sequential garmin read per requested date" not in lower
+    assert "maximum of 30 reads" not in lower
+    assert "there is no pagination, retry" not in lower
 
 
 def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types() -> None:
