@@ -134,23 +134,24 @@ Typical concise responses are:
 
 ## The `ai-coach` tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 15 tools:
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly these 16 tools:
 
 1. `get_training_context`
-2. `get_wellness_heart_rate`
-3. `analyze_activity`
-4. `get_activity_timeseries`
-5. `create_workout`
-6. `update_workout`
-7. `get_activities`
-8. `get_activities_by_date`
-9. `get_activity`
-10. `get_workouts`
-11. `get_workout_by_id`
-12. `get_scheduled_workouts`
-13. `schedule_workout`
-14. `unschedule_workout`
-15. `delete_workout`
+2. `get_sleep_trend`
+3. `get_wellness_heart_rate`
+4. `analyze_activity`
+5. `get_activity_timeseries`
+6. `create_workout`
+7. `update_workout`
+8. `get_activities`
+9. `get_activities_by_date`
+10. `get_activity`
+11. `get_workouts`
+12. `get_workout_by_id`
+13. `get_scheduled_workouts`
+14. `schedule_workout`
+15. `unschedule_workout`
+16. `delete_workout`
 
 Profile precedence is explicit: an explicitly configured
 `GARMIN_ENABLED_TOOLS` allowlist overrides the profile; otherwise a profile

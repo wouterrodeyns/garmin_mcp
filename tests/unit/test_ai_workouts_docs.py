@@ -285,6 +285,7 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
     tools = re.findall(r"^\d+\. `([^`]+)`$", profile, re.MULTILINE)
     expected = {
         "get_training_context",
+        "get_sleep_trend",
         "get_wellness_heart_rate",
         "analyze_activity",
         "get_activity_timeseries",
@@ -300,7 +301,7 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
         "unschedule_workout",
         "delete_workout",
     }
-    assert len(tools) == 15
+    assert len(tools) == 16
     assert set(tools) == expected
     assert set(tools) == TOOL_PROFILES["ai-coach"]
     assert tools.index("update_workout") == tools.index("create_workout") + 1

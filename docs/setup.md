@@ -127,7 +127,8 @@ precedence:
 4. With no profile or explicit allowlist, broad upstream-compatible tool
    registration remains available.
 
-See [training context](ai-training.md), [activity analysis](ai-activity.md),
+See [training context](ai-training.md), [sleep trend evidence](ai-sleep-trend.md),
+[activity analysis](ai-activity.md),
 [activity time-series evidence](ai-activity-timeseries.md), [AI-friendly
 workouts](ai-workouts.md), and [wellness heart-rate evidence](ai-wellness-heart-rate.md)
 for the high-level coaching tools. The training
@@ -135,13 +136,14 @@ context is the coach's eyes/current context, `analyze_activity` is the
 completed-session feedback overview, and `get_activity_timeseries` is its
 narrow follow-up for concrete short-interval evidence. Workout creation and
 in-place update (`create_workout` and `update_workout`) are the coach's
-hands/write operations. Activity analysis and time-series evidence are
+hands/write operations; `get_sleep_trend` and `get_wellness_heart_rate` are
+deliberate evidence reads for those roles. Activity analysis and time-series evidence are
 read-only and do not replace the low-level `get_activity`
 compatibility/targeted read.
 
-The `ai-coach` profile exposes exactly 15 tools:
+The `ai-coach` profile exposes exactly 16 tools:
 
-`get_training_context`, `get_wellness_heart_rate`, `analyze_activity`, `get_activity_timeseries`,
+`get_training_context`, `get_sleep_trend`, `get_wellness_heart_rate`, `analyze_activity`, `get_activity_timeseries`,
 `create_workout`, `update_workout`, `get_activities`, `get_activities_by_date`,
 `get_activity`, `get_workouts`, `get_workout_by_id`, `get_scheduled_workouts`,
 `schedule_workout`, `unschedule_workout`, and `delete_workout`.

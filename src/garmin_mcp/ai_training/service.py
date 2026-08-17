@@ -20,6 +20,8 @@ from garmin_mcp.ai_training.providers import (
     get_training_status,
 )
 
+from .sleep import InvalidSleepResponse, SleepNightFacts, normalize_sleep_night
+
 AVAILABILITY_KEYS = (
     "activities",
     "last_run",
@@ -361,41 +363,45 @@ def _populate_daily_stats(result: dict[str, Any], raw: Any) -> None:
         result["recovery"]["body_battery_date"] = source_date
 
 
-def _sleep_metrics(raw: Any) -> tuple[dict[str, Any] | None, bool]:
+def _sleep_metrics(raw: Any, requested_date: str) -> tuple[dict[str, Any] | None, bool]:
     """Return normalized sleep values and whether a response is retryably empty."""
-    if raw is None or raw == [] or raw == {}:
+    if raw is None:
         return None, True
-    if not isinstance(raw, dict) or "dailySleepDTO" not in raw:
+    if type(raw) is list:
+        return None, len(raw) == 0
+    if type(raw) is not dict:
+        return None, False
+    if len(raw) == 0:
+        return None, True
+    if "dailySleepDTO" not in raw:
         return None, False
     dto = raw.get("dailySleepDTO")
-    if dto is None or dto == {}:
+    if dto is None:
         return None, True
-    if not isinstance(dto, dict):
+    if type(dto) is not dict:
         return None, False
-    raw_seconds = dto.get("sleepTimeSeconds")
-    seconds = _finite_number(raw_seconds)
-    malformed = raw_seconds is not None and seconds is None
-    scores = dto.get("sleepScores")
-    if scores is not None and not isinstance(scores, dict):
-        malformed = True
-    overall = scores.get("overall") if isinstance(scores, dict) else None
-    if overall is not None and not isinstance(overall, dict):
-        malformed = True
-    raw_score = overall.get("value") if isinstance(overall, dict) else None
-    score = _normalized_number(raw_score)
-    if raw_score is not None and score is None:
-        malformed = True
-    raw_qualifier = overall.get("qualifierKey") if isinstance(overall, dict) else None
-    qualifier = _normalized_text(raw_qualifier)
-    if raw_qualifier not in (None, "") and qualifier is None:
-        malformed = True
-    if seconds is None and score is None and qualifier is None:
-        return None, not malformed
+    if len(dto) == 0:
+        return None, True
+    try:
+        facts: SleepNightFacts | None = normalize_sleep_night(raw, requested_date)
+    except InvalidSleepResponse:
+        return None, False
+    if facts is None:
+        return None, True
+    if facts.sleep_seconds is None and facts.score is None and facts.score_qualifier is None:
+        return None, True
     return {
+        # Preserve the legacy snapshot's Garmin-source provenance. The shared
+        # normalizer uses the requested date to validate the response and to
+        # key trend entries, but a missing Garmin calendarDate remains missing
+        # in the compact training-context snapshot.
         "date": _iso_day(dto.get("calendarDate")),
-        "duration_hours": round(seconds / 3600, 1) if seconds is not None else None,
-        "score": score,
-        "score_qualifier": qualifier,
+        "duration_hours": (
+            round(facts.sleep_seconds / 3600, 1)
+            if facts.sleep_seconds is not None else None
+        ),
+        "score": facts.score,
+        "score_qualifier": facts.score_qualifier,
     }, False
 
 
@@ -495,12 +501,13 @@ def _read_with_previous_day_fallback(
 
 
 def _populate_sleep(result: dict[str, Any], client: Any, today: date) -> bool:
-    metrics, source_date, invalid = _read_with_previous_day_fallback(
-        get_sleep, client, today, _sleep_metrics
-    )
+    today_text = today.isoformat()
+    metrics, retry = _sleep_metrics(get_sleep(client, today_text), today_text)
+    if retry:
+        previous_text = today.fromordinal(today.toordinal() - 1).isoformat()
+        metrics, retry = _sleep_metrics(get_sleep(client, previous_text), previous_text)
     if metrics is None:
-        return invalid
-    metrics["date"] = metrics["date"] or source_date
+        return not retry
     result["sleep"].update(metrics)
     result["availability"]["sleep"] = True
     return False

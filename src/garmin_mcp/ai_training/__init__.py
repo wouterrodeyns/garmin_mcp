@@ -10,6 +10,7 @@ from .heart_rate import (
     get_wellness_heart_rate_service,
 )
 from .service import get_training_context_service
+from .sleep import DEFAULT_SLEEP_DAYS, MAX_SLEEP_DAYS, get_sleep_trend_service
 
 
 def configure(client):
@@ -28,6 +29,8 @@ def register_tools(app):
 
 __all__ = [
     "GAP_THRESHOLD_SECONDS",
+    "DEFAULT_SLEEP_DAYS",
+    "MAX_SLEEP_DAYS",
     "MAX_DAYS",
     "MAX_RAW_POINTS",
     "MAX_RETURNED_BINS",
@@ -35,6 +38,7 @@ __all__ = [
     "MAX_SOURCE_POINTS_PER_DAY",
     "configure",
     "get_training_context_service",
+    "get_sleep_trend_service",
     "get_wellness_heart_rate_service",
     "register_tools",
 ]

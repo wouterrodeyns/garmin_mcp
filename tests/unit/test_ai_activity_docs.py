@@ -22,6 +22,7 @@ SETUP_PATH = ROOT / "docs" / "setup.md"
 
 PROFILE_TOOLS = {
     "get_training_context",
+    "get_sleep_trend",
     "get_wellness_heart_rate",
     "analyze_activity",
     "get_activity_timeseries",
@@ -327,7 +328,7 @@ def test_current_docs_describe_three_high_level_coaching_roles():
     readme = " ".join(_read(README_PATH).lower().split())
     training = " ".join(_read(TRAINING_PATH).lower().split())
     for phrase in (
-        "three high-level coaching roles",
+        "three primary coaching roles",
         "get_training_context",
         "analyze_activity",
         "create_workout",

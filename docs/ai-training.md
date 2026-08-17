@@ -7,8 +7,10 @@ coach's **hands** when the athlete later asks to put a recommendation on
 Garmin or change an existing workout in place. The context tool never uploads,
 schedules, changes, or deletes Garmin data. It does not provide coaching advice.
 
-Detailed historical or all-day wellness heart-rate evidence is an explicit
-follow-up, not another field embedded in `get_training_context`. Use
+Detailed multi-night sleep or all-day wellness heart-rate evidence is an
+explicit follow-up, not another field embedded in `get_training_context`. Use
+[`get_sleep_trend`](ai-sleep-trend.md) when a recent sleep pattern needs
+evidence, and use
 [`get_wellness_heart_rate`](ai-wellness-heart-rate.md) only when the question
 needs its bounded raw samples, daily summary, or time bins. An empty or
 unavailable current date can simply mean the watch/device has not synced to
@@ -238,13 +240,22 @@ Warnings never include raw Garmin responses, tokens, or credentials.
 
 ## AI-coach profile and workflow
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 15 tools. The four
-high-level coaching roles are context eyes (`get_training_context`),
-explicit all-day wellness evidence (`get_wellness_heart_rate`),
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 16 tools. The three
+primary coaching roles are context eyes (`get_training_context`),
 completed-session feedback (`analyze_activity`, with the narrow
-`get_activity_timeseries` follow-up for concrete short-interval evidence), and workout hands
-(`create_workout` plus in-place `update_workout`). The full profile also
-preserves compatibility for focused reads and calendar operations:
+`get_activity_timeseries` follow-up for concrete short-interval evidence), and
+workout hands (`create_workout` plus in-place `update_workout`). Deliberate
+sleep-trend (`get_sleep_trend`) and all-day wellness-heart-rate
+(`get_wellness_heart_rate`) reads provide evidence for those roles. The full
+profile also preserves compatibility for focused reads and calendar operations:
+
+The compact snapshot does not imply a multi-night sleep pattern. The workflow
+is `get_training_context` for the current snapshot, then an explicit
+`get_sleep_trend(days=7)` call when the user asks whether recent sleep is a
+one-off or a pattern. Sleep evidence alone does not establish causation,
+readiness, recovery, or a training recommendation; only create a workout after
+the user confirms the proposed session. See the [sleep trend guide](ai-sleep-trend.md)
+for its fixed period, visible missing dates, metrics, and denominators.
 
 ```text
 User: "I haven't run for two months and I'm targeting a half marathon.

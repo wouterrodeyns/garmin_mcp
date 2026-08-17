@@ -10,6 +10,7 @@ from garminconnect import GarminConnectAuthenticationError, GarminConnectConnect
 
 import garmin_mcp.ai_training.service as service
 from garmin_mcp.ai_training.providers import ProviderResult
+from garmin_mcp.ai_training.sleep import InvalidSleepResponse
 from garmin_mcp.ai_training.service import AVAILABILITY_KEYS, get_training_context_service
 
 
@@ -478,6 +479,235 @@ def test_sleep_normalizes_nested_score_and_falls_back_only_when_today_is_empty(p
     assert [call.args[1] for call in providers["sleep"].call_args_list] == ["2026-02-14", "2026-02-13"]
 
 
+def test_sleep_uses_shared_normalizer_with_today_provenance_and_keeps_snapshot_output(
+    providers: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
+):
+    raw = {"dailySleepDTO": {
+        "calendarDate": "2026-02-14",
+        "sleepTimeSeconds": 27360,
+        "sleepScores": {"overall": {"value": 82, "qualifierKey": "GOOD"}},
+    }}
+    providers["sleep"].return_value = raw
+    real_normalizer = service.normalize_sleep_night
+    normalizer = Mock(wraps=real_normalizer)
+    monkeypatch.setattr(service, "normalize_sleep_night", normalizer)
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    normalizer.assert_called_once_with(raw, "2026-02-14")
+    assert result["sleep"] == {
+        "date": "2026-02-14", "duration_hours": 7.6,
+        "score": 82, "score_qualifier": "GOOD",
+    }
+
+
+def test_sleep_empty_today_retries_shared_normalizer_with_previous_provenance(
+    providers: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
+):
+    raw_yesterday = {"dailySleepDTO": {
+        "sleepTimeSeconds": 25200,
+        "sleepScores": {"overall": {"value": 71}},
+    }}
+    providers["sleep"].side_effect = [{"dailySleepDTO": {}}, raw_yesterday]
+    real_normalizer = service.normalize_sleep_night
+    normalizer = Mock(wraps=real_normalizer)
+    monkeypatch.setattr(service, "normalize_sleep_night", normalizer)
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    normalizer.assert_called_once_with(raw_yesterday, "2026-02-13")
+    assert result["sleep"] == {
+        "date": None, "duration_hours": 7.0,
+        "score": 71, "score_qualifier": None,
+    }
+
+
+def test_sleep_supported_metrics_without_calendar_date_keep_missing_provenance(
+    providers: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
+):
+    raw = {"dailySleepDTO": {"sleepTimeSeconds": 25200, "sleepScores": {"overall": {"value": 70}}}}
+    providers["sleep"].return_value = raw
+    real_normalizer = service.normalize_sleep_night
+    normalizer = Mock(wraps=real_normalizer)
+    monkeypatch.setattr(service, "normalize_sleep_night", normalizer)
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    normalizer.assert_called_once_with(raw, "2026-02-14")
+    assert result["sleep"] == {
+        "date": None, "duration_hours": 7.0,
+        "score": 70, "score_qualifier": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("metric_name", "today_payload", "yesterday_payload"),
+    [
+        (
+            "resting heart rate",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14", "restingHeartRate": 50}},
+            {"dailySleepDTO": {
+                "calendarDate": "2026-02-13", "sleepTimeSeconds": 25200,
+                "sleepScores": {"overall": {"value": 77, "qualifierKey": "GOOD"}},
+            }},
+        ),
+        (
+            "overnight HRV",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14"}, "avgOvernightHrv": 42},
+            {"dailySleepDTO": {
+                "calendarDate": "2026-02-13", "sleepTimeSeconds": 25200,
+                "sleepScores": {"overall": {"value": 77, "qualifierKey": "GOOD"}},
+            }},
+        ),
+        (
+            "sleep stage",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14", "deepSleepSeconds": 60}},
+            {"dailySleepDTO": {
+                "calendarDate": "2026-02-13", "sleepTimeSeconds": 25200,
+                "sleepScores": {"overall": {"value": 77, "qualifierKey": "GOOD"}},
+            }},
+        ),
+        (
+            "SpO2",
+            {
+                "dailySleepDTO": {"calendarDate": "2026-02-14"},
+                "wellnessSpO2SleepSummaryDTO": {
+                    "calendarDate": "2026-02-14", "averageSpo2": 98,
+                },
+            },
+            {"dailySleepDTO": {
+                "calendarDate": "2026-02-13", "sleepTimeSeconds": 25200,
+                "sleepScores": {"overall": {"value": 77, "qualifierKey": "GOOD"}},
+            }},
+        ),
+    ],
+)
+def test_sleep_snapshotless_today_falls_back_to_yesterday(
+    metric_name: str,
+    today_payload: dict[str, object],
+    yesterday_payload: dict[str, object],
+    providers: dict[str, Mock],
+):
+    providers["sleep"].side_effect = [today_payload, yesterday_payload]
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["sleep"] == {
+        "date": "2026-02-13", "duration_hours": 7.0,
+        "score": 77, "score_qualifier": "GOOD",
+    }, metric_name
+    assert result["availability"]["sleep"] is True  # type: ignore[index]
+    assert [call.args[1] for call in providers["sleep"].call_args_list] == [
+        "2026-02-14", "2026-02-13",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("metric_name", "today_payload", "yesterday_payload"),
+    [
+        (
+            "resting heart rate",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14", "restingHeartRate": 50}},
+            {"dailySleepDTO": {"calendarDate": "2026-02-13", "restingHeartRate": 51}},
+        ),
+        (
+            "overnight HRV",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14"}, "avgOvernightHrv": 42},
+            {"dailySleepDTO": {"calendarDate": "2026-02-13"}, "avgOvernightHrv": 43},
+        ),
+        (
+            "sleep stage",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14", "deepSleepSeconds": 60}},
+            {"dailySleepDTO": {"calendarDate": "2026-02-13", "deepSleepSeconds": 60}},
+        ),
+        (
+            "SpO2",
+            {
+                "dailySleepDTO": {"calendarDate": "2026-02-14"},
+                "wellnessSpO2SleepSummaryDTO": {
+                    "calendarDate": "2026-02-14", "averageSpo2": 98,
+                },
+            },
+            {
+                "dailySleepDTO": {"calendarDate": "2026-02-13"},
+                "wellnessSpO2SleepSummaryDTO": {
+                    "calendarDate": "2026-02-13", "averageSpo2": 97,
+                },
+            },
+        ),
+    ],
+)
+def test_sleep_snapshotless_both_dates_remains_unavailable(
+    metric_name: str,
+    today_payload: dict[str, object],
+    yesterday_payload: dict[str, object],
+    providers: dict[str, Mock],
+):
+    providers["sleep"].side_effect = [today_payload, yesterday_payload]
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["sleep"] == {
+        "date": None, "duration_hours": None, "score": None, "score_qualifier": None,
+    }, metric_name
+    assert result["availability"]["sleep"] is False  # type: ignore[index]
+    assert [call.args[1] for call in providers["sleep"].call_args_list] == [
+        "2026-02-14", "2026-02-13",
+    ]
+
+
+def test_sleep_invalid_shared_normalizer_response_is_invalid_without_retry(
+    providers: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
+):
+    raw = {"dailySleepDTO": {"sleepTimeSeconds": 25200}}
+    providers["sleep"].return_value = raw
+    normalizer = Mock(side_effect=InvalidSleepResponse("raw secret"))
+    monkeypatch.setattr(service, "normalize_sleep_night", normalizer)
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    normalizer.assert_called_once_with(raw, "2026-02-14")
+    providers["sleep"].assert_called_once()
+    assert result["status"] == "partial_success"
+    assert {
+        "provider": "sleep", "code": "invalid_provider_response",
+        "message": "Sleep returned an invalid response.",
+    } in result["warnings"]
+    assert "raw secret" not in str(result)
+
+
+def test_sleep_hostile_container_subclass_is_rejected_without_protocol_calls(
+    providers: dict[str, Mock]
+):
+    protocol_calls: list[str] = []
+
+    class HostileDict(dict[str, object]):
+        def __bool__(self) -> bool:
+            protocol_calls.append("bool")
+            raise AssertionError("bool must not be called")
+
+        def __eq__(self, other: object) -> bool:
+            protocol_calls.append("eq")
+            raise AssertionError("eq must not be called")
+
+        def get(self, key: object, default: object = None) -> object:
+            protocol_calls.append("get")
+            raise AssertionError("get must not be called")
+
+    providers["sleep"].return_value = HostileDict({"dailySleepDTO": {"sleepTimeSeconds": 1}})
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    providers["sleep"].assert_called_once()
+    assert protocol_calls == []
+    assert result["status"] == "partial_success"
+    assert {
+        "provider": "sleep", "code": "invalid_provider_response",
+        "message": "Sleep returned an invalid response.",
+    } in result["warnings"]
+    assert "sleepTimeSeconds" not in str(result)
+
+
 def test_nonempty_unknown_sleep_shape_does_not_trigger_fallback(providers: dict[str, Mock]):
     providers["sleep"].return_value = {"unexpected": "private payload"}
 
@@ -487,6 +717,11 @@ def test_nonempty_unknown_sleep_shape_does_not_trigger_fallback(providers: dict[
         "date": None, "duration_hours": None, "score": None, "score_qualifier": None,
     }
     assert result["availability"]["sleep"] is False  # type: ignore[index]
+    assert result["status"] == "partial_success"
+    assert {
+        "provider": "sleep", "code": "invalid_provider_response",
+        "message": "Sleep returned an invalid response.",
+    } in result["warnings"]
     providers["sleep"].assert_called_once()
 
 

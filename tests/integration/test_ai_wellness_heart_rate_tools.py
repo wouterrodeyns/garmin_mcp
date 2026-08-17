@@ -63,7 +63,11 @@ async def test_tool_schema_has_exact_bounded_request_contract():
     app = FastMCP("test")
     ai_training.register_tools(app)
     listed = {tool.name: tool for tool in await app.list_tools()}
-    assert set(listed) == {"get_training_context", "get_wellness_heart_rate"}
+    assert set(listed) == {
+        "get_training_context",
+        "get_sleep_trend",
+        "get_wellness_heart_rate",
+    }
     schema = listed["get_wellness_heart_rate"].inputSchema
     assert set(schema["properties"]) == {
         "start_date",
