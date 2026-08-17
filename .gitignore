@@ -18,6 +18,8 @@ build/
 .claude.md
 .mcp.json
 .worktrees/
+# Local deployment credentials
+/secrets/
 docs/*
 !docs/setup.md
 !docs/superpowers/

@@ -5,7 +5,10 @@
       "type": "local",
       "command": ["uv", "run", "garmin-mcp"],
       "enabled": true,
-      "timeout": 30000
+      "timeout": 30000,
+      "environment": {
+        "GARMIN_TOOL_PROFILE": "ai-coach"
+      }
     }
   }
 }
