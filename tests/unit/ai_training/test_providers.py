@@ -7,7 +7,11 @@ from dataclasses import FrozenInstanceError
 from unittest.mock import Mock, call
 
 import pytest
-from garminconnect import GarminConnectConnectionError
+from garminconnect import (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 
 import garmin_mcp.ai_training.providers as providers_module
 from garmin_mcp.ai_training.providers import (
@@ -22,6 +26,7 @@ from garmin_mcp.ai_training.providers import (
     get_period_activities,
     get_scheduled_workouts,
     get_sleep,
+    get_sleep_night,
     get_training_readiness,
     get_training_status,
     get_wellness_heart_rate_day,
@@ -433,6 +438,46 @@ def test_raw_delegates_do_not_catch_exceptions(provider, method, args):
     with pytest.raises(GarminConnectConnectionError, match="pass through"):
         provider(garmin, *args)
     getattr(garmin, method).assert_called_once_with(*args)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        GarminConnectAuthenticationError("private authentication details"),
+        GarminConnectConnectionError("private connection details"),
+        GarminConnectTooManyRequestsError("private rate-limit details"),
+    ],
+)
+def test_sleep_night_sanitizes_expected_garmin_provider_errors(error: Exception):
+    garmin = client()
+    garmin.get_sleep_data.side_effect = error
+
+    result = get_sleep_night(garmin, "2026-08-17")
+
+    assert result == ProviderResult(data=None, failed=True)
+    assert "private" not in repr(result)
+    garmin.get_sleep_data.assert_called_once_with("2026-08-17")
+
+
+def test_sleep_night_wraps_raw_sleep_data_and_preserves_identity():
+    garmin = client()
+    raw = {"sleep": {"score": 85}}
+    garmin.get_sleep_data.return_value = raw
+
+    result = get_sleep_night(garmin, "2026-08-17")
+
+    assert result == ProviderResult(data=raw)
+    assert result.data is raw
+    garmin.get_sleep_data.assert_called_once_with("2026-08-17")
+
+
+def test_sleep_night_propagates_assertion_errors_from_client():
+    garmin = client()
+    garmin.get_sleep_data.side_effect = AssertionError("private implementation defect")
+
+    with pytest.raises(AssertionError, match="private implementation defect"):
+        get_sleep_night(garmin, "2026-08-17")
+    garmin.get_sleep_data.assert_called_once_with("2026-08-17")
 
 
 class WellnessHeartRateClient:

@@ -8,10 +8,21 @@ import json
 from math import ceil
 from typing import Any
 
+from garminconnect import (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
+
 
 RUNNING_TYPE_KEYS = frozenset({"running", "trail_running", "treadmill_running"})
 PAGE_SIZE = 200
 MAX_ACTIVITY_RECORDS = 1000
+_SLEEP_PROVIDER_EXCEPTIONS = (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 
 
 @dataclass(frozen=True)
@@ -282,6 +293,13 @@ def get_daily_stats(client: Any, date: str) -> Any:
 
 def get_sleep(client: Any, date: str) -> Any:
     return client.get_sleep_data(date)
+
+
+def get_sleep_night(client: Any, date: str) -> ProviderResult:
+    try:
+        return ProviderResult(data=get_sleep(client, date))
+    except _SLEEP_PROVIDER_EXCEPTIONS:
+        return ProviderResult(data=None, failed=True)
 
 
 def get_hrv(client: Any, date: str) -> Any:
