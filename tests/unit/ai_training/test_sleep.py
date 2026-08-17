@@ -90,6 +90,18 @@ def test_normalize_empty_roots_return_none(raw: Any) -> None:
     assert normalize_sleep_night(raw, "2026-08-17") is None
 
 
+@pytest.mark.parametrize("raw", [None, [], {}])
+def test_empty_roots_keep_a_valid_requested_date_empty(raw: Any) -> None:
+    assert normalize_sleep_night(raw, "2026-08-17") is None
+
+
+@pytest.mark.parametrize("raw", [None, [], {}])
+@pytest.mark.parametrize("requested_date", ["not-a-date", "2026-02-30", "2026-8-7"])
+def test_empty_roots_reject_invalid_requested_dates(raw: Any, requested_date: str) -> None:
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(raw, requested_date)
+
+
 def test_missing_supported_values_are_null_or_an_empty_night() -> None:
     payload = complete_sleep_payload()
     payload["dailySleepDTO"] = {"calendarDate": "2026-08-17", "sleepTimeSeconds": 1}
@@ -187,6 +199,23 @@ def test_qualifier_rejects_oversized_raw_and_all_whitespace_text(qualifier: str)
     payload["dailySleepDTO"]["sleepScores"]["overall"]["qualifierKey"] = qualifier
     with pytest.raises(InvalidSleepResponse):
         normalize_sleep_night(payload, "2026-08-17")
+
+
+@pytest.mark.parametrize("surrogate", [chr(0xD800), chr(0xDC00)])
+def test_qualifier_rejects_lone_utf16_surrogates(surrogate: str) -> None:
+    payload = complete_sleep_payload()
+    payload["dailySleepDTO"]["sleepScores"]["overall"]["qualifierKey"] = f"good{surrogate}"
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(payload, "2026-08-17")
+
+
+def test_qualifier_preserves_valid_unicode_text() -> None:
+    payload = complete_sleep_payload()
+    payload["dailySleepDTO"]["sleepScores"]["overall"]["qualifierKey"] = "  bonne nuit 🌙  "
+
+    assert normalize_sleep_night(payload, "2026-08-17") == normalized_facts(
+        score_qualifier="bonne nuit 🌙"
+    )
 
 
 def test_mismatched_and_disagreeing_calendar_dates_are_rejected() -> None:

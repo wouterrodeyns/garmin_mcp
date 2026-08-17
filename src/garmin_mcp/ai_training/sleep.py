@@ -115,6 +115,10 @@ def _qualifier(overall: dict[Any, Any]) -> str | None:
     normalized = value.strip()
     if not normalized or len(normalized) > MAX_SLEEP_TEXT_LENGTH:
         raise InvalidSleepResponse
+    try:
+        normalized.encode("utf-8")
+    except UnicodeEncodeError:
+        raise InvalidSleepResponse from None
     return normalized
 
 
@@ -134,6 +138,8 @@ def _effective_date(
 
 def normalize_sleep_night(raw: Any, requested_date: str | None) -> SleepNightFacts | None:
     """Normalize one untrusted Garmin response without retaining source objects."""
+    if requested_date is not None:
+        requested_date = _canonical_date(requested_date)
     if raw is None:
         return None
     if type(raw) is list:
@@ -145,8 +151,6 @@ def normalize_sleep_night(raw: Any, requested_date: str | None) -> SleepNightFac
     if len(raw) == 0:
         return None
     _require_string_keys(raw)
-    if requested_date is not None:
-        requested_date = _canonical_date(requested_date)
 
     daily = _optional_dict(raw, "dailySleepDTO")
     scores = _optional_dict(daily, "sleepScores")
