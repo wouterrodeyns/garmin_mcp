@@ -85,6 +85,20 @@ def test_file_secret_guidance_is_deployment_only():
     assert "GARMIN_PASSWORD_FILE" not in claude
 
 
+def test_setup_documents_fail_closed_http_and_docker_secret_defaults():
+    setup = " ".join(_setup().lower().split())
+    for expected in (
+        "refuses non-loopback",
+        "garmin_mcp_allow_unauthenticated_remote=true",
+        "authenticating reverse proxy",
+        "secrets/garmin_email.txt",
+        "secrets/garmin_password.txt",
+        "ignored by git",
+        "excluded from the docker build context",
+    ):
+        assert expected in setup
+
+
 def test_setup_client_config_fences_are_credential_free():
     forbidden_patterns = (
         r"\bGARMIN_(?:EMAIL|PASSWORD)(?:_FILE)?\b",
@@ -154,10 +168,12 @@ def test_readme_profile_and_filter_contract():
     assert tools.index("update_workout") == tools.index("create_workout") + 1
     lower = " ".join(_readme().lower().split())
     assert "garmin_tool_profile=ai-coach" in lower
+    assert "ai-coach is the default" in lower
+    assert "garmin_tool_profile=upstream-full" in lower
     assert lower.index("garmin_enabled_tools") < lower.index("garmin_disabled_tools")
-    assert lower.index("garmin_disabled_tools") < lower.index("profile is unset")
+    assert lower.index("garmin_disabled_tools") < lower.index("garmin_tool_profile=upstream-full")
     assert "denylist is ignored while the explicit allowlist is active" in lower
-    assert "broad upstream-compatible registration remains available" in lower
+    assert "broad upstream-compatible registration remains available" not in lower
 
 
 def test_readme_pins_sixteen_tools_and_in_place_update_semantics():
@@ -243,6 +259,8 @@ def test_readme_removes_stale_dxt_raw_and_volatile_claims():
     ):
         assert forbidden not in lower
     assert "fork-specific desktop extension is not published yet" in lower
+    assert "desktop extension bundle" not in lower
+    assert "desktop extension install" not in lower
 
 
 def test_cross_document_install_sources_and_client_config_fences_are_safe():

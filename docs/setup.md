@@ -116,16 +116,20 @@ npx @modelcontextprotocol/inspector uv run garmin-mcp
 
 ## Runtime configuration and tool filtering
 
-For AI coaching, set `GARMIN_TOOL_PROFILE=ai-coach`. Filtering follows this
-precedence:
+ai-coach is the default profile when `GARMIN_TOOL_PROFILE` is unset or
+empty. Set `GARMIN_TOOL_PROFILE=ai-coach` explicitly in a client configuration
+when documenting that intent. Filtering follows this precedence:
 
 1. A non-empty `GARMIN_ENABLED_TOOLS` explicit allowlist wins; the denylist is
-   ignored while the explicit allowlist is active.
+   ignored while the explicit allowlist is active; the selected profile is
+   ignored too.
 2. Without an explicit allowlist, `GARMIN_DISABLED_TOOLS` subtracts tools from
-   the selected profile or broad default.
-3. Otherwise, `GARMIN_TOOL_PROFILE` selects a named profile.
-4. With no profile or explicit allowlist, broad upstream-compatible tool
-   registration remains available.
+   the selected or default profile.
+3. Otherwise, `GARMIN_TOOL_PROFILE` selects a named profile. Full upstream tool
+   registration is an explicit choice: full Taxuspt-compatible registration
+   requires explicitly setting `GARMIN_TOOL_PROFILE=upstream-full`. That
+   profile enables all tools exposed by the upstream-compatible server.
+4. When `GARMIN_TOOL_PROFILE` is unset or empty, `ai-coach` applies by default.
 
 See [training context](ai-training.md), [sleep trend evidence](ai-sleep-trend.md),
 [activity analysis](ai-activity.md),
@@ -169,9 +173,12 @@ GARMIN_MCP_TRANSPORT=streamable-http garmin-mcp
 ```
 
 HTTP clients connect to `/mcp`; `GET /healthz` provides liveness/readiness.
-The MCP server does not authenticate its HTTP endpoint. Never expose it beyond
-localhost without an authenticating reverse proxy. Bind to `0.0.0.0` only
-behind that protection.
+Loopback hosts are allowed for `streamable-http` and `sse`; by default, the
+server refuses non-loopback binds. The MCP server does not authenticate its HTTP
+endpoint. `GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE=true` is a dangerous
+acknowledgement only: it does not add auth and should be used only behind an
+authenticating reverse proxy. Never expose the endpoint without that
+protection; `0.0.0.0` requires the same explicit override and proxy protection.
 
 ## Docker and non-interactive deployments
 
@@ -213,6 +220,10 @@ secrets:
   garmin_password:
     file: ./secrets/garmin_password.txt
 ```
+
+The documented `secrets/garmin_email.txt` and `secrets/garmin_password.txt`
+paths are ignored by Git and excluded from the Docker build context. Still
+protect both files with strict filesystem permissions.
 
 Do not set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, or both
 `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`. Protect secret files with strict
