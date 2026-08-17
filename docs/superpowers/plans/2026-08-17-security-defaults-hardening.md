@@ -21,11 +21,14 @@
   transport matrix.
 - Create `tests/unit/test_security_defaults.py`: repository-level OpenCode,
   secrets-ignore, Docker-ignore, and DXT-absence contracts.
-- Modify `.gitignore`: exclude `/secrets/` from Git and Docker build context.
+- Modify `.gitignore`: exclude `/secrets/` from Git.
+- Modify `.dockerignore`: tracked portable Docker exclusions for secrets,
+  build context, and local artifacts.
 - Modify `opencode.json`: explicitly select `ai-coach`.
 - Delete `dxt/manifest.json`, `garmin-mcp.dxt`, and
-  `tests/unit/test_dxt_manifest.py`: remove misleading upstream artifacts and
-  their artifact-only tests.
+  `tests/unit/test_dxt_manifest.py`, and `scripts/build_dxt.sh`: remove
+  misleading upstream artifacts, the now-broken builder, and their artifact-only
+  tests.
 - Modify `README.md` and `docs/setup.md`: document default `ai-coach`, explicit
   `upstream-full`, refused remote HTTP, ignored secrets, and no DXT release.
 - Modify `tests/unit/test_readme_docs.py`: pin those current documentation
@@ -345,10 +348,12 @@ git commit -m "fix(server): refuse unauthenticated remote HTTP"
 **Files:**
 - Create: `tests/unit/test_security_defaults.py`
 - Modify: `.gitignore`
+- Modify: `.dockerignore`
 - Modify: `opencode.json`
 - Delete: `dxt/manifest.json`
 - Delete: `garmin-mcp.dxt`
 - Delete: `tests/unit/test_dxt_manifest.py`
+- Delete: `scripts/build_dxt.sh`
 
 - [ ] **Step 1: Write repository-policy tests before changing configuration**
 
@@ -383,16 +388,38 @@ def test_documented_secret_files_are_ignored_by_git():
         assert result.returncode == 0, relative_path
 
 
-def test_dockerignore_reuses_gitignore_secret_policy():
+def test_dockerignore_is_portable_and_preserves_docker_build_inputs():
     dockerignore = ROOT / ".dockerignore"
-    assert dockerignore.is_symlink()
-    assert dockerignore.resolve() == ROOT / ".gitignore"
+    rules = dockerignore.read_text().splitlines()
+    assert dockerignore.is_file()
+    assert not dockerignore.is_symlink()
+    for required_rule in (
+        ".git",
+        ".env",
+        ".venv/",
+        ".uv-cache/",
+        ".worktrees/",
+        "/secrets/",
+        "__pycache__/",
+        "*.py[cod]",
+        "dist/",
+        "build/",
+        "*.log",
+        ".DS_Store",
+        "playground/",
+        "scratch/",
+        "tests/fixtures/captured/",
+    ):
+        assert required_rule in rules
+    for build_input in ("src", "tests", "pyproject.toml", "README.md", "pytest.ini"):
+        assert build_input not in rules
     assert "/secrets/" in (ROOT / ".gitignore").read_text().splitlines()
 
 
 def test_stale_desktop_extension_artifacts_are_not_distributed():
     assert not (ROOT / "garmin-mcp.dxt").exists()
     assert not (ROOT / "dxt" / "manifest.json").exists()
+    assert not (ROOT / "scripts" / "build_dxt.sh").exists()
 ```
 
 - [ ] **Step 2: Run repository tests and verify RED**
@@ -403,8 +430,8 @@ Run:
 uv run pytest -q tests/unit/test_security_defaults.py
 ```
 
-Expected: all four tests fail because OpenCode has no environment, secrets are
-not ignored, and both stale DXT artifacts exist.
+Expected: the OpenCode and Git-ignore tests pass from the preceding task, while
+the portable Docker-ignore and obsolete-builder tests fail.
 
 - [ ] **Step 3: Apply the minimal repository changes**
 
@@ -423,9 +450,14 @@ Add this to the tracked Garmin OpenCode entry:
 },
 ```
 
-Delete `dxt/manifest.json`, `garmin-mcp.dxt`, and
-`tests/unit/test_dxt_manifest.py` using patch-based file deletion. Do not change
-Docker runtime behavior or create replacement credential files.
+Replace the `.dockerignore` symlink with a tracked regular file containing
+explicit exclusions for `.git`, local environments, `/secrets/`, Python
+caches/build artifacts/logs, scratch directories, and captured fixtures. Keep
+`src/`, `tests/`, `pyproject.toml`, `README.md`, and `pytest.ini` available to
+the Dockerfile. Delete `dxt/manifest.json`, `garmin-mcp.dxt`,
+`tests/unit/test_dxt_manifest.py`, and `scripts/build_dxt.sh` using patch-based
+file deletion. Do not change Docker runtime behavior or create replacement
+credential files.
 
 - [ ] **Step 4: Run repository tests and verify GREEN**
 
@@ -440,8 +472,8 @@ Expected: four tests pass.
 - [ ] **Step 5: Commit Task 3**
 
 ```bash
-git add .gitignore opencode.json tests/unit/test_security_defaults.py
-git add -u dxt/manifest.json garmin-mcp.dxt tests/unit/test_dxt_manifest.py
+git add .gitignore .dockerignore opencode.json tests/unit/test_security_defaults.py
+git add -u dxt/manifest.json garmin-mcp.dxt tests/unit/test_dxt_manifest.py scripts/build_dxt.sh
 git commit -m "chore(security): remove unsafe repository defaults"
 ```
 

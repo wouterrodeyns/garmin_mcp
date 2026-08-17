@@ -1,1 +1,25 @@
-.gitignore
+# Repository metadata and local environments
+.git
+.env
+.venv/
+.uv-cache/
+.worktrees/
+/secrets/
+
+# Python caches, build artifacts, and logs
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+*.log
+.DS_Store
+
+# Local scratch files and captured fixture data
+playground/
+scratch/
+tests/fixtures/captured/

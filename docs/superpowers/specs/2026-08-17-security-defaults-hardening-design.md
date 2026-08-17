@@ -21,7 +21,7 @@ This PR will:
 4. refuse unauthenticated non-loopback HTTP binds unless a deliberately named
    override is enabled;
 5. ignore the documented local `secrets/` directory;
-6. remove the stale upstream DXT manifest and tracked bundle;
+6. remove the stale upstream DXT manifest, tracked bundle, and obsolete build script;
 7. update current user documentation and regression tests.
 
 This PR will not:
@@ -93,9 +93,13 @@ the HTTP endpoint secure.
 
 ## Credential-file protection
 
-The repository `.gitignore` will contain `/secrets/`. Because `.dockerignore`
-resolves to `.gitignore`, the same rule also excludes the directory from Docker
-build context.
+The repository `.gitignore` will contain `/secrets/`, and the tracked regular
+`.dockerignore` will explicitly repeat that exclusion for portable Docker
+builds, including checkouts that materialize symlinks as plain files. The Docker
+ignore file will also exclude repository metadata, local environments, Python
+caches/build artifacts/logs, scratch directories, and captured fixture data,
+while retaining `src/`, `tests/`, `pyproject.toml`, `README.md`, and
+`pytest.ini` for the Dockerfile's build context.
 
 Documentation may continue to show Docker Compose secrets at:
 
@@ -111,8 +115,10 @@ Git's ignore behavior to prove both documented paths are ignored.
 
 The tracked `garmin-mcp.dxt` bundle and `dxt/manifest.json` describe and install
 the original Taxuspt repository with broad tools and credential fields. They do
-not represent this fork and will be removed. Manifest/bundle consistency tests
-that only validate those stale artifacts will be removed.
+not represent this fork and will be removed. The obsolete
+`scripts/build_dxt.sh` helper will also be removed because it can no longer
+produce a valid bundle after the manifest is gone. Manifest/bundle consistency
+tests that only validate those stale artifacts will be removed.
 
 Current documentation will state that this fork does not distribute a DXT
 package. A future DXT release must be designed independently around this fork,
@@ -151,7 +157,8 @@ Tests will be written before production/configuration changes and will cover:
 12. the explicit dangerous override permits a non-loopback HTTP host;
 13. rejected HTTP configuration performs no Garmin authentication;
 14. documented Docker credential paths are ignored by Git;
-15. stale DXT artifacts are absent and docs do not advertise their installation;
+15. stale DXT artifacts and the obsolete build script are absent, and docs do
+    not advertise their installation;
 16. existing zero-tool and unknown-filter diagnostics remain intact.
 
 After focused red-green cycles, verification will run:
