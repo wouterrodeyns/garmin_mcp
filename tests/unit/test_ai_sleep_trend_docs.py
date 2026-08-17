@@ -303,4 +303,4 @@ def test_docs_cross_reference_real_schema_validation_and_envelope_tests() -> Non
     lower = " ".join(_guide().lower().split())
     assert "test_get_sleep_trend_rejects_json_invalid_types_before_garmin_reads" in integration
     assert "strictint validation raises mcp toolerror" in lower
-    assert "integer 0 or 31 returns the stable invalid_days envelope" in lower
+    assert "exact integer such as 0 or 31 reaches the service and returns the stable invalid_days envelope" in lower

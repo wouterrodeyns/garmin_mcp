@@ -200,6 +200,14 @@ def test_numeric_values_reject_nonfinite_bool_and_strings(value: Any) -> None:
         normalize_sleep_night(payload, "2026-08-17")
 
 
+def test_numeric_values_reject_an_oversized_exact_integer_without_float_coercion() -> None:
+    payload = complete_sleep_payload()
+    payload["dailySleepDTO"]["sleepTimeSeconds"] = 10**1000
+
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(payload, "2026-08-17")
+
+
 def test_counts_reject_fractional_values() -> None:
     payload = complete_sleep_payload()
     payload["dailySleepDTO"]["awakeCount"] = 1.5
@@ -576,6 +584,31 @@ def test_mixed_sleep_results_continue_and_never_serialize_provider_sentinels() -
     ]
     assert "private provider detail" not in repr(result)
     assert "object at" not in repr(result)
+
+
+def test_sleep_trend_treats_an_oversized_exact_integer_as_a_sanitized_invalid_date() -> None:
+    malformed = complete_sleep_payload("2026-08-16")
+    malformed["dailySleepDTO"]["sleepTimeSeconds"] = 10**1000
+    malformed["private_provider_detail"] = "token=private-provider-detail"
+    client = RecordingSleepClient({
+        "2026-08-16": malformed,
+        "2026-08-17": complete_sleep_payload("2026-08-17"),
+    })
+
+    result = get_sleep_trend_service(client, 2, today=date(2026, 8, 17))
+
+    assert client.calls == ["2026-08-16", "2026-08-17"]
+    assert result["status"] == "partial_success"
+    assert result["availability"] == {"2026-08-16": False, "2026-08-17": True}
+    assert result["nights"][0] == empty_sleep_night("2026-08-16")
+    assert result["nights"][1]["available"] is True
+    assert result["warnings"] == [{
+        "provider": "sleep",
+        "date": "2026-08-16",
+        "code": "invalid_provider_response",
+        "message": SLEEP_WARNINGS["invalid_provider_response"],
+    }]
+    assert "token=private-provider-detail" not in json.dumps(result)
 
 
 class SentinelHostileDict(dict[Any, Any]):

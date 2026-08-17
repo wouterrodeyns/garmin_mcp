@@ -267,7 +267,9 @@ def _optional_number(
     value = parent.get(key)
     if value is None:
         return None
-    if type(value) not in (int, float) or not isfinite(value):
+    if type(value) is float and not isfinite(value):
+        raise InvalidSleepResponse
+    if type(value) not in (int, float):
         raise InvalidSleepResponse
     if value < minimum or value > maximum:
         raise InvalidSleepResponse

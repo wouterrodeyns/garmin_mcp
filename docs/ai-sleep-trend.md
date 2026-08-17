@@ -21,8 +21,7 @@ get_sleep_trend(days=7)
 not accepted. At the MCP boundary, StrictInt validation raises MCP ToolError
 for a bool, string, float, or null before the service or Garmin is called. An
 exact integer such as 0 or 31 reaches the service and returns the
-stable invalid_days envelope. The integer 0 or 31 returns the stable invalid_days
-envelope. The service uses a fixed inclusive period that ends today, where
+stable invalid_days envelope. The service uses a fixed inclusive period that ends today, where
 “today” is the MCP host's local calendar date. A request for seven nights
 ending 2026-08-17 therefore covers 2026-08-11 through 2026-08-17.
 
@@ -231,7 +230,7 @@ unexpected exceptions are sanitized.
 The path performs authenticated reads through `client.get_sleep_data(date)` via
 the existing provider seam. It performs no workout or schedule mutations and
 no credential-management operations. This path does not directly access raw
-raw connectapi, garth, session, or HTTP verbs, and it does not invoke another
+connectapi, garth, session, or HTTP verbs, and it does not invoke another
 MCP tool.
 
 Garmin metric availability varies by device, account, and sync state. A missing
