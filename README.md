@@ -135,8 +135,8 @@ The safe instruction is to read the workout before retrying.
 Tool filtering follows this precedence:
 
 1. A non-empty `GARMIN_ENABLED_TOOLS` explicit allowlist takes precedence; the
-   denylist is ignored while the explicit allowlist is active; the selected
-   profile is ignored too.
+   selected profile and denylist are both ignored while the explicit allowlist
+   is active.
 2. Without an explicit allowlist, `GARMIN_DISABLED_TOOLS` subtracts tools from
    the selected or default profile.
 3. Otherwise, the selected profile controls registration. Full upstream tool registration

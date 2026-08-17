@@ -197,7 +197,7 @@ def test_readme_profile_and_filter_contract():
         "garmin_tool_profile=upstream-full"
     ) < profile_normalized.index("all tools exposed by the upstream-compatible server")
     assert (
-        "denylist is ignored while the explicit allowlist is active"
+        "selected profile and denylist are both ignored while the explicit allowlist is active"
         in profile_normalized
     )
     for stale in ("no profile", "broad default"):
@@ -228,7 +228,10 @@ def test_setup_runtime_section_pins_profile_defaults_full_opt_in_and_precedence(
     assert runtime.index("garmin_tool_profile=upstream-full") < runtime.index(
         "all tools exposed by the upstream-compatible server"
     )
-    assert "denylist is ignored while the explicit allowlist is active" in runtime
+    assert (
+        "selected profile and denylist are both ignored while the explicit allowlist is active"
+        in runtime
+    )
     for stale in ("no profile", "broad default"):
         assert stale not in runtime
     assert not re.search(
@@ -253,7 +256,10 @@ def test_readme_pins_sixteen_tools_and_in_place_update_semantics():
         assert expected in lower
 
     setup = " ".join(_setup().lower().split())
-    assert "denylist is ignored while the explicit allowlist is active" in setup
+    assert (
+        "selected profile and denylist are both ignored while the explicit allowlist is active"
+        in setup
+    )
 
 
 def test_setup_doc_describes_create_and_update_as_workout_hands():

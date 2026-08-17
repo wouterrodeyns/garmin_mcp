@@ -120,9 +120,8 @@ ai-coach is the default profile when `GARMIN_TOOL_PROFILE` is unset or
 empty. Set `GARMIN_TOOL_PROFILE=ai-coach` explicitly in a client configuration
 when documenting that intent. Filtering follows this precedence:
 
-1. A non-empty `GARMIN_ENABLED_TOOLS` explicit allowlist wins; the denylist is
-   ignored while the explicit allowlist is active; the selected profile is
-   ignored too.
+1. A non-empty `GARMIN_ENABLED_TOOLS` explicit allowlist wins; the selected
+   profile and denylist are both ignored while the explicit allowlist is active.
 2. Without an explicit allowlist, `GARMIN_DISABLED_TOOLS` subtracts tools from
    the selected or default profile.
 3. Otherwise, `GARMIN_TOOL_PROFILE` selects a named profile. Full upstream tool
