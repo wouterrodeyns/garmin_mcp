@@ -540,6 +540,122 @@ def test_sleep_supported_metrics_without_calendar_date_use_queried_date(
     }
 
 
+@pytest.mark.parametrize(
+    ("metric_name", "today_payload", "yesterday_payload"),
+    [
+        (
+            "resting heart rate",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14", "restingHeartRate": 50}},
+            {"dailySleepDTO": {
+                "calendarDate": "2026-02-13", "sleepTimeSeconds": 25200,
+                "sleepScores": {"overall": {"value": 77, "qualifierKey": "GOOD"}},
+            }},
+        ),
+        (
+            "overnight HRV",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14"}, "avgOvernightHrv": 42},
+            {"dailySleepDTO": {
+                "calendarDate": "2026-02-13", "sleepTimeSeconds": 25200,
+                "sleepScores": {"overall": {"value": 77, "qualifierKey": "GOOD"}},
+            }},
+        ),
+        (
+            "sleep stage",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14", "deepSleepSeconds": 60}},
+            {"dailySleepDTO": {
+                "calendarDate": "2026-02-13", "sleepTimeSeconds": 25200,
+                "sleepScores": {"overall": {"value": 77, "qualifierKey": "GOOD"}},
+            }},
+        ),
+        (
+            "SpO2",
+            {
+                "dailySleepDTO": {"calendarDate": "2026-02-14"},
+                "wellnessSpO2SleepSummaryDTO": {
+                    "calendarDate": "2026-02-14", "averageSpo2": 98,
+                },
+            },
+            {"dailySleepDTO": {
+                "calendarDate": "2026-02-13", "sleepTimeSeconds": 25200,
+                "sleepScores": {"overall": {"value": 77, "qualifierKey": "GOOD"}},
+            }},
+        ),
+    ],
+)
+def test_sleep_snapshotless_today_falls_back_to_yesterday(
+    metric_name: str,
+    today_payload: dict[str, object],
+    yesterday_payload: dict[str, object],
+    providers: dict[str, Mock],
+):
+    providers["sleep"].side_effect = [today_payload, yesterday_payload]
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["sleep"] == {
+        "date": "2026-02-13", "duration_hours": 7.0,
+        "score": 77, "score_qualifier": "GOOD",
+    }, metric_name
+    assert result["availability"]["sleep"] is True  # type: ignore[index]
+    assert [call.args[1] for call in providers["sleep"].call_args_list] == [
+        "2026-02-14", "2026-02-13",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("metric_name", "today_payload", "yesterday_payload"),
+    [
+        (
+            "resting heart rate",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14", "restingHeartRate": 50}},
+            {"dailySleepDTO": {"calendarDate": "2026-02-13", "restingHeartRate": 51}},
+        ),
+        (
+            "overnight HRV",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14"}, "avgOvernightHrv": 42},
+            {"dailySleepDTO": {"calendarDate": "2026-02-13"}, "avgOvernightHrv": 43},
+        ),
+        (
+            "sleep stage",
+            {"dailySleepDTO": {"calendarDate": "2026-02-14", "deepSleepSeconds": 60}},
+            {"dailySleepDTO": {"calendarDate": "2026-02-13", "deepSleepSeconds": 60}},
+        ),
+        (
+            "SpO2",
+            {
+                "dailySleepDTO": {"calendarDate": "2026-02-14"},
+                "wellnessSpO2SleepSummaryDTO": {
+                    "calendarDate": "2026-02-14", "averageSpo2": 98,
+                },
+            },
+            {
+                "dailySleepDTO": {"calendarDate": "2026-02-13"},
+                "wellnessSpO2SleepSummaryDTO": {
+                    "calendarDate": "2026-02-13", "averageSpo2": 97,
+                },
+            },
+        ),
+    ],
+)
+def test_sleep_snapshotless_both_dates_remains_unavailable(
+    metric_name: str,
+    today_payload: dict[str, object],
+    yesterday_payload: dict[str, object],
+    providers: dict[str, Mock],
+):
+    providers["sleep"].side_effect = [today_payload, yesterday_payload]
+
+    result = get_training_context_service(Mock(), today=TODAY)
+
+    assert result["sleep"] == {
+        "date": None, "duration_hours": None, "score": None, "score_qualifier": None,
+    }, metric_name
+    assert result["availability"]["sleep"] is False  # type: ignore[index]
+    assert [call.args[1] for call in providers["sleep"].call_args_list] == [
+        "2026-02-14", "2026-02-13",
+    ]
+
+
 def test_sleep_invalid_shared_normalizer_response_is_invalid_without_retry(
     providers: dict[str, Mock], monkeypatch: pytest.MonkeyPatch
 ):

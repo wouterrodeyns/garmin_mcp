@@ -388,6 +388,8 @@ def _sleep_metrics(raw: Any, requested_date: str) -> tuple[dict[str, Any] | None
         return None, False
     if facts is None:
         return None, True
+    if facts.sleep_seconds is None and facts.score is None and facts.score_qualifier is None:
+        return None, True
     return {
         "date": facts.date,
         "duration_hours": (
