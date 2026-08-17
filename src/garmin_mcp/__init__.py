@@ -193,6 +193,7 @@ def _resolve_tool_filters_from_environment():
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 _HTTP_TRANSPORTS = ("streamable-http", "sse")
+_LOCALHOST_ALIASES = ("localhost", "localhost.")
 _REMOTE_HTTP_BIND_ERROR = (
     "Refusing unauthenticated remote HTTP binding because this server does not "
     "provide HTTP authentication. Use an authenticating reverse proxy, or "
@@ -203,7 +204,7 @@ _REMOTE_HTTP_BIND_ERROR = (
 
 def _is_loopback_host(host: str) -> bool:
     """Return whether a host is localhost or a loopback IP literal."""
-    if host.lower() in ("localhost", "localhost."):
+    if host.lower() in _LOCALHOST_ALIASES:
         return True
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -267,6 +268,8 @@ def _parse_transport_config() -> tuple[str, str, int]:
     # so a 0.0.0.0 default would expose full read/write access to the user's
     # Garmin account to the whole network.
     http_host = os.getenv("GARMIN_MCP_HOST", "127.0.0.1").strip()
+    if http_host.lower() in _LOCALHOST_ALIASES:
+        http_host = "127.0.0.1"
     http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
     allow_unauthenticated_remote = (
         os.getenv("GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE", "").strip().lower()

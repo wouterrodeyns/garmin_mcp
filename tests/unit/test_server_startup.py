@@ -18,13 +18,30 @@ def _clear_tool_filter_environment(monkeypatch):
         monkeypatch.delenv(variable, raising=False)
 
 
+def _set_safe_stdio_transport_environment(monkeypatch):
+    """Isolate startup tests from ambient HTTP transport configuration."""
+    monkeypatch.setenv("GARMIN_MCP_TRANSPORT", "stdio")
+    monkeypatch.setenv("GARMIN_MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("GARMIN_MCP_PORT", "8000")
+    monkeypatch.delenv("GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE", raising=False)
+
+
+def _clear_transport_environment(monkeypatch):
+    """Clear transport settings for tests that exercise their defaults."""
+    for variable in (
+        "GARMIN_MCP_TRANSPORT",
+        "GARMIN_MCP_HOST",
+        "GARMIN_MCP_PORT",
+        "GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+
+
 def test_main_defaults_to_exact_ai_coach_tool_profile(monkeypatch):
     """Run main() without real Garmin auth and stop before entering the server loop."""
     run_calls = []
 
-    monkeypatch.delenv("GARMIN_MCP_TRANSPORT", raising=False)
-    monkeypatch.delenv("GARMIN_MCP_HOST", raising=False)
-    monkeypatch.delenv("GARMIN_MCP_PORT", raising=False)
+    _clear_transport_environment(monkeypatch)
     _clear_tool_filter_environment(monkeypatch)
     monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
 
@@ -51,6 +68,7 @@ def test_main_defaults_to_exact_ai_coach_tool_profile(monkeypatch):
 
 def test_main_registers_normalized_upstream_full_profile(monkeypatch, capsys):
     run_calls = []
+    _set_safe_stdio_transport_environment(monkeypatch)
     monkeypatch.setenv("GARMIN_TOOL_PROFILE", " UpStReAm-FuLl ")
     monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
     monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
@@ -75,9 +93,7 @@ def test_main_configures_and_registers_ai_workouts(monkeypatch):
     original_configure = garmin_mcp.ai_workouts.configure
     original_register_tools = garmin_mcp.ai_workouts.register_tools
 
-    monkeypatch.delenv("GARMIN_MCP_TRANSPORT", raising=False)
-    monkeypatch.delenv("GARMIN_MCP_HOST", raising=False)
-    monkeypatch.delenv("GARMIN_MCP_PORT", raising=False)
+    _set_safe_stdio_transport_environment(monkeypatch)
     _clear_tool_filter_environment(monkeypatch)
     monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
     monkeypatch.setattr(
@@ -107,9 +123,7 @@ def test_main_configures_and_registers_ai_training(monkeypatch):
     original_configure = garmin_mcp.ai_training.configure
     original_register_tools = garmin_mcp.ai_training.register_tools
 
-    monkeypatch.delenv("GARMIN_MCP_TRANSPORT", raising=False)
-    monkeypatch.delenv("GARMIN_MCP_HOST", raising=False)
-    monkeypatch.delenv("GARMIN_MCP_PORT", raising=False)
+    _set_safe_stdio_transport_environment(monkeypatch)
     _clear_tool_filter_environment(monkeypatch)
     monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
     monkeypatch.setattr(
@@ -139,9 +153,7 @@ def test_main_configures_and_registers_ai_activity_adjacent_to_ai_tools(monkeypa
     original_training_configure = garmin_mcp.ai_training.configure
     original_training_register_tools = garmin_mcp.ai_training.register_tools
 
-    monkeypatch.delenv("GARMIN_MCP_TRANSPORT", raising=False)
-    monkeypatch.delenv("GARMIN_MCP_HOST", raising=False)
-    monkeypatch.delenv("GARMIN_MCP_PORT", raising=False)
+    _set_safe_stdio_transport_environment(monkeypatch)
     _clear_tool_filter_environment(monkeypatch)
     monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
     monkeypatch.setattr(
@@ -178,6 +190,7 @@ def test_main_configures_and_registers_ai_activity_adjacent_to_ai_tools(monkeypa
 
 def test_main_rejects_unknown_profile_before_authentication(monkeypatch, capsys):
     authentication = Mock()
+    _set_safe_stdio_transport_environment(monkeypatch)
     monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai_coach")
     monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
     monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
@@ -196,6 +209,7 @@ def test_main_rejects_remote_http_before_authentication(monkeypatch, capsys):
     authentication = Mock()
     monkeypatch.setenv("GARMIN_MCP_TRANSPORT", "streamable-http")
     monkeypatch.setenv("GARMIN_MCP_HOST", "192.168.1.2")
+    monkeypatch.setenv("GARMIN_MCP_PORT", "8000")
     monkeypatch.delenv("GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE", raising=False)
     _clear_tool_filter_environment(monkeypatch)
     monkeypatch.setattr(garmin_mcp, "init_api", authentication)
@@ -215,6 +229,7 @@ def test_main_rejects_remote_http_before_authentication(monkeypatch, capsys):
 
 def test_main_explicit_allowlist_overrides_unknown_profile(monkeypatch):
     run_calls = []
+    _set_safe_stdio_transport_environment(monkeypatch)
     monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai_coach")
     monkeypatch.setenv("GARMIN_ENABLED_TOOLS", "get_devices")
     monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
@@ -232,6 +247,7 @@ def test_main_explicit_allowlist_overrides_unknown_profile(monkeypatch):
 
 def test_main_registers_exact_ai_coach_profile(monkeypatch):
     run_calls = []
+    _set_safe_stdio_transport_environment(monkeypatch)
     monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai-coach")
     monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
     monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
@@ -266,6 +282,7 @@ def test_main_registers_exact_ai_coach_profile(monkeypatch):
 
 def test_ai_coach_profile_equals_actual_registered_tool_names(monkeypatch):
     run_calls = []
+    _set_safe_stdio_transport_environment(monkeypatch)
     monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai-coach")
     monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
     monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
@@ -304,6 +321,7 @@ def test_ai_coach_profile_equals_actual_registered_tool_names(monkeypatch):
 
 def test_main_warns_for_unknown_tool_in_profile(monkeypatch, capsys):
     run_calls = []
+    _set_safe_stdio_transport_environment(monkeypatch)
     monkeypatch.setitem(
         garmin_mcp.TOOL_PROFILES,
         "ai-coach",
@@ -329,6 +347,7 @@ def test_main_warns_for_unknown_tool_in_profile(monkeypatch, capsys):
 
 def test_main_warns_when_active_allowlist_permits_no_tools(monkeypatch, capsys):
     run_calls = []
+    _set_safe_stdio_transport_environment(monkeypatch)
     monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai-coach")
     monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
     monkeypatch.setenv(

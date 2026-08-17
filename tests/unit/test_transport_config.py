@@ -11,10 +11,7 @@ class TestParseTransportConfig:
     """Tests for _parse_transport_config."""
 
     def test_default_is_stdio(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("GARMIN_MCP_TRANSPORT", None)
-            os.environ.pop("GARMIN_MCP_HOST", None)
-            os.environ.pop("GARMIN_MCP_PORT", None)
+        with patch.dict(os.environ, {}, clear=True):
             transport, host, port = _parse_transport_config()
         assert transport == "stdio"
         assert host == "127.0.0.1"
@@ -22,52 +19,116 @@ class TestParseTransportConfig:
 
     @pytest.mark.parametrize("value", list(_VALID_TRANSPORTS))
     def test_valid_transports_are_accepted(self, value):
-        with patch.dict(os.environ, {"GARMIN_MCP_TRANSPORT": value}):
+        with patch.dict(
+            os.environ,
+            {
+                "GARMIN_MCP_TRANSPORT": value,
+                "GARMIN_MCP_HOST": "127.0.0.1",
+                "GARMIN_MCP_PORT": "8000",
+            },
+            clear=True,
+        ):
             transport, _, _ = _parse_transport_config()
         assert transport == value
 
     def test_transport_value_is_lowercased(self):
-        with patch.dict(os.environ, {"GARMIN_MCP_TRANSPORT": "STDIO"}):
+        with patch.dict(
+            os.environ,
+            {
+                "GARMIN_MCP_TRANSPORT": "STDIO",
+                "GARMIN_MCP_HOST": "127.0.0.1",
+                "GARMIN_MCP_PORT": "8000",
+            },
+            clear=True,
+        ):
             transport, _, _ = _parse_transport_config()
         assert transport == "stdio"
 
     def test_transport_value_is_stripped(self):
-        with patch.dict(os.environ, {"GARMIN_MCP_TRANSPORT": "  streamable-http  "}):
+        with patch.dict(
+            os.environ,
+            {
+                "GARMIN_MCP_TRANSPORT": "  streamable-http  ",
+                "GARMIN_MCP_HOST": "127.0.0.1",
+                "GARMIN_MCP_PORT": "8000",
+            },
+            clear=True,
+        ):
             transport, _, _ = _parse_transport_config()
         assert transport == "streamable-http"
 
     def test_invalid_transport_raises_value_error(self):
-        with patch.dict(os.environ, {"GARMIN_MCP_TRANSPORT": "websocket"}):
+        with patch.dict(
+            os.environ,
+            {"GARMIN_MCP_TRANSPORT": "websocket"},
+            clear=True,
+        ):
             with pytest.raises(ValueError, match="Invalid GARMIN_MCP_TRANSPORT"):
                 _parse_transport_config()
 
     def test_custom_host_is_read(self):
-        with patch.dict(os.environ, {"GARMIN_MCP_HOST": "127.0.0.1"}):
+        with patch.dict(
+            os.environ,
+            {
+                "GARMIN_MCP_TRANSPORT": "stdio",
+                "GARMIN_MCP_HOST": "127.0.0.1",
+                "GARMIN_MCP_PORT": "8000",
+            },
+            clear=True,
+        ):
             _, host, _ = _parse_transport_config()
         assert host == "127.0.0.1"
 
     def test_custom_port_is_read(self):
-        with patch.dict(os.environ, {"GARMIN_MCP_PORT": "9000"}):
+        with patch.dict(
+            os.environ,
+            {
+                "GARMIN_MCP_TRANSPORT": "stdio",
+                "GARMIN_MCP_HOST": "127.0.0.1",
+                "GARMIN_MCP_PORT": "9000",
+            },
+            clear=True,
+        ):
             _, _, port = _parse_transport_config()
         assert port == 9000
 
     def test_invalid_port_raises(self):
-        with patch.dict(os.environ, {"GARMIN_MCP_PORT": "not-a-number"}):
+        with patch.dict(
+            os.environ,
+            {
+                "GARMIN_MCP_TRANSPORT": "stdio",
+                "GARMIN_MCP_HOST": "127.0.0.1",
+                "GARMIN_MCP_PORT": "not-a-number",
+            },
+            clear=True,
+        ):
             with pytest.raises(ValueError):
                 _parse_transport_config()
 
     @pytest.mark.parametrize("transport", ("streamable-http", "sse"))
     @pytest.mark.parametrize(
-        "host",
-        ("localhost", "LOCALHOST.", "127.0.0.1", "127.0.0.42", "::1"),
+        ("host", "expected_host"),
+        (
+            ("localhost", "127.0.0.1"),
+            ("LOCALHOST.", "127.0.0.1"),
+            ("127.0.0.1", "127.0.0.1"),
+            ("127.0.0.42", "127.0.0.42"),
+            ("::1", "::1"),
+        ),
     )
-    def test_http_transports_accept_loopback_hosts(self, transport, host):
+    def test_http_transports_canonicalize_loopback_hosts(
+        self, transport, host, expected_host
+    ):
         with patch.dict(
             os.environ,
-            {"GARMIN_MCP_TRANSPORT": transport, "GARMIN_MCP_HOST": host},
+            {
+                "GARMIN_MCP_TRANSPORT": transport,
+                "GARMIN_MCP_HOST": host,
+                "GARMIN_MCP_PORT": "8000",
+            },
             clear=True,
         ):
-            assert _parse_transport_config() == (transport, host, 8000)
+            assert _parse_transport_config() == (transport, expected_host, 8000)
 
     @pytest.mark.parametrize("transport", ("streamable-http", "sse"))
     @pytest.mark.parametrize(
@@ -77,7 +138,11 @@ class TestParseTransportConfig:
     def test_http_transports_reject_nonloopback_hosts_by_default(self, transport, host):
         with patch.dict(
             os.environ,
-            {"GARMIN_MCP_TRANSPORT": transport, "GARMIN_MCP_HOST": host},
+            {
+                "GARMIN_MCP_TRANSPORT": transport,
+                "GARMIN_MCP_HOST": host,
+                "GARMIN_MCP_PORT": "8000",
+            },
             clear=True,
         ):
             with pytest.raises(ValueError) as error:
@@ -98,6 +163,7 @@ class TestParseTransportConfig:
             {
                 "GARMIN_MCP_TRANSPORT": transport,
                 "GARMIN_MCP_HOST": " 192.168.1.2 ",
+                "GARMIN_MCP_PORT": "8000",
                 "GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE": override,
             },
             clear=True,
@@ -109,6 +175,7 @@ class TestParseTransportConfig:
         environment = {
             "GARMIN_MCP_TRANSPORT": "streamable-http",
             "GARMIN_MCP_HOST": "192.168.1.2",
+            "GARMIN_MCP_PORT": "8000",
         }
         if override is not None:
             environment["GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE"] = override
@@ -122,6 +189,7 @@ class TestParseTransportConfig:
         environment = {
             "GARMIN_MCP_TRANSPORT": "stdio",
             "GARMIN_MCP_HOST": " 0.0.0.0 ",
+            "GARMIN_MCP_PORT": "8000",
         }
         if override is not None:
             environment["GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE"] = override
