@@ -245,3 +245,14 @@ China/UTC+8 responses have documented local timestamp ambiguity; nightly totals
 do not require that timestamp interpretation. This guide does not replace
 historical Garmin records or claim a causal relationship between sleep and
 training outcomes.
+
+## Garmin response compatibility
+
+The sleep normalizer accepts the verified compatible Garmin field shapes for
+nightly resting heart rate: nested `dailySleepDTO.restingHeartRate` or root
+`restingHeartRate`. It also accepts the sleep-summary casing variants
+`averageSpo2` / `averageSPO2` and `lowestSpo2` / `lowestSPO2`. When duplicate
+variants are present, they must agree; a conflicting or malformed supported
+variant makes that date `invalid_provider_response`. This compatibility remains
+within the existing one `get_sleep_data(date)` request per date; it does not add
+another Garmin endpoint or request.

@@ -144,6 +144,72 @@ def test_missing_supported_values_are_null_or_an_empty_night() -> None:
     ) is None
 
 
+def test_normalize_accepts_observed_root_hr_and_uppercase_spo2_shape() -> None:
+    payload = complete_sleep_payload()
+    payload["dailySleepDTO"].pop("restingHeartRate")
+    payload["restingHeartRate"] = 42
+    payload["wellnessSpO2SleepSummaryDTO"] = {
+        "averageSPO2": 97.0,
+        "lowestSPO2": 86,
+    }
+
+    assert normalize_sleep_night(payload, "2026-08-17") == normalized_facts(
+        resting_hr_bpm=42,
+        average_spo2_percent=97.0,
+        lowest_spo2_percent=86,
+    )
+
+
+def test_normalize_accepts_compatible_alias_agreement() -> None:
+    payload = complete_sleep_payload()
+    payload["restingHeartRate"] = 44
+    payload["wellnessSpO2SleepSummaryDTO"]["averageSPO2"] = 96
+    payload["wellnessSpO2SleepSummaryDTO"]["lowestSPO2"] = 93
+
+    assert normalize_sleep_night(payload, "2026-08-17") == normalized_facts()
+
+
+@pytest.mark.parametrize(
+    ("parent", "first_key", "second_key", "second_value"),
+    [
+        ("dailySleepDTO", "restingHeartRate", "root.restingHeartRate", 45),
+        ("wellnessSpO2SleepSummaryDTO", "averageSpo2", "averageSPO2", 95),
+        ("wellnessSpO2SleepSummaryDTO", "lowestSpo2", "lowestSPO2", 92),
+    ],
+)
+def test_normalize_rejects_conflicting_aliases(
+    parent: str, first_key: str, second_key: str, second_value: int
+) -> None:
+    payload = complete_sleep_payload()
+    assert payload[parent][first_key] is not None
+    if second_key.startswith("root."):
+        payload[second_key.removeprefix("root.")] = second_value
+    else:
+        payload[parent][second_key] = second_value
+
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(payload, "2026-08-17")
+
+
+@pytest.mark.parametrize(
+    ("parent", "key", "value"),
+    [
+        ("root", "restingHeartRate", True),
+        ("wellnessSpO2SleepSummaryDTO", "averageSPO2", "96"),
+        ("wellnessSpO2SleepSummaryDTO", "lowestSPO2", 101),
+    ],
+)
+def test_normalize_rejects_invalid_compatible_alias(
+    parent: str, key: str, value: Any
+) -> None:
+    payload = complete_sleep_payload()
+    target = payload if parent == "root" else payload[parent]
+    target[key] = value
+
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(payload, "2026-08-17")
+
+
 def _set_source_value(payload: dict[str, Any], source: str, value: Any) -> None:
     if source == "hrv":
         payload["avgOvernightHrv"] = value

@@ -276,6 +276,22 @@ def _optional_number(
     return value
 
 
+def _compatible_number(
+    sources: tuple[tuple[dict[Any, Any], str], ...], minimum: int, maximum: int
+) -> int | float | None:
+    """Coalesce equivalent validated Garmin field aliases without ambiguity."""
+    values = [
+        value
+        for parent, key in sources
+        if (value := _optional_number(parent, key, minimum, maximum)) is not None
+    ]
+    if not values:
+        return None
+    if any(value != values[0] for value in values[1:]):
+        raise InvalidSleepResponse
+    return values[0]
+
+
 def _optional_count(parent: dict[Any, Any], key: str) -> int | None:
     value = parent.get(key)
     if value is None:
@@ -372,13 +388,19 @@ def normalize_sleep_night(raw: Any, requested_date: str | None) -> SleepNightFac
     light_seconds = _optional_number(daily, "lightSleepSeconds", 0, 86_400)
     rem_seconds = _optional_number(daily, "remSleepSeconds", 0, 86_400)
     awake_seconds = _optional_number(daily, "awakeSleepSeconds", 0, 86_400)
-    resting_hr_bpm = _optional_number(daily, "restingHeartRate", 1, 300)
+    resting_hr_bpm = _compatible_number(
+        ((daily, "restingHeartRate"), (raw, "restingHeartRate")), 1, 300
+    )
     overnight_hrv_ms = _optional_number(raw, "avgOvernightHrv", 1, 1000)
     average_sleep_stress = _optional_number(daily, "avgSleepStress", 0, 100)
     awake_count = _optional_count(daily, "awakeCount")
     restless_moments_count = _optional_count(daily, "restlessMomentsCount")
-    average_spo2_percent = _optional_number(spo2, "averageSpo2", 0, 100)
-    lowest_spo2_percent = _optional_number(spo2, "lowestSpo2", 0, 100)
+    average_spo2_percent = _compatible_number(
+        ((spo2, "averageSpo2"), (spo2, "averageSPO2")), 0, 100
+    )
+    lowest_spo2_percent = _compatible_number(
+        ((spo2, "lowestSpo2"), (spo2, "lowestSPO2")), 0, 100
+    )
 
     facts = (
         sleep_seconds,

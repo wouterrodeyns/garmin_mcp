@@ -303,6 +303,19 @@ def test_guide_pins_metrics_units_availability_status_and_read_only_boundary() -
         assert phrase in lower
 
 
+def test_guide_pins_verified_garmin_field_compatibility() -> None:
+    guide = _guide()
+
+    for phrase in (
+        "`dailySleepDTO.restingHeartRate` or root\n`restingHeartRate`",
+        "`averageSpo2` / `averageSPO2`",
+        "`lowestSpo2` / `lowestSPO2`",
+        "one `get_sleep_data(date)` request per date",
+        "conflicting or malformed supported\nvariant makes that date `invalid_provider_response`",
+    ):
+        assert phrase in guide
+
+
 def test_docs_cross_reference_real_schema_validation_and_envelope_tests() -> None:
     integration = (
         ROOT / "tests" / "integration" / "test_ai_sleep_trend_tools.py"
