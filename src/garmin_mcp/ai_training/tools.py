@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import StrictStr
+from pydantic import StrictInt, StrictStr
 
 from .heart_rate import get_wellness_heart_rate_service
 from .service import get_training_context_service
+from .sleep import get_sleep_trend_service
 
 
 garmin_client: Any = None
@@ -41,6 +42,23 @@ def register_tools(app: Any) -> Any:
         """
         result = get_training_context_service(garmin_client, days)
         return json.dumps(result, indent=2)
+
+    @app.tool()
+    async def get_sleep_trend(days: StrictInt = 7) -> str:
+        """Return explicit detailed, read-only recent sleep evidence for AI coaching.
+
+        The fixed inclusive period ending today covers 1 through 30 nights.
+        Detailed sleep evidence is fetched explicitly rather than included in
+        the default training context. There is one sequential Garmin read per
+        requested date. Missing dates remain visible and are not replaced;
+        current/today data may be unavailable until the watch synchronizes.
+        Per-metric averages include their actual denominator (nights used).
+        Availability varies by device, account, and sync state. Do not infer
+        causation, readiness, recovery, or make recommendations solely from sleep
+        data.
+        """
+        result = get_sleep_trend_service(garmin_client, days)
+        return json.dumps(result, separators=(",", ":"), ensure_ascii=False)
 
     @app.tool()
     async def get_wellness_heart_rate(
