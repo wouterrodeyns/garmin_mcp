@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from mcp.server.fastmcp import FastMCP
@@ -120,6 +120,32 @@ async def test_get_sleep_trend_default_call_reads_fixed_period_once_per_date():
 
 
 @pytest.mark.asyncio
+async def test_get_sleep_trend_maximum_request_is_sequential_read_only_and_stable():
+    client = ReadOnlySleepClient()
+    app = registered_app(client)
+
+    payload = json.loads(response_text(await app.call_tool("get_sleep_trend", {"days": 30})))
+    expected_dates = [
+        (date(2026, 7, 19) + timedelta(days=offset)).isoformat()
+        for offset in range(30)
+    ]
+
+    assert client.calls == [("get_sleep_data", date_text) for date_text in expected_dates]
+    assert payload["period"] == {
+        "days": 30,
+        "start_date": expected_dates[0],
+        "end_date": expected_dates[-1],
+    }
+    assert payload["availability"] == {
+        date_text: True for date_text in expected_dates
+    }
+    assert [night["date"] for night in payload["nights"]] == expected_dates
+    assert len(payload["nights"]) == 30
+    assert all(night["available"] is True for night in payload["nights"])
+    assert client.forbidden_calls == []
+
+
+@pytest.mark.asyncio
 async def test_get_sleep_trend_explicit_days_delegates_to_service_once(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -171,7 +197,7 @@ async def test_get_sleep_trend_rejects_json_invalid_types_before_garmin_reads(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("days", [0, 31])
+@pytest.mark.parametrize("days", [0])
 async def test_get_sleep_trend_returns_invalid_days_envelope_for_integer_bounds(
     days: int,
 ):
@@ -185,6 +211,39 @@ async def test_get_sleep_trend_returns_invalid_days_envelope_for_integer_bounds(
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "invalid_days"
     assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_sleep_trend_rejects_thirty_one_without_reads_or_client_access():
+    client = ReadOnlySleepClient()
+    app = registered_app(client)
+
+    payload = json.loads(response_text(await app.call_tool("get_sleep_trend", {"days": 31})))
+
+    assert payload == {
+        "status": "error",
+        "error": {
+            "code": "invalid_days",
+            "message": "days must be an integer from 1 through 30.",
+        },
+        "period": {"days": None, "start_date": None, "end_date": None},
+        "availability": {},
+        "summary": {
+            "nights_requested": 0,
+            "nights_available": 0,
+            "averages": {
+                "duration_hours": {"value": None, "nights": 0},
+                "score": {"value": None, "nights": 0},
+                "resting_hr_bpm": {"value": None, "nights": 0},
+                "overnight_hrv_ms": {"value": None, "nights": 0},
+                "spo2_percent": {"value": None, "nights": 0},
+            },
+        },
+        "nights": [],
+        "warnings": [],
+    }
+    assert client.calls == []
+    assert client.forbidden_calls == []
 
 
 @pytest.mark.asyncio

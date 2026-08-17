@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, datetime
+import json
 from math import inf, nan
 from typing import Any
 
 import pytest
-from garminconnect import GarminConnectConnectionError
+from garminconnect import (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 
 import garmin_mcp.ai_training.sleep as sleep_module
 from garmin_mcp.ai_training.sleep import (
@@ -415,7 +420,13 @@ def test_public_sleep_errors_and_empty_night_have_stable_contract() -> None:
     }
 
 
-@pytest.mark.parametrize("invalid_days", [True, False, "7", 0, -1, 31, 1.0, None])
+class _DaysSubclass(int):
+    pass
+
+
+@pytest.mark.parametrize(
+    "invalid_days", [True, False, "7", 0, -1, 31, 1.0, None, _DaysSubclass(7)]
+)
 def test_sleep_trend_rejects_invalid_days_before_client_or_date_reads(invalid_days: Any) -> None:
     client = RecordingSleepClient({})
 
@@ -567,6 +578,106 @@ def test_mixed_sleep_results_continue_and_never_serialize_provider_sentinels() -
     assert "object at" not in repr(result)
 
 
+class SentinelHostileDict(dict[Any, Any]):
+    """Explode if the untrusted-container protocol is ever invoked."""
+
+    _PRIVATE_URL = "https://private.example/hostile"
+
+    def _explode(self, protocol: str) -> None:
+        raise RuntimeError(f"token={protocol}-private {self._PRIVATE_URL}")
+
+    def __bool__(self) -> bool:
+        self._explode("truthiness")
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        self._explode("get")
+
+    def __len__(self) -> int:
+        self._explode("length")
+
+    def __iter__(self) -> Any:
+        self._explode("iteration")
+
+    def __eq__(self, other: Any) -> bool:
+        self._explode("equality")
+
+    def __repr__(self) -> str:
+        self._explode("repr")
+
+
+def test_sleep_trend_sanitizes_untrusted_failure_sentinels_from_public_results() -> None:
+    private_url = "https://private.example/garmin"
+    oversized_qualifier = f"token=oversized-private {private_url} " + "x" * 65
+    oversized_payload = complete_sleep_payload("2026-08-16")
+    oversized_payload["dailySleepDTO"]["sleepScores"]["overall"]["qualifierKey"] = (
+        oversized_qualifier
+    )
+    client = RecordingSleepClient({
+        "2026-08-10": complete_sleep_payload("2026-08-10"),
+        "2026-08-11": None,
+        "2026-08-12": GarminConnectAuthenticationError(
+            f"token=provider-auth-private {private_url}"
+        ),
+        "2026-08-13": GarminConnectConnectionError(
+            f"token=provider-connection-private {private_url}"
+        ),
+        "2026-08-14": GarminConnectTooManyRequestsError(
+            f"token=provider-rate-private {private_url}"
+        ),
+        "2026-08-15": {
+            "dailySleepDTO": {
+                "sleepScores": f"token=payload-private {private_url}",
+            },
+        },
+        "2026-08-16": oversized_payload,
+        "2026-08-17": {"dailySleepDTO": SentinelHostileDict()},
+    })
+
+    result = get_sleep_trend_service(client, 8, today=date(2026, 8, 17))
+
+    assert result["status"] == "partial_success"
+    assert result["availability"] == {
+        "2026-08-10": True,
+        "2026-08-11": False,
+        "2026-08-12": False,
+        "2026-08-13": False,
+        "2026-08-14": False,
+        "2026-08-15": False,
+        "2026-08-16": False,
+        "2026-08-17": False,
+    }
+    assert [(warning["date"], warning["code"]) for warning in result["warnings"]] == [
+        ("2026-08-11", "sleep_data_unavailable"),
+        ("2026-08-12", "provider_unavailable"),
+        ("2026-08-13", "provider_unavailable"),
+        ("2026-08-14", "provider_unavailable"),
+        ("2026-08-15", "invalid_provider_response"),
+        ("2026-08-16", "invalid_provider_response"),
+        ("2026-08-17", "invalid_provider_response"),
+    ]
+    assert len(result["warnings"]) == sum(
+        not available for available in result["availability"].values()
+    )
+
+    serialized = json.dumps(result)
+    for sentinel in (
+        "token=provider-auth-private",
+        "token=provider-connection-private",
+        "token=provider-rate-private",
+        "token=payload-private",
+        "token=oversized-private",
+        "token=truthiness-private",
+        "token=get-private",
+        "token=length-private",
+        "token=iteration-private",
+        "token=equality-private",
+        "token=repr-private",
+        private_url,
+        SentinelHostileDict._PRIVATE_URL,
+    ):
+        assert sentinel not in serialized
+
+
 def test_all_unavailable_sleep_nights_preserve_data_and_raise_trend_error() -> None:
     client = RecordingSleepClient({
         "2026-08-15": None,
@@ -599,13 +710,41 @@ def test_aggregate_sleep_facts_uses_raw_values_before_rounding_with_per_metric_c
     assert tuple(summary) == ("nights_requested", "nights_available", "averages")
 
 
-def test_sleep_trend_does_not_hide_unexpected_normalization_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sleep_trend_propagates_normalizer_defects(monkeypatch: pytest.MonkeyPatch) -> None:
     client = RecordingSleepClient({"2026-08-17": complete_sleep_payload()})
 
     def explode(raw: Any, requested_date: str | None) -> SleepNightFacts | None:
-        raise RuntimeError("unexpected defect")
+        raise RuntimeError("internal defect")
 
     monkeypatch.setattr(sleep_module, "normalize_sleep_night", explode)
-    with pytest.raises(RuntimeError, match="unexpected defect"):
+    with pytest.raises(RuntimeError, match="internal defect"):
+        get_sleep_trend_service(client, 1, today=date(2026, 8, 17))
+    assert client.calls == ["2026-08-17"]
+
+
+def test_sleep_trend_propagates_projection_defects(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = RecordingSleepClient({"2026-08-17": complete_sleep_payload()})
+
+    def explode(facts: SleepNightFacts) -> dict[str, Any]:
+        raise RuntimeError("internal defect")
+
+    monkeypatch.setattr(sleep_module, "project_sleep_night", explode)
+
+    with pytest.raises(RuntimeError, match="internal defect"):
+        get_sleep_trend_service(client, 1, today=date(2026, 8, 17))
+    assert client.calls == ["2026-08-17"]
+
+
+def test_sleep_trend_propagates_aggregation_defects(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = RecordingSleepClient({"2026-08-17": complete_sleep_payload()})
+
+    def explode(
+        facts: list[SleepNightFacts], nights_requested: int
+    ) -> dict[str, Any]:
+        raise RuntimeError("internal defect")
+
+    monkeypatch.setattr(sleep_module, "aggregate_sleep_facts", explode)
+
+    with pytest.raises(RuntimeError, match="internal defect"):
         get_sleep_trend_service(client, 1, today=date(2026, 8, 17))
     assert client.calls == ["2026-08-17"]
