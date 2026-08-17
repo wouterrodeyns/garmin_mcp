@@ -102,11 +102,16 @@ is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 # carry. No modules are removed; tools are simply not registered when filtered.
 #   GARMIN_ENABLED_TOOLS  - comma-separated allowlist; if set, ONLY these register
 #   GARMIN_DISABLED_TOOLS - comma-separated denylist; ignored if an allowlist is set
-# Tool names are case-insensitive. Unset = all tools register (default behaviour).
+# Tool names and profile names are case-insensitive. An unset profile uses the
+# curated AI-coach surface; upstream-full is the explicit opt-in for all tools.
 def _parse_tool_set(value):
     if not value:
         return set()
     return {name.strip().lower() for name in value.split(",") if name.strip()}
+
+
+DEFAULT_TOOL_PROFILE = "ai-coach"
+UPSTREAM_FULL_PROFILE = "upstream-full"
 
 
 TOOL_PROFILES = {
@@ -131,6 +136,13 @@ TOOL_PROFILES = {
 }
 
 
+def _normalized_profile_name(value):
+    """Return a normalized profile name, defaulting blank values to ai-coach."""
+    if value is None or not value.strip():
+        return DEFAULT_TOOL_PROFILE
+    return value.strip().lower()
+
+
 def _resolve_tool_filters(profile_value, enabled_value, disabled_value):
     """Resolve profile, allowlist, and denylist settings into tool filters."""
     explicit_enabled = _parse_tool_set(enabled_value)
@@ -138,17 +150,19 @@ def _resolve_tool_filters(profile_value, enabled_value, disabled_value):
         return explicit_enabled, set()
 
     disabled = _parse_tool_set(disabled_value)
-    profile_name = profile_value.strip().lower() if profile_value else ""
-    if profile_name:
-        if profile_name not in TOOL_PROFILES:
-            valid_profiles = ", ".join(sorted(TOOL_PROFILES))
-            raise ValueError(
-                f"Unknown GARMIN_TOOL_PROFILE {profile_value!r}; "
-                f"valid profile(s): {valid_profiles}"
-            )
-        return TOOL_PROFILES[profile_name] - disabled, set()
+    profile_name = _normalized_profile_name(profile_value)
+    if profile_name == UPSTREAM_FULL_PROFILE:
+        return set(), disabled
+    if profile_name not in TOOL_PROFILES:
+        valid_profiles = ", ".join(
+            sorted((*TOOL_PROFILES, UPSTREAM_FULL_PROFILE))
+        )
+        raise ValueError(
+            f"Unknown GARMIN_TOOL_PROFILE {profile_value!r}; "
+            f"valid profile(s): {valid_profiles}"
+        )
 
-    return set(), disabled
+    return TOOL_PROFILES[profile_name] - disabled, set()
 
 
 def _resolve_tool_filters_from_environment():
@@ -162,7 +176,7 @@ def _resolve_tool_filters_from_environment():
         disabled_value,
     )
     parsed_enabled = _parse_tool_set(enabled_value)
-    profile_name = profile_value.strip().lower() if profile_value else ""
+    profile_name = _normalized_profile_name(profile_value)
     allowlist_active = bool(parsed_enabled) or profile_name in TOOL_PROFILES
 
     # Include all profile members in typo detection, even if a denylist removes
@@ -531,6 +545,15 @@ def main():
         print(f"Tool filter: allowlist of {len(enabled_tools)} tool(s).", file=sys.stderr)
     elif disabled_tools:
         print(f"Tool filter: denylist of {len(disabled_tools)} tool(s).", file=sys.stderr)
+    if (
+        not _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
+        and _normalized_profile_name(os.getenv("GARMIN_TOOL_PROFILE"))
+        == UPSTREAM_FULL_PROFILE
+    ):
+        print(
+            "Tool filter: full upstream-compatible tool surface active.",
+            file=sys.stderr,
+        )
 
     # Register tools from all modules
     app = activity_management.register_tools(app)

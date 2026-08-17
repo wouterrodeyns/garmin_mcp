@@ -134,7 +134,7 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
 
 def test_explicit_enabled_tools_override_profile_and_disabled_tools():
     enabled, disabled = _resolve_tool_filters(
-        "ai-coach", " GET_DEVICES, get_workouts ", "get_workouts"
+        "upstream-full", " GET_DEVICES, get_workouts ", "get_workouts"
     )
 
     assert enabled == {"get_devices", "get_workouts"}
@@ -180,13 +180,30 @@ def test_profile_filter_warns_for_typo_in_disabled_tools_only():
     assert filt.unknown_filter_names() == ["create_workuout"]
 
 
-def test_empty_profile_preserves_denylist_behavior():
-    enabled, disabled = _resolve_tool_filters(None, None, " GET_DEVICES, get_devices ")
+@pytest.mark.parametrize("profile_value", [None, "", "   "])
+def test_unset_or_blank_profile_defaults_to_ai_coach(profile_value):
+    enabled, disabled = _resolve_tool_filters(
+        profile_value,
+        None,
+        " GET_WORKOUTS, get_workouts ",
+    )
+
+    assert enabled == TOOL_PROFILES["ai-coach"] - {"get_workouts"}
+    assert disabled == set()
+
+
+def test_upstream_full_profile_preserves_broad_registration_with_denylist():
+    enabled, disabled = _resolve_tool_filters(
+        "upstream-full", None, " GET_DEVICES, get_devices "
+    )
 
     assert enabled == set()
     assert disabled == {"get_devices"}
 
 
 def test_unknown_profile_names_are_rejected():
-    with pytest.raises(ValueError, match=r"Unknown GARMIN_TOOL_PROFILE.*ai-coach"):
+    with pytest.raises(
+        ValueError,
+        match=r"Unknown GARMIN_TOOL_PROFILE.*ai-coach.*upstream-full",
+    ):
         _resolve_tool_filters("unknown", None, None)

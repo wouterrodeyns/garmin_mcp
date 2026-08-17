@@ -18,7 +18,7 @@ def _clear_tool_filter_environment(monkeypatch):
         monkeypatch.delenv(variable, raising=False)
 
 
-def test_main_registers_tools_and_starts_stdio(monkeypatch):
+def test_main_defaults_to_exact_ai_coach_tool_profile(monkeypatch):
     """Run main() without real Garmin auth and stop before entering the server loop."""
     run_calls = []
 
@@ -44,13 +44,29 @@ def test_main_registers_tools_and_starts_stdio(monkeypatch):
 
     assert run_calls
     assert run_calls[0]["transport"] == "stdio"
-    assert run_calls[0]["tool_count"] >= 10
-    assert run_calls[0]["tool_count"] > len(garmin_mcp.TOOL_PROFILES["ai-coach"])
-    assert "get_heart_rates" not in garmin_mcp.TOOL_PROFILES["ai-coach"]
-    assert "get_devices" in run_calls[0]["tool_names"]
-    assert "get_workouts" in run_calls[0]["tool_names"]
-    assert "create_workout" in run_calls[0]["tool_names"]
-    assert "update_workout" in run_calls[0]["tool_names"]
+    assert run_calls[0]["tool_count"] == 16
+    assert set(run_calls[0]["tool_names"]) == garmin_mcp.TOOL_PROFILES["ai-coach"]
+    assert "get_devices" not in run_calls[0]["tool_names"]
+
+
+def test_main_registers_normalized_upstream_full_profile(monkeypatch, capsys):
+    run_calls = []
+    monkeypatch.setenv("GARMIN_TOOL_PROFILE", " UpStReAm-FuLl ")
+    monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
+    monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
+    monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
+
+    def capture_run(self, **_kwargs):
+        run_calls.append({tool.name for tool in asyncio.run(self.list_tools())})
+
+    monkeypatch.setattr(FastMCP, "run", capture_run)
+
+    garmin_mcp.main()
+
+    assert "get_devices" in run_calls[0]
+    assert "create_workout" in run_calls[0]
+    assert len(run_calls[0]) > len(garmin_mcp.TOOL_PROFILES["ai-coach"])
+    assert "Tool filter: full upstream-compatible tool surface active." in capsys.readouterr().err
 
 
 def test_main_configures_and_registers_ai_workouts(monkeypatch):
