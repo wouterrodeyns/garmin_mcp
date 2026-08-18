@@ -110,7 +110,15 @@ person or a correlation between metrics.
       "average_sleep_stress": 15,
       "awake_count": 3,
       "restless_moments_count": 10,
-      "spo2": {"average_percent": 96, "lowest_percent": 94}
+      "spo2": {"average_percent": 96, "lowest_percent": 94},
+      "sleep_times": {
+        "bedtime_local": "2026-08-14T23:30:00",
+        "bedtime_utc": "2026-08-14T21:30:00Z",
+        "bedtime_utc_offset_minutes": 120,
+        "wake_time_local": "2026-08-15T06:42:00",
+        "wake_time_utc": "2026-08-15T04:42:00Z",
+        "wake_time_utc_offset_minutes": 120
+      }
     },
     {
       "date": "2026-08-16",
@@ -130,7 +138,15 @@ person or a correlation between metrics.
       "average_sleep_stress": 13,
       "awake_count": 2,
       "restless_moments_count": 8,
-      "spo2": {"average_percent": 96, "lowest_percent": 95}
+      "spo2": {"average_percent": 96, "lowest_percent": 95},
+      "sleep_times": {
+        "bedtime_local": "2026-08-15T23:15:00",
+        "bedtime_utc": "2026-08-15T21:15:00Z",
+        "bedtime_utc_offset_minutes": 120,
+        "wake_time_local": "2026-08-16T06:51:00",
+        "wake_time_utc": "2026-08-16T04:51:00Z",
+        "wake_time_utc_offset_minutes": 120
+      }
     },
     {
       "date": "2026-08-17",
@@ -150,7 +166,15 @@ person or a correlation between metrics.
       "average_sleep_stress": null,
       "awake_count": null,
       "restless_moments_count": null,
-      "spo2": {"average_percent": null, "lowest_percent": null}
+      "spo2": {"average_percent": null, "lowest_percent": null},
+      "sleep_times": {
+        "bedtime_local": null,
+        "bedtime_utc": null,
+        "bedtime_utc_offset_minutes": null,
+        "wake_time_local": null,
+        "wake_time_utc": null,
+        "wake_time_utc_offset_minutes": null
+      }
     }
   ],
   "warnings": [
@@ -180,12 +204,39 @@ fields are ignored and raw DTOs are never returned.
 | `average_sleep_stress` | Garmin nightly average sleep-stress value. |
 | `awake_count`, `restless_moments_count` | Integer event counts. |
 | `spo2.average_percent`, `lowest_percent` | Average and lowest nightly SpO2 percentage. |
+| `sleep_times.bedtime_local`, `wake_time_local` | Sleep onset and wake as naive local wall-clock ISO-8601 text, no offset suffix. |
+| `sleep_times.bedtime_utc`, `wake_time_utc` | The same two boundaries as unambiguous UTC instants, `Z`-suffixed. |
+| `sleep_times.bedtime_utc_offset_minutes`, `wake_time_utc_offset_minutes` | Whole-minute UTC offset derived per boundary. |
 
 Every listed field is optional. An unavailable supported field is `null`; it
 does not make an otherwise usable night invalid. A night is available when at
 least one supported normalized metric is present. The implementation does not
-return sleep start/end timestamps, sleep-stage percentages, sleep debt,
-consistency, slopes, variance, readiness, or recovery scores.
+return sleep-stage percentages, sleep debt, consistency, slopes, variance,
+readiness, or recovery scores.
+
+## Sleep boundary times and timezone frames
+
+`sleep_times` reports sleep onset and wake, each in an explicitly named frame.
+Garmin sends `dailySleepDTO.sleepStartTimestampGMT` / `sleepEndTimestampGMT`
+and, on observed accounts, `sleepStartTimestampLocal` / `sleepEndTimestampLocal`
+as epoch milliseconds. The `Local` variants are pre-shifted by the local UTC
+offset, so reading them in UTC yields the wall clock the watch displayed.
+
+Each frame is projected only from its own source, and a missing frame is never
+reconstructed from the other:
+
+- `*_local` is populated only from a `Local` timestamp. Absent it, the value is
+  `null`; a UTC instant is never relabelled as local.
+- `*_utc` is populated only from a `GMT` timestamp.
+- `*_utc_offset_minutes` requires both frames for that boundary and is `null`
+  otherwise. No timezone name or region is ever inferred.
+
+Offsets are derived per boundary, not per night, so a night spanning a
+daylight-saving transition correctly reports different bedtime and wake offsets.
+Values are truncated to whole seconds; sub-second precision is not returned. A
+boundary outside the year 2000 through 2100 epoch window, a wake time before its
+own bedtime, or a local frame that is not a sane whole-minute offset from its
+GMT frame makes that date `invalid_provider_response`.
 
 ## Averages and denominators
 
@@ -240,9 +291,13 @@ MCP tool.
 
 Garmin metric availability varies by device, account, and sync state. A missing
 metric or night is not evidence that a device or account
-cannot support it. Sleep timestamps are not returned because some Garmin
-China/UTC+8 responses have documented local timestamp ambiguity; nightly totals
-do not require that timestamp interpretation. This guide does not replace
+cannot support it. Sleep boundary times are reported per frame rather than as a
+single resolved instant because some Garmin China/UTC+8 responses have
+documented local timestamp ambiguity. This path therefore never infers a
+timezone: it reports the `Local` wall clock and the `GMT` instant only from
+their own source fields, and rejects a night whose two frames disagree by
+anything other than a sane whole-minute offset. Nightly totals do not depend on
+any timestamp interpretation. This guide does not replace
 historical Garmin records or claim a causal relationship between sleep and
 training outcomes.
 

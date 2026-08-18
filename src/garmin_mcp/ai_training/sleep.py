@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from math import isfinite
 from typing import Any
 
@@ -13,6 +13,10 @@ from .providers import get_sleep_night
 DEFAULT_SLEEP_DAYS = 7
 MAX_SLEEP_DAYS = 30
 MAX_SLEEP_TEXT_LENGTH = 64
+# Sleep boundary epoch-millisecond bounds: 2000-01-01Z through 2100-01-01Z.
+MIN_SLEEP_TIMESTAMP_MS = 946_684_800_000
+MAX_SLEEP_TIMESTAMP_MS = 4_102_444_800_000
+MAX_SLEEP_UTC_OFFSET_MINUTES = 1439
 
 PUBLIC_SLEEP_ERRORS = {
     "invalid_days": "days must be an integer from 1 through 30.",
@@ -51,6 +55,10 @@ class SleepNightFacts:
     restless_moments_count: int | None
     average_spo2_percent: int | float | None
     lowest_spo2_percent: int | float | None
+    sleep_start_gmt_ms: int | float | None
+    sleep_end_gmt_ms: int | float | None
+    sleep_start_local_ms: int | float | None
+    sleep_end_local_ms: int | float | None
 
 
 def empty_sleep_night(date_text: str) -> dict[str, Any]:
@@ -74,6 +82,14 @@ def empty_sleep_night(date_text: str) -> dict[str, Any]:
         "awake_count": None,
         "restless_moments_count": None,
         "spo2": {"average_percent": None, "lowest_percent": None},
+        "sleep_times": {
+            "bedtime_local": None,
+            "bedtime_utc": None,
+            "bedtime_utc_offset_minutes": None,
+            "wake_time_local": None,
+            "wake_time_utc": None,
+            "wake_time_utc_offset_minutes": None,
+        },
     }
 
 
@@ -83,6 +99,63 @@ def _minutes(seconds: int | float | None) -> float | None:
 
 def _hours(seconds: int | float | None) -> float | None:
     return None if seconds is None else round(seconds / 3600, 1)
+
+
+def _whole_seconds(timestamp_ms: int | float) -> int:
+    """Truncate a validated positive epoch-millisecond value to whole seconds."""
+    return int(timestamp_ms) // 1000
+
+
+def _utc_iso(timestamp_ms: int | float | None) -> str | None:
+    """Render a validated GMT boundary as an unambiguous UTC instant."""
+    if timestamp_ms is None:
+        return None
+    moment = datetime.fromtimestamp(_whole_seconds(timestamp_ms), timezone.utc)
+    return moment.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _local_iso(timestamp_ms: int | float | None) -> str | None:
+    """Render a validated Local boundary as naive local wall-clock text.
+
+    Garmin pre-shifts the ``*TimestampLocal`` epoch by the local UTC offset, so
+    reading it in UTC yields the wall clock the watch displayed. The offset is
+    never encoded here; it is reported separately only when both frames exist.
+    """
+    if timestamp_ms is None:
+        return None
+    moment = datetime.fromtimestamp(_whole_seconds(timestamp_ms), timezone.utc)
+    return moment.replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def _utc_offset_minutes(
+    gmt_ms: int | float | None, local_ms: int | float | None
+) -> int | None:
+    """Derive one boundary's UTC offset, refusing to invent an absent frame."""
+    if gmt_ms is None or local_ms is None:
+        return None
+    delta = local_ms - gmt_ms
+    if delta % 60_000:
+        raise InvalidSleepResponse
+    minutes = int(delta // 60_000)
+    if abs(minutes) > MAX_SLEEP_UTC_OFFSET_MINUTES:
+        raise InvalidSleepResponse
+    return minutes
+
+
+def _sleep_times(facts: SleepNightFacts) -> dict[str, Any]:
+    """Project both sleep boundaries without ever mixing or fabricating frames."""
+    return {
+        "bedtime_local": _local_iso(facts.sleep_start_local_ms),
+        "bedtime_utc": _utc_iso(facts.sleep_start_gmt_ms),
+        "bedtime_utc_offset_minutes": _utc_offset_minutes(
+            facts.sleep_start_gmt_ms, facts.sleep_start_local_ms
+        ),
+        "wake_time_local": _local_iso(facts.sleep_end_local_ms),
+        "wake_time_utc": _utc_iso(facts.sleep_end_gmt_ms),
+        "wake_time_utc_offset_minutes": _utc_offset_minutes(
+            facts.sleep_end_gmt_ms, facts.sleep_end_local_ms
+        ),
+    }
 
 
 def project_sleep_night(facts: SleepNightFacts) -> dict[str, Any]:
@@ -109,6 +182,7 @@ def project_sleep_night(facts: SleepNightFacts) -> dict[str, Any]:
             "average_percent": facts.average_spo2_percent,
             "lowest_percent": facts.lowest_spo2_percent,
         },
+        "sleep_times": _sleep_times(facts),
     }
 
 
@@ -301,6 +375,21 @@ def _optional_count(parent: dict[Any, Any], key: str) -> int | None:
     return value
 
 
+def _boundary_pair(
+    daily: dict[Any, Any], start_key: str, end_key: str
+) -> tuple[int | float | None, int | float | None]:
+    """Validate one frame's sleep boundary pair against the DTO contract."""
+    start = _optional_number(
+        daily, start_key, MIN_SLEEP_TIMESTAMP_MS, MAX_SLEEP_TIMESTAMP_MS
+    )
+    end = _optional_number(
+        daily, end_key, MIN_SLEEP_TIMESTAMP_MS, MAX_SLEEP_TIMESTAMP_MS
+    )
+    if start is not None and end is not None and end < start:
+        raise InvalidSleepResponse
+    return start, end
+
+
 def _canonical_date(value: Any) -> str:
     """Return an exact canonical ISO calendar date from untrusted text."""
     if type(value) is not str:
@@ -401,6 +490,14 @@ def normalize_sleep_night(raw: Any, requested_date: str | None) -> SleepNightFac
     lowest_spo2_percent = _compatible_number(
         ((spo2, "lowestSpo2"), (spo2, "lowestSPO2")), 0, 100
     )
+    sleep_start_gmt_ms, sleep_end_gmt_ms = _boundary_pair(
+        daily, "sleepStartTimestampGMT", "sleepEndTimestampGMT"
+    )
+    sleep_start_local_ms, sleep_end_local_ms = _boundary_pair(
+        daily, "sleepStartTimestampLocal", "sleepEndTimestampLocal"
+    )
+    _utc_offset_minutes(sleep_start_gmt_ms, sleep_start_local_ms)
+    _utc_offset_minutes(sleep_end_gmt_ms, sleep_end_local_ms)
 
     facts = (
         sleep_seconds,
@@ -418,6 +515,10 @@ def normalize_sleep_night(raw: Any, requested_date: str | None) -> SleepNightFac
         restless_moments_count,
         average_spo2_percent,
         lowest_spo2_percent,
+        sleep_start_gmt_ms,
+        sleep_end_gmt_ms,
+        sleep_start_local_ms,
+        sleep_end_local_ms,
     )
     if not any(value is not None for value in facts):
         return None
@@ -441,4 +542,8 @@ def normalize_sleep_night(raw: Any, requested_date: str | None) -> SleepNightFac
         restless_moments_count=restless_moments_count,
         average_spo2_percent=average_spo2_percent,
         lowest_spo2_percent=lowest_spo2_percent,
+        sleep_start_gmt_ms=sleep_start_gmt_ms,
+        sleep_end_gmt_ms=sleep_end_gmt_ms,
+        sleep_start_local_ms=sleep_start_local_ms,
+        sleep_end_local_ms=sleep_end_local_ms,
     )

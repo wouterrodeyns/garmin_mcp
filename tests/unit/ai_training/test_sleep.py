@@ -17,6 +17,8 @@ from garminconnect import (
 
 import garmin_mcp.ai_training.sleep as sleep_module
 from garmin_mcp.ai_training.sleep import (
+    MAX_SLEEP_TIMESTAMP_MS,
+    MIN_SLEEP_TIMESTAMP_MS,
     DEFAULT_SLEEP_DAYS,
     MAX_SLEEP_DAYS,
     MAX_SLEEP_TEXT_LENGTH,
@@ -48,6 +50,10 @@ def complete_sleep_payload(date_text: str = "2026-08-17") -> dict[str, Any]:
             "avgSleepStress": 14,
             "awakeCount": 3,
             "restlessMomentsCount": 12,
+            "sleepStartTimestampGMT": 1786916400000,
+            "sleepEndTimestampGMT": 1786943041000,
+            "sleepStartTimestampLocal": 1786923600000,
+            "sleepEndTimestampLocal": 1786950241000,
         },
         "avgOvernightHrv": 94,
         "wellnessSpO2SleepSummaryDTO": {
@@ -77,8 +83,26 @@ def normalized_facts(**changes: Any) -> SleepNightFacts:
         restless_moments_count=12,
         average_spo2_percent=96,
         lowest_spo2_percent=93,
+        sleep_start_gmt_ms=1786916400000,
+        sleep_end_gmt_ms=1786943041000,
+        sleep_start_local_ms=1786923600000,
+        sleep_end_local_ms=1786950241000,
     )
     return replace(base, **changes)
+
+
+def expected_sleep_times(**changes: Any) -> dict[str, Any]:
+    """Return the canonical projected boundary block, with focused overrides."""
+    base = {
+        "bedtime_local": "2026-08-16T23:40:00",
+        "bedtime_utc": "2026-08-16T21:40:00Z",
+        "bedtime_utc_offset_minutes": 120,
+        "wake_time_local": "2026-08-17T07:04:01",
+        "wake_time_utc": "2026-08-17T05:04:01Z",
+        "wake_time_utc_offset_minutes": 120,
+    }
+    base.update(changes)
+    return base
 
 
 def test_normalize_maps_complete_payload_and_trims_qualifier() -> None:
@@ -95,7 +119,8 @@ def test_normalize_maps_complete_payload_and_trims_qualifier() -> None:
         "deep_seconds", "light_seconds", "rem_seconds", "awake_seconds",
         "resting_hr_bpm", "overnight_hrv_ms", "average_sleep_stress",
         "awake_count", "restless_moments_count", "average_spo2_percent",
-        "lowest_spo2_percent",
+        "lowest_spo2_percent", "sleep_start_gmt_ms", "sleep_end_gmt_ms",
+        "sleep_start_local_ms", "sleep_end_local_ms",
     )
 
 
@@ -138,6 +163,10 @@ def test_missing_supported_values_are_null_or_an_empty_night() -> None:
         restless_moments_count=None,
         average_spo2_percent=None,
         lowest_spo2_percent=None,
+        sleep_start_gmt_ms=None,
+        sleep_end_gmt_ms=None,
+        sleep_start_local_ms=None,
+        sleep_end_local_ms=None,
     )
     assert normalize_sleep_night(
         {"dailySleepDTO": {"calendarDate": "2026-08-17"}}, "2026-08-17"
@@ -491,6 +520,11 @@ def test_public_sleep_errors_and_empty_night_have_stable_contract() -> None:
         "average_sleep_stress": None, "awake_count": None,
         "restless_moments_count": None,
         "spo2": {"average_percent": None, "lowest_percent": None},
+        "sleep_times": {
+            "bedtime_local": None, "bedtime_utc": None,
+            "bedtime_utc_offset_minutes": None, "wake_time_local": None,
+            "wake_time_utc": None, "wake_time_utc_offset_minutes": None,
+        },
     }
 
 
@@ -569,6 +603,7 @@ def test_project_sleep_night_has_exact_order_and_unit_conversions() -> None:
         "average_sleep_stress": 14, "awake_count": 3,
         "restless_moments_count": 12,
         "spo2": {"average_percent": 96, "lowest_percent": 93},
+        "sleep_times": expected_sleep_times(),
     }
     assert tuple(night) == tuple(empty_sleep_night("2026-08-17"))
 
@@ -883,3 +918,194 @@ def test_sleep_trend_propagates_unexpected_provider_seam_defects() -> None:
 
     assert excinfo.value is defect
     assert client.calls == ["2026-08-17"]
+
+
+_DROP = object()
+
+
+def timestamped_payload(**changes: Any) -> dict[str, Any]:
+    """Return a minimal payload carrying only the sleep boundary timestamps."""
+    daily: dict[str, Any] = {
+        "calendarDate": "2026-08-17",
+        "sleepStartTimestampGMT": 1786916400000,
+        "sleepEndTimestampGMT": 1786943041000,
+        "sleepStartTimestampLocal": 1786923600000,
+        "sleepEndTimestampLocal": 1786950241000,
+    }
+    for key, value in changes.items():
+        if value is _DROP:
+            daily.pop(key)
+        else:
+            daily[key] = value
+    return {"dailySleepDTO": daily}
+
+
+def test_boundary_timestamps_alone_make_a_night_available() -> None:
+    facts = normalize_sleep_night(timestamped_payload(), "2026-08-17")
+
+    assert facts is not None
+    assert facts.sleep_start_local_ms == 1786923600000
+    assert project_sleep_night(facts)["sleep_times"] == expected_sleep_times()
+
+
+def test_local_wall_clock_is_projected_without_a_timezone_suffix() -> None:
+    night = project_sleep_night(normalized_facts())
+
+    assert night["sleep_times"]["bedtime_local"] == "2026-08-16T23:40:00"
+    assert night["sleep_times"]["wake_time_local"] == "2026-08-17T07:04:01"
+    assert not night["sleep_times"]["bedtime_local"].endswith("Z")
+
+
+def test_gmt_only_payload_reports_utc_and_never_fabricates_local() -> None:
+    payload = timestamped_payload(
+        sleepStartTimestampLocal=_DROP, sleepEndTimestampLocal=_DROP
+    )
+
+    night = project_sleep_night(normalize_sleep_night(payload, "2026-08-17"))
+
+    assert night["sleep_times"] == expected_sleep_times(
+        bedtime_local=None,
+        wake_time_local=None,
+        bedtime_utc_offset_minutes=None,
+        wake_time_utc_offset_minutes=None,
+    )
+
+
+def test_local_only_payload_reports_local_without_utc_or_an_offset() -> None:
+    payload = timestamped_payload(
+        sleepStartTimestampGMT=_DROP, sleepEndTimestampGMT=_DROP
+    )
+
+    night = project_sleep_night(normalize_sleep_night(payload, "2026-08-17"))
+
+    assert night["sleep_times"] == expected_sleep_times(
+        bedtime_utc=None,
+        wake_time_utc=None,
+        bedtime_utc_offset_minutes=None,
+        wake_time_utc_offset_minutes=None,
+    )
+
+
+def test_absent_boundary_timestamps_stay_null_across_the_whole_block() -> None:
+    payload = complete_sleep_payload()
+    for key in (
+        "sleepStartTimestampGMT",
+        "sleepEndTimestampGMT",
+        "sleepStartTimestampLocal",
+        "sleepEndTimestampLocal",
+    ):
+        payload["dailySleepDTO"][key] = None
+
+    night = project_sleep_night(normalize_sleep_night(payload, "2026-08-17"))
+
+    assert night["sleep_times"] == dict.fromkeys(expected_sleep_times())
+    assert night["duration_hours"] == 7.4
+
+
+def test_utc_offsets_are_derived_per_boundary_across_a_dst_transition() -> None:
+    payload = timestamped_payload(
+        sleepStartTimestampGMT=1792877400000,
+        sleepEndTimestampGMT=1792909800000,
+        sleepStartTimestampLocal=1792884600000,
+        sleepEndTimestampLocal=1792913400000,
+    )
+
+    night = project_sleep_night(normalize_sleep_night(payload, "2026-08-17"))
+
+    assert night["sleep_times"] == {
+        "bedtime_local": "2026-10-24T23:30:00",
+        "bedtime_utc": "2026-10-24T21:30:00Z",
+        "bedtime_utc_offset_minutes": 120,
+        "wake_time_local": "2026-10-25T07:30:00",
+        "wake_time_utc": "2026-10-25T06:30:00Z",
+        "wake_time_utc_offset_minutes": 60,
+    }
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sleepStartTimestampGMT",
+        "sleepEndTimestampGMT",
+        "sleepStartTimestampLocal",
+        "sleepEndTimestampLocal",
+    ],
+)
+@pytest.mark.parametrize(
+    "value", [nan, inf, -inf, True, "1786916400000", -1, 0, 946_684_799_999, 4_102_444_800_001, 10**30]
+)
+def test_out_of_contract_boundary_timestamps_are_rejected(key: str, value: Any) -> None:
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(timestamped_payload(**{key: value}), "2026-08-17")
+
+
+def test_boundary_timestamp_bounds_are_pinned_to_a_sane_epoch_window() -> None:
+    assert MIN_SLEEP_TIMESTAMP_MS == 946_684_800_000
+    assert MAX_SLEEP_TIMESTAMP_MS == 4_102_444_800_000
+    assert normalize_sleep_night(
+        timestamped_payload(
+            sleepStartTimestampGMT=MIN_SLEEP_TIMESTAMP_MS,
+            sleepEndTimestampGMT=MAX_SLEEP_TIMESTAMP_MS,
+            sleepStartTimestampLocal=MIN_SLEEP_TIMESTAMP_MS,
+            sleepEndTimestampLocal=MAX_SLEEP_TIMESTAMP_MS,
+        ),
+        "2026-08-17",
+    ) is not None
+
+
+@pytest.mark.parametrize(
+    "start_key,end_key",
+    [
+        ("sleepStartTimestampGMT", "sleepEndTimestampGMT"),
+        ("sleepStartTimestampLocal", "sleepEndTimestampLocal"),
+    ],
+)
+def test_a_wake_time_before_its_bedtime_is_rejected(start_key: str, end_key: str) -> None:
+    payload = timestamped_payload()
+    payload["dailySleepDTO"][start_key] = payload["dailySleepDTO"][end_key] + 1
+
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(payload, "2026-08-17")
+
+
+def test_an_equal_bedtime_and_wake_time_stays_within_contract() -> None:
+    payload = timestamped_payload(sleepEndTimestampGMT=1786916400000, sleepEndTimestampLocal=1786923600000)
+
+    night = project_sleep_night(normalize_sleep_night(payload, "2026-08-17"))
+
+    assert night["sleep_times"]["wake_time_local"] == night["sleep_times"]["bedtime_local"]
+
+
+@pytest.mark.parametrize("skew_ms", [30_000, 1, 86_400_001, -86_400_001])
+def test_a_local_frame_that_is_not_a_sane_whole_minute_offset_is_rejected(skew_ms: int) -> None:
+    payload = timestamped_payload()
+    payload["dailySleepDTO"]["sleepStartTimestampLocal"] = (
+        payload["dailySleepDTO"]["sleepStartTimestampGMT"] + skew_ms
+    )
+
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(payload, "2026-08-17")
+
+
+def test_sub_second_boundary_precision_is_truncated_to_whole_seconds() -> None:
+    payload = timestamped_payload(
+        sleepStartTimestampGMT=1786916400500, sleepStartTimestampLocal=1786923600500
+    )
+
+    night = project_sleep_night(normalize_sleep_night(payload, "2026-08-17"))
+
+    assert night["sleep_times"]["bedtime_local"] == "2026-08-16T23:40:00"
+    assert night["sleep_times"]["bedtime_utc"] == "2026-08-16T21:40:00Z"
+
+
+def test_boundary_timestamps_are_not_averaged_into_the_trend_summary() -> None:
+    client = RecordingSleepClient({"2026-08-17": complete_sleep_payload()})
+
+    result = get_sleep_trend_service(client, 1, today=date(2026, 8, 17))
+
+    assert result["status"] == "success"
+    assert list(result["summary"]["averages"]) == [
+        "duration_hours", "score", "resting_hr_bpm", "overnight_hrv_ms", "spo2_percent",
+    ]
+    assert result["nights"][0]["sleep_times"] == expected_sleep_times()
+    assert "1786916400000" not in json.dumps(result)
