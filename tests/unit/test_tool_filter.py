@@ -211,8 +211,10 @@ def test_upstream_full_profile_preserves_broad_registration_with_denylist():
 
 
 def test_unknown_profile_names_are_rejected():
-    with pytest.raises(
-        ValueError,
-        match=r"Unknown GARMIN_TOOL_PROFILE.*ai-coach.*upstream-full",
-    ):
-        _resolve_tool_filters("unknown", None, None)
+    with pytest.raises(ValueError) as error:
+        _resolve_tool_filters("TOP_SECRET_PROFILE", None, None)
+
+    assert str(error.value) == (
+        "Unknown GARMIN_TOOL_PROFILE; valid profile(s): ai-coach, upstream-full"
+    )
+    assert "TOP_SECRET_PROFILE" not in str(error.value)

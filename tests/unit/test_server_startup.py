@@ -37,6 +37,33 @@ def _clear_transport_environment(monkeypatch):
         monkeypatch.delenv(variable, raising=False)
 
 
+def _register_unfiltered_reference_tools():
+    """Build the full maintained surface without applying any tool filter."""
+    app = FastMCP("unfiltered-reference")
+    for module in (
+        garmin_mcp.activity_management,
+        garmin_mcp.health_wellness,
+        garmin_mcp.user_profile,
+        garmin_mcp.devices,
+        garmin_mcp.gear_management,
+        garmin_mcp.weight_management,
+        garmin_mcp.challenges,
+        garmin_mcp.training,
+        garmin_mcp.workouts,
+        garmin_mcp.ai_workouts,
+        garmin_mcp.ai_training,
+        garmin_mcp.ai_activity,
+        garmin_mcp.data_management,
+        garmin_mcp.womens_health,
+        garmin_mcp.nutrition,
+        garmin_mcp.workout_builders,
+        garmin_mcp.courses,
+        garmin_mcp.activity_analysis,
+    ):
+        app = module.register_tools(app)
+    return {tool.name for tool in asyncio.run(app.list_tools())}
+
+
 def test_main_defaults_to_exact_ai_coach_tool_profile(monkeypatch):
     """Run main() without real Garmin auth and stop before entering the server loop."""
     run_calls = []
@@ -81,9 +108,7 @@ def test_main_registers_normalized_upstream_full_profile(monkeypatch, capsys):
 
     garmin_mcp.main()
 
-    assert "get_devices" in run_calls[0]
-    assert "create_workout" in run_calls[0]
-    assert len(run_calls[0]) > len(garmin_mcp.TOOL_PROFILES["ai-coach"])
+    assert run_calls[0] == _register_unfiltered_reference_tools()
     assert "Tool filter: full upstream-compatible tool surface active." in capsys.readouterr().err
 
 
@@ -210,7 +235,7 @@ def test_main_configures_and_registers_ai_activity_adjacent_to_ai_tools(monkeypa
 def test_main_rejects_unknown_profile_before_authentication(monkeypatch, capsys):
     authentication = Mock()
     _set_safe_stdio_transport_environment(monkeypatch)
-    monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai_coach")
+    monkeypatch.setenv("GARMIN_TOOL_PROFILE", "TOP_SECRET_PROFILE")
     monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
     monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
     monkeypatch.setattr(garmin_mcp, "init_api", authentication)
@@ -220,7 +245,30 @@ def test_main_rejects_unknown_profile_before_authentication(monkeypatch, capsys)
         garmin_mcp.main()
 
     assert error.value.code == 1
-    assert "Unknown GARMIN_TOOL_PROFILE 'ai_coach'; valid profile(s): ai-coach" in capsys.readouterr().err
+    assert capsys.readouterr().err == (
+        "Unknown GARMIN_TOOL_PROFILE; valid profile(s): ai-coach, upstream-full\n"
+    )
+    authentication.assert_not_called()
+
+
+@pytest.mark.parametrize("port", ("TOP_SECRET_PORT", "-1", "0", "65536", "70000"))
+def test_main_rejects_invalid_port_before_authentication(monkeypatch, capsys, port):
+    authentication = Mock()
+    _clear_tool_filter_environment(monkeypatch)
+    monkeypatch.setenv("GARMIN_MCP_TRANSPORT", "streamable-http")
+    monkeypatch.setenv("GARMIN_MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("GARMIN_MCP_PORT", port)
+    monkeypatch.delenv("GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE", raising=False)
+    monkeypatch.setattr(garmin_mcp, "init_api", authentication)
+    monkeypatch.setattr(FastMCP, "run", lambda self, **_kwargs: None)
+
+    with pytest.raises(SystemExit) as error:
+        garmin_mcp.main()
+
+    assert error.value.code == 1
+    assert capsys.readouterr().err == (
+        "GARMIN_MCP_PORT must be an integer from 1 through 65535\n"
+    )
     authentication.assert_not_called()
 
 

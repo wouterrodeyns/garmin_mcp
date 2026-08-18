@@ -4,6 +4,10 @@ import os
 import pytest
 from unittest.mock import patch
 
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecurityMiddleware
+from starlette.requests import Request
+
 from garmin_mcp import _parse_transport_config, _VALID_TRANSPORTS
 
 
@@ -60,11 +64,17 @@ class TestParseTransportConfig:
     def test_invalid_transport_raises_value_error(self):
         with patch.dict(
             os.environ,
-            {"GARMIN_MCP_TRANSPORT": "websocket"},
+            {"GARMIN_MCP_TRANSPORT": "TOP_SECRET_TRANSPORT"},
             clear=True,
         ):
-            with pytest.raises(ValueError, match="Invalid GARMIN_MCP_TRANSPORT"):
+            with pytest.raises(ValueError) as error:
                 _parse_transport_config()
+
+        assert str(error.value) == (
+            "Invalid GARMIN_MCP_TRANSPORT; expected one of "
+            "stdio, streamable-http, sse"
+        )
+        assert "TOP_SECRET_TRANSPORT" not in str(error.value)
 
     def test_custom_host_is_read(self):
         with patch.dict(
@@ -92,18 +102,37 @@ class TestParseTransportConfig:
             _, _, port = _parse_transport_config()
         assert port == 9000
 
-    def test_invalid_port_raises(self):
+    @pytest.mark.parametrize("value", ("TOP_SECRET_PORT", "-1", "0", "65536", "70000"))
+    def test_invalid_port_raises_fixed_value_free_error(self, value):
         with patch.dict(
             os.environ,
             {
                 "GARMIN_MCP_TRANSPORT": "stdio",
                 "GARMIN_MCP_HOST": "127.0.0.1",
-                "GARMIN_MCP_PORT": "not-a-number",
+                "GARMIN_MCP_PORT": value,
             },
             clear=True,
         ):
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError) as error:
                 _parse_transport_config()
+
+        assert str(error.value) == (
+            "GARMIN_MCP_PORT must be an integer from 1 through 65535"
+        )
+        assert "TOP_SECRET_PORT" not in str(error.value)
+
+    @pytest.mark.parametrize("value", ("1", "65535"))
+    def test_port_range_boundaries_are_accepted(self, value):
+        with patch.dict(
+            os.environ,
+            {
+                "GARMIN_MCP_TRANSPORT": "stdio",
+                "GARMIN_MCP_HOST": "127.0.0.1",
+                "GARMIN_MCP_PORT": value,
+            },
+            clear=True,
+        ):
+            assert _parse_transport_config()[2] == int(value)
 
     @pytest.mark.parametrize("transport", ("streamable-http", "sse"))
     @pytest.mark.parametrize(
@@ -112,7 +141,7 @@ class TestParseTransportConfig:
             ("localhost", "127.0.0.1"),
             ("LOCALHOST.", "127.0.0.1"),
             ("127.0.0.1", "127.0.0.1"),
-            ("127.0.0.42", "127.0.0.42"),
+            ("127.0.0.42", "127.0.0.1"),
             ("::1", "::1"),
         ),
     )
@@ -129,6 +158,49 @@ class TestParseTransportConfig:
             clear=True,
         ):
             assert _parse_transport_config() == (transport, expected_host, 8000)
+
+    @pytest.mark.parametrize("transport", ("streamable-http", "sse"))
+    @pytest.mark.parametrize("configured_host", ("127.0.0.1", "127.0.0.42", "::1"))
+    @pytest.mark.asyncio
+    async def test_every_accepted_loopback_rejects_host_header_rebinding(
+        self, transport, configured_host
+    ):
+        with patch.dict(
+            os.environ,
+            {
+                "GARMIN_MCP_TRANSPORT": transport,
+                "GARMIN_MCP_HOST": configured_host,
+                "GARMIN_MCP_PORT": "8000",
+            },
+            clear=True,
+        ):
+            _, parsed_host, _ = _parse_transport_config()
+
+        server = FastMCP("transport-security-probe", host=parsed_host)
+        middleware = TransportSecurityMiddleware(server.settings.transport_security)
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/mcp" if transport == "streamable-http" else "/sse",
+                "raw_path": b"/mcp" if transport == "streamable-http" else b"/sse",
+                "query_string": b"",
+                "headers": (
+                    (b"content-type", b"application/json"),
+                    (b"host", b"attacker.invalid"),
+                    (b"origin", b"http://attacker.invalid"),
+                ),
+                "client": ("127.0.0.1", 12345),
+                "server": (parsed_host, 8000),
+            }
+        )
+        response = await middleware.validate_request(request, is_post=True)
+
+        assert response is not None
+        assert response.status_code == 421
+        assert bytes(response.body) == b"Invalid Host header"
 
     @pytest.mark.parametrize("transport", ("streamable-http", "sse"))
     @pytest.mark.parametrize(

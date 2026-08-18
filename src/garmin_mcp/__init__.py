@@ -113,6 +113,9 @@ def _parse_tool_set(value):
 
 DEFAULT_TOOL_PROFILE = "ai-coach"
 UPSTREAM_FULL_PROFILE = "upstream-full"
+_UNKNOWN_TOOL_PROFILE_ERROR = (
+    "Unknown GARMIN_TOOL_PROFILE; valid profile(s): ai-coach, upstream-full"
+)
 
 
 TOOL_PROFILES = {
@@ -157,13 +160,7 @@ def _resolve_tool_filters(profile_value, enabled_value, disabled_value):
     if profile_name == UPSTREAM_FULL_PROFILE:
         return set(), disabled
     if profile_name not in TOOL_PROFILES:
-        valid_profiles = ", ".join(
-            sorted((*TOOL_PROFILES, UPSTREAM_FULL_PROFILE))
-        )
-        raise ValueError(
-            f"Unknown GARMIN_TOOL_PROFILE {profile_value!r}; "
-            f"valid profile(s): {valid_profiles}"
-        )
+        raise ValueError(_UNKNOWN_TOOL_PROFILE_ERROR)
 
     return TOOL_PROFILES[profile_name] - disabled, set()
 
@@ -196,6 +193,12 @@ def _resolve_tool_filters_from_environment():
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 _HTTP_TRANSPORTS = ("streamable-http", "sse")
 _LOCALHOST_ALIASES = ("localhost", "localhost.")
+_INVALID_TRANSPORT_ERROR = (
+    "Invalid GARMIN_MCP_TRANSPORT; expected one of stdio, streamable-http, sse"
+)
+_INVALID_PORT_ERROR = (
+    "GARMIN_MCP_PORT must be an integer from 1 through 65535"
+)
 _REMOTE_HTTP_BIND_ERROR = (
     "Refusing unauthenticated remote HTTP binding because this server does not "
     "provide HTTP authentication. Use an authenticating reverse proxy, or "
@@ -204,14 +207,17 @@ _REMOTE_HTTP_BIND_ERROR = (
 )
 
 
-def _is_loopback_host(host: str) -> bool:
-    """Return whether a host is localhost or a loopback IP literal."""
+def _canonical_loopback_host(host: str) -> str | None:
+    """Return a FastMCP-protected canonical bind for a loopback host."""
     if host.lower() in _LOCALHOST_ALIASES:
-        return True
+        return "127.0.0.1"
     try:
-        return ipaddress.ip_address(host).is_loopback
+        address = ipaddress.ip_address(host)
     except ValueError:
-        return False
+        return None
+    if not address.is_loopback:
+        return None
+    return "127.0.0.1" if address.version == 4 else "::1"
 
 
 class _GarminProxy:
@@ -262,26 +268,25 @@ def _parse_transport_config() -> tuple[str, str, int]:
     """Read and validate HTTP transport env vars. Raises ValueError on bad input."""
     transport = os.getenv("GARMIN_MCP_TRANSPORT", "stdio").strip().lower()
     if transport not in _VALID_TRANSPORTS:
-        raise ValueError(
-            f"Invalid GARMIN_MCP_TRANSPORT {transport!r}; "
-            f"expected one of {', '.join(_VALID_TRANSPORTS)}"
-        )
+        raise ValueError(_INVALID_TRANSPORT_ERROR)
     # Bind to loopback by default: the HTTP transport performs no authentication,
     # so a 0.0.0.0 default would expose full read/write access to the user's
     # Garmin account to the whole network.
     http_host = os.getenv("GARMIN_MCP_HOST", "127.0.0.1").strip()
-    if http_host.lower() in _LOCALHOST_ALIASES:
-        http_host = "127.0.0.1"
-    http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
+    try:
+        http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
+    except ValueError:
+        raise ValueError(_INVALID_PORT_ERROR) from None
+    if not 1 <= http_port <= 65535:
+        raise ValueError(_INVALID_PORT_ERROR)
     allow_unauthenticated_remote = (
         os.getenv("GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE", "").strip().lower()
         in ("true", "1", "yes")
     )
-    if (
-        transport in _HTTP_TRANSPORTS
-        and not _is_loopback_host(http_host)
-        and not allow_unauthenticated_remote
-    ):
+    canonical_loopback = _canonical_loopback_host(http_host)
+    if canonical_loopback is not None:
+        http_host = canonical_loopback
+    elif transport in _HTTP_TRANSPORTS and not allow_unauthenticated_remote:
         raise ValueError(_REMOTE_HTTP_BIND_ERROR)
     return transport, http_host, http_port
 
