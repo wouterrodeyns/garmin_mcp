@@ -233,10 +233,11 @@ reconstructed from the other:
 
 Offsets are derived per boundary, not per night, so a night spanning a
 daylight-saving transition correctly reports different bedtime and wake offsets.
-Values are truncated to whole seconds; sub-second precision is not returned. A
-boundary outside the year 2000 through 2100 epoch window, a wake time before its
-own bedtime, or a local frame that is not a sane whole-minute offset from its
-GMT frame makes that date `invalid_provider_response`.
+Values are truncated to whole seconds; sub-second precision is not returned.
+Each present start/end pair must form a positive interval no longer than 24
+hours. A boundary outside the year 2000 through 2100 epoch window, an invalid
+interval, or a local frame outside the real-world whole-minute UTC offset range
+of -14:00 through +14:00 makes that date `invalid_provider_response`.
 
 ## Averages and denominators
 

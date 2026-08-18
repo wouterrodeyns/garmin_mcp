@@ -1045,8 +1045,17 @@ def test_boundary_timestamp_bounds_are_pinned_to_a_sane_epoch_window() -> None:
     assert normalize_sleep_night(
         timestamped_payload(
             sleepStartTimestampGMT=MIN_SLEEP_TIMESTAMP_MS,
-            sleepEndTimestampGMT=MAX_SLEEP_TIMESTAMP_MS,
+            sleepEndTimestampGMT=MIN_SLEEP_TIMESTAMP_MS + 1,
             sleepStartTimestampLocal=MIN_SLEEP_TIMESTAMP_MS,
+            sleepEndTimestampLocal=MIN_SLEEP_TIMESTAMP_MS + 1,
+        ),
+        "2026-08-17",
+    ) is not None
+    assert normalize_sleep_night(
+        timestamped_payload(
+            sleepStartTimestampGMT=MAX_SLEEP_TIMESTAMP_MS - 1,
+            sleepEndTimestampGMT=MAX_SLEEP_TIMESTAMP_MS,
+            sleepStartTimestampLocal=MAX_SLEEP_TIMESTAMP_MS - 1,
             sleepEndTimestampLocal=MAX_SLEEP_TIMESTAMP_MS,
         ),
         "2026-08-17",
@@ -1068,12 +1077,24 @@ def test_a_wake_time_before_its_bedtime_is_rejected(start_key: str, end_key: str
         normalize_sleep_night(payload, "2026-08-17")
 
 
-def test_an_equal_bedtime_and_wake_time_stays_within_contract() -> None:
-    payload = timestamped_payload(sleepEndTimestampGMT=1786916400000, sleepEndTimestampLocal=1786923600000)
+@pytest.mark.parametrize("duration_ms", [0, 86_400_001])
+def test_zero_or_over_24_hour_sleep_boundaries_are_rejected(duration_ms: int) -> None:
+    payload = timestamped_payload(
+        sleepEndTimestampGMT=1786916400000 + duration_ms,
+        sleepEndTimestampLocal=1786923600000 + duration_ms,
+    )
 
-    night = project_sleep_night(normalize_sleep_night(payload, "2026-08-17"))
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(payload, "2026-08-17")
 
-    assert night["sleep_times"]["wake_time_local"] == night["sleep_times"]["bedtime_local"]
+
+def test_exactly_24_hour_sleep_boundaries_stay_within_contract() -> None:
+    payload = timestamped_payload(
+        sleepEndTimestampGMT=1786916400000 + 86_400_000,
+        sleepEndTimestampLocal=1786923600000 + 86_400_000,
+    )
+
+    assert normalize_sleep_night(payload, "2026-08-17") is not None
 
 
 @pytest.mark.parametrize("skew_ms", [30_000, 1, 86_400_001, -86_400_001])
@@ -1085,6 +1106,25 @@ def test_a_local_frame_that_is_not_a_sane_whole_minute_offset_is_rejected(skew_m
 
     with pytest.raises(InvalidSleepResponse):
         normalize_sleep_night(payload, "2026-08-17")
+
+
+def test_real_world_utc_offset_boundaries_are_enforced() -> None:
+    assert normalize_sleep_night(
+        timestamped_payload(
+            sleepStartTimestampLocal=1786916400000 + 14 * 60 * 60 * 1000,
+            sleepEndTimestampLocal=1786943041000 + 14 * 60 * 60 * 1000,
+        ),
+        "2026-08-17",
+    ) is not None
+
+    with pytest.raises(InvalidSleepResponse):
+        normalize_sleep_night(
+            timestamped_payload(
+                sleepStartTimestampLocal=1786916400000 + (14 * 60 + 1) * 60 * 1000,
+                sleepEndTimestampLocal=1786943041000 + (14 * 60 + 1) * 60 * 1000,
+            ),
+            "2026-08-17",
+        )
 
 
 def test_sub_second_boundary_precision_is_truncated_to_whole_seconds() -> None:

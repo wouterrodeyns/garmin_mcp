@@ -16,7 +16,8 @@ MAX_SLEEP_TEXT_LENGTH = 64
 # Sleep boundary epoch-millisecond bounds: 2000-01-01Z through 2100-01-01Z.
 MIN_SLEEP_TIMESTAMP_MS = 946_684_800_000
 MAX_SLEEP_TIMESTAMP_MS = 4_102_444_800_000
-MAX_SLEEP_UTC_OFFSET_MINUTES = 1439
+MAX_SLEEP_BOUNDARY_SPAN_MS = 86_400_000
+MAX_SLEEP_UTC_OFFSET_MINUTES = 14 * 60
 
 PUBLIC_SLEEP_ERRORS = {
     "invalid_days": "days must be an integer from 1 through 30.",
@@ -385,8 +386,10 @@ def _boundary_pair(
     end = _optional_number(
         daily, end_key, MIN_SLEEP_TIMESTAMP_MS, MAX_SLEEP_TIMESTAMP_MS
     )
-    if start is not None and end is not None and end < start:
-        raise InvalidSleepResponse
+    if start is not None and end is not None:
+        span_ms = end - start
+        if span_ms <= 0 or span_ms > MAX_SLEEP_BOUNDARY_SPAN_MS:
+            raise InvalidSleepResponse
     return start, end
 
 

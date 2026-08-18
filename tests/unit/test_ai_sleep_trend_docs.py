@@ -120,6 +120,8 @@ def test_guide_pins_call_bounds_cost_and_interpretation_guardrails() -> None:
         "a missing frame is never reconstructed from the other",
         "no timezone name or region is ever inferred",
         "offsets are derived per boundary, not per night",
+        "longer than 24 hours",
+        "-14:00 through +14:00",
         "strictint",
         "mcp toolerror",
         "bool, string, float, or null",
