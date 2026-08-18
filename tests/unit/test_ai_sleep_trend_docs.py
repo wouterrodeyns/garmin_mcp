@@ -49,9 +49,18 @@ NIGHT_KEYS = [
     "awake_count",
     "restless_moments_count",
     "spo2",
+    "sleep_times",
 ]
 STAGE_KEYS = ["deep_minutes", "light_minutes", "rem_minutes", "awake_minutes"]
 SPO2_KEYS = ["average_percent", "lowest_percent"]
+SLEEP_TIME_KEYS = [
+    "bedtime_local",
+    "bedtime_utc",
+    "bedtime_utc_offset_minutes",
+    "wake_time_local",
+    "wake_time_utc",
+    "wake_time_utc_offset_minutes",
+]
 WARNING_KEYS = ["provider", "date", "code", "message"]
 ERROR_KEYS = ["code", "message"]
 
@@ -108,7 +117,11 @@ def test_guide_pins_call_bounds_cost_and_interpretation_guardrails() -> None:
         "per-metric denominator",
         "does not establish causation, readiness, recovery",
         "read-only",
-        "sleep timestamps are not returned",
+        "a missing frame is never reconstructed from the other",
+        "no timezone name or region is ever inferred",
+        "offsets are derived per boundary, not per night",
+        "longer than 24 hours",
+        "-14:00 through +14:00",
         "strictint",
         "mcp toolerror",
         "bool, string, float, or null",
@@ -155,20 +168,29 @@ def test_guide_examples_parse_and_pin_exact_stable_shapes_and_types() -> None:
             assert type(night["available"]) is bool
             assert list(night["stages"]) == STAGE_KEYS
             assert list(night["spo2"]) == SPO2_KEYS
+            assert list(night["sleep_times"]) == SLEEP_TIME_KEYS
             for key, value in night.items():
-                if key in {"date", "available", "score_qualifier", "stages", "spo2"}:
+                if key in {"date", "available", "score_qualifier", "stages", "spo2", "sleep_times"}:
                     continue
                 assert value is None or type(value) in (int, float)
             assert all(value is None or type(value) in (int, float) for value in night["stages"].values())
             assert all(value is None or type(value) in (int, float) for value in night["spo2"].values())
+            for key, value in night["sleep_times"].items():
+                expected = int if key.endswith("_offset_minutes") else str
+                assert value is None or type(value) is expected
+            for key in ("bedtime_utc", "wake_time_utc"):
+                assert night["sleep_times"][key] is None or night["sleep_times"][key].endswith("Z")
+            for key in ("bedtime_local", "wake_time_local"):
+                assert night["sleep_times"][key] is None or not night["sleep_times"][key].endswith("Z")
             if night["available"] is False:
                 assert all(
                     value is None
                     for key, value in night.items()
-                    if key not in {"date", "available", "stages", "spo2"}
+                    if key not in {"date", "available", "stages", "spo2", "sleep_times"}
                 )
                 assert all(value is None for value in night["stages"].values())
                 assert all(value is None for value in night["spo2"].values())
+                assert all(value is None for value in night["sleep_times"].values())
         assert dates == sorted(dates)
         for warning in example["warnings"]:  # type: ignore[union-attr]
             assert list(warning) == WARNING_KEYS
@@ -221,6 +243,10 @@ def test_guide_example_relationships_match_a_seeded_service_envelope() -> None:
                     "avgSleepStress": 15 if first else 13,
                     "awakeCount": 3 if first else 2,
                     "restlessMomentsCount": 10 if first else 8,
+                    "sleepStartTimestampGMT": 1_786_743_000_000 if first else 1_786_828_500_000,
+                    "sleepEndTimestampGMT": 1_786_768_920_000 if first else 1_786_855_860_000,
+                    "sleepStartTimestampLocal": 1_786_750_200_000 if first else 1_786_835_700_000,
+                    "sleepEndTimestampLocal": 1_786_776_120_000 if first else 1_786_863_060_000,
                     "sleepScores": {
                         "overall": {
                             "value": 80 if first else 82,

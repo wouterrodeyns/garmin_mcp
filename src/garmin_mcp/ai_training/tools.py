@@ -55,6 +55,15 @@ def register_tools(app: Any) -> Any:
         night count. Missing dates remain visible and are not replaced; current/today
         data may be unavailable until the watch synchronizes.
         Per-metric averages include their actual denominator (nights used).
+        Each night's sleep_times reports sleep onset and wake in explicitly named
+        frames: *_local is naive local wall clock, *_utc is a Z-suffixed instant,
+        and *_utc_offset_minutes is derived only when both frames are present for
+        that boundary. A missing frame stays null and is never reconstructed from
+        the other; no timezone name or region is inferred. Offsets are per
+        boundary, so a daylight-saving night can report two different offsets.
+        Times are truncated to whole seconds and are not averaged into summary.
+        Present start/end pairs must be positive and no longer than 24 hours;
+        derived offsets are limited to the real-world -14:00 through +14:00 range.
         Availability varies by device, account, and sync state. Do not infer
         causation, readiness, recovery, or make recommendations solely from sleep
         data.
