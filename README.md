@@ -90,7 +90,10 @@ Garmin Connect China, and token recovery, see the
 
 ## AI-coach tool profile
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 16-tool surface:
+ai-coach is the default profile when `GARMIN_TOOL_PROFILE` is unset or
+empty. Set `GARMIN_TOOL_PROFILE=ai-coach` explicitly in a client configuration
+when documenting that intent. This profile exposes this deliberate 16-tool
+surface:
 
 ```text
 `get_training_context`
@@ -112,8 +115,8 @@ Set `GARMIN_TOOL_PROFILE=ai-coach` to expose this deliberate 16-tool surface:
 ```
 
 This profile narrows registration for the AI-facing surface; no existing
-upstream tool is removed, and broad upstream-compatible registration remains
-available when no profile is selected.
+upstream tool is removed. Full Taxuspt-compatible registration is an explicit
+choice in the filtering rules below.
 
 The wellness, activity, activity time-series, and coaching-context operations are
 reads. `get_wellness_heart_rate` is an explicit all-day evidence read; it is not
@@ -132,15 +135,18 @@ The safe instruction is to read the workout before retrying.
 Tool filtering follows this precedence:
 
 1. A non-empty `GARMIN_ENABLED_TOOLS` explicit allowlist takes precedence; the
-   denylist is ignored while the explicit allowlist is active.
+   selected profile and denylist are both ignored while the explicit allowlist
+   is active.
 2. Without an explicit allowlist, `GARMIN_DISABLED_TOOLS` subtracts tools from
-   the selected profile or broad default.
-3. Otherwise, the selected profile controls registration.
+   the selected or default profile.
+3. Otherwise, the selected profile controls registration. Full upstream tool registration
+   is an explicit choice: full Taxuspt-compatible registration
+   requires explicitly setting `GARMIN_TOOL_PROFILE=upstream-full`. That
+   profile enables all tools exposed by the upstream-compatible server.
+4. When `GARMIN_TOOL_PROFILE` is unset or empty, `ai-coach` applies by default.
 
-When the explicit allowlist is absent and the profile is unset, broad upstream-compatible registration remains available.
-This preserves the full upstream tool registration for advanced users who
-intentionally want all tools; the `ai-coach` profile remains the recommended
-AI-facing default.
+This preserves the selected profile's coaching and tool behavior while making
+full upstream registration an explicit choice.
 
 ## Documentation and development
 

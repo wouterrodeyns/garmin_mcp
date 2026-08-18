@@ -85,6 +85,52 @@ def test_file_secret_guidance_is_deployment_only():
     assert "GARMIN_PASSWORD_FILE" not in claude
 
 
+def test_setup_documents_fail_closed_http_and_docker_secret_defaults():
+    setup = " ".join(_setup().lower().split())
+    for expected in (
+        "refuses non-loopback",
+        "garmin_mcp_allow_unauthenticated_remote=true",
+        "authenticating reverse proxy",
+        "secrets/garmin_email.txt",
+        "secrets/garmin_password.txt",
+        "ignored by git",
+        "excluded from the docker build context",
+    ):
+        assert expected in setup
+
+
+def test_setup_transport_section_pins_fail_closed_remote_http_defaults():
+    transport = " ".join(_section(_setup(), "Transport").lower().split()).replace(
+        "`", ""
+    )
+    assert "streamable-http" in transport
+    assert "sse" in transport
+    assert "streamable-http clients connect to /mcp" in transport
+    assert "sse clients connect to /sse" in transport
+    assert "sse message endpoint is protocol-managed at /messages/" in transport
+    assert not re.search(r"(?:^|[.;]\s*)http clients connect to /mcp", transport)
+    assert "refuses non-loopback" in transport
+    assert "garmin_mcp_allow_unauthenticated_remote=true" in transport
+    assert "does not add auth" in transport
+    assert "only behind an authenticating reverse proxy" in transport
+    assert "0.0.0.0 requires the same explicit override" in transport
+
+
+def test_setup_docker_section_describes_local_stdio_and_safe_http_provisioning():
+    docker = " ".join(
+        _section(_setup(), "Docker and non-interactive deployments").lower().split()
+    ).replace("`", "")
+    assert "local/container stdio examples" in docker
+    assert "do not expose a reachable network service" in docker
+    assert "credentials and tokens must be provisioned before container start" in docker
+    assert (
+        "http container deployment requires explicit transport/host acknowledgement"
+        in docker
+    )
+    assert "behind an authenticating reverse proxy" in docker
+    assert "0.0.0.0" not in docker
+
+
 def test_setup_client_config_fences_are_credential_free():
     forbidden_patterns = (
         r"\bGARMIN_(?:EMAIL|PASSWORD)(?:_FILE)?\b",
@@ -148,16 +194,70 @@ def test_readme_is_ai_coach_first_and_credits_upstream_once():
 
 def test_readme_profile_and_filter_contract():
     profile = _section(_readme(), "AI-coach tool profile")
+    profile_normalized = " ".join(profile.lower().split()).replace("`", "")
     tools = re.findall(r"^`([^`]+)`$", profile, re.MULTILINE)
     assert set(tools) == PROFILE_TOOLS
     assert PROFILE_TOOLS == TOOL_PROFILES["ai-coach"]
     assert tools.index("update_workout") == tools.index("create_workout") + 1
-    lower = " ".join(_readme().lower().split())
-    assert "garmin_tool_profile=ai-coach" in lower
-    assert lower.index("garmin_enabled_tools") < lower.index("garmin_disabled_tools")
-    assert lower.index("garmin_disabled_tools") < lower.index("profile is unset")
-    assert "denylist is ignored while the explicit allowlist is active" in lower
-    assert "broad upstream-compatible registration remains available" in lower
+    assert "garmin_tool_profile=ai-coach" in profile_normalized
+    assert (
+        "ai-coach is the default profile when garmin_tool_profile is unset or empty"
+        in profile_normalized
+    )
+    assert "garmin_tool_profile=upstream-full" in profile_normalized
+    assert "full upstream tool registration is an explicit choice" in profile_normalized
+    assert profile_normalized.index("garmin_enabled_tools") < profile_normalized.index(
+        "garmin_disabled_tools"
+    )
+    assert profile_normalized.index("garmin_disabled_tools") < profile_normalized.index(
+        "selected or default profile"
+    )
+    assert profile_normalized.index(
+        "garmin_tool_profile=upstream-full"
+    ) < profile_normalized.index("all tools exposed by the upstream-compatible server")
+    assert (
+        "selected profile and denylist are both ignored while the explicit allowlist is active"
+        in profile_normalized
+    )
+    for stale in ("no profile", "broad default"):
+        assert stale not in profile_normalized
+    assert not re.search(
+        r"[^.]*?(?:no profile|profile is unset|garmin_tool_profile is unset)"
+        r"[^.]*?(?:broad|full upstream)",
+        profile_normalized,
+    )
+
+
+def test_setup_runtime_section_pins_profile_defaults_full_opt_in_and_precedence():
+    runtime = " ".join(
+        _section(_setup(), "Runtime configuration and tool filtering").lower().split()
+    ).replace("`", "")
+    assert (
+        "ai-coach is the default profile when garmin_tool_profile is unset or empty"
+        in runtime
+    )
+    assert "garmin_tool_profile=upstream-full" in runtime
+    assert "full upstream tool registration is an explicit choice" in runtime
+    assert runtime.index("garmin_enabled_tools") < runtime.index(
+        "garmin_disabled_tools"
+    )
+    assert runtime.index("garmin_disabled_tools") < runtime.index(
+        "selected or default profile"
+    )
+    assert runtime.index("garmin_tool_profile=upstream-full") < runtime.index(
+        "all tools exposed by the upstream-compatible server"
+    )
+    assert (
+        "selected profile and denylist are both ignored while the explicit allowlist is active"
+        in runtime
+    )
+    for stale in ("no profile", "broad default"):
+        assert stale not in runtime
+    assert not re.search(
+        r"[^.]*?(?:no profile|profile is unset|garmin_tool_profile is unset)"
+        r"[^.]*?(?:broad|full upstream)",
+        runtime,
+    )
 
 
 def test_readme_pins_sixteen_tools_and_in_place_update_semantics():
@@ -175,7 +275,10 @@ def test_readme_pins_sixteen_tools_and_in_place_update_semantics():
         assert expected in lower
 
     setup = " ".join(_setup().lower().split())
-    assert "denylist is ignored while the explicit allowlist is active" in setup
+    assert (
+        "selected profile and denylist are both ignored while the explicit allowlist is active"
+        in setup
+    )
 
 
 def test_setup_doc_describes_create_and_update_as_workout_hands():
@@ -243,6 +346,8 @@ def test_readme_removes_stale_dxt_raw_and_volatile_claims():
     ):
         assert forbidden not in lower
     assert "fork-specific desktop extension is not published yet" in lower
+    assert "desktop extension bundle" not in lower
+    assert "desktop extension install" not in lower
 
 
 def test_cross_document_install_sources_and_client_config_fences_are_safe():

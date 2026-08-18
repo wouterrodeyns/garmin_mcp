@@ -5,6 +5,7 @@ Modular MCP Server for Garmin Connect Data
 import os
 import sys
 import base64
+import ipaddress
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -102,11 +103,19 @@ is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 # carry. No modules are removed; tools are simply not registered when filtered.
 #   GARMIN_ENABLED_TOOLS  - comma-separated allowlist; if set, ONLY these register
 #   GARMIN_DISABLED_TOOLS - comma-separated denylist; ignored if an allowlist is set
-# Tool names are case-insensitive. Unset = all tools register (default behaviour).
+# Tool names and profile names are case-insensitive. An unset profile uses the
+# curated AI-coach surface; upstream-full is the explicit opt-in for all tools.
 def _parse_tool_set(value):
     if not value:
         return set()
     return {name.strip().lower() for name in value.split(",") if name.strip()}
+
+
+DEFAULT_TOOL_PROFILE = "ai-coach"
+UPSTREAM_FULL_PROFILE = "upstream-full"
+_UNKNOWN_TOOL_PROFILE_ERROR = (
+    "Unknown GARMIN_TOOL_PROFILE; valid profile(s): ai-coach, upstream-full"
+)
 
 
 TOOL_PROFILES = {
@@ -131,24 +140,29 @@ TOOL_PROFILES = {
 }
 
 
+def _normalized_profile_name(value):
+    """Return a normalized profile name, defaulting blank values to ai-coach."""
+    if value is None or not value.strip():
+        return DEFAULT_TOOL_PROFILE
+    return value.strip().lower()
+
+
 def _resolve_tool_filters(profile_value, enabled_value, disabled_value):
     """Resolve profile, allowlist, and denylist settings into tool filters."""
     explicit_enabled = _parse_tool_set(enabled_value)
     if explicit_enabled:
         return explicit_enabled, set()
+    if enabled_value is not None and enabled_value.strip():
+        raise ValueError("GARMIN_ENABLED_TOOLS must contain at least one tool name")
 
     disabled = _parse_tool_set(disabled_value)
-    profile_name = profile_value.strip().lower() if profile_value else ""
-    if profile_name:
-        if profile_name not in TOOL_PROFILES:
-            valid_profiles = ", ".join(sorted(TOOL_PROFILES))
-            raise ValueError(
-                f"Unknown GARMIN_TOOL_PROFILE {profile_value!r}; "
-                f"valid profile(s): {valid_profiles}"
-            )
-        return TOOL_PROFILES[profile_name] - disabled, set()
+    profile_name = _normalized_profile_name(profile_value)
+    if profile_name == UPSTREAM_FULL_PROFILE:
+        return set(), disabled
+    if profile_name not in TOOL_PROFILES:
+        raise ValueError(_UNKNOWN_TOOL_PROFILE_ERROR)
 
-    return set(), disabled
+    return TOOL_PROFILES[profile_name] - disabled, set()
 
 
 def _resolve_tool_filters_from_environment():
@@ -162,7 +176,7 @@ def _resolve_tool_filters_from_environment():
         disabled_value,
     )
     parsed_enabled = _parse_tool_set(enabled_value)
-    profile_name = profile_value.strip().lower() if profile_value else ""
+    profile_name = _normalized_profile_name(profile_value)
     allowlist_active = bool(parsed_enabled) or profile_name in TOOL_PROFILES
 
     # Include all profile members in typo detection, even if a denylist removes
@@ -177,6 +191,33 @@ def _resolve_tool_filters_from_environment():
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
+_HTTP_TRANSPORTS = ("streamable-http", "sse")
+_LOCALHOST_ALIASES = ("localhost", "localhost.")
+_INVALID_TRANSPORT_ERROR = (
+    "Invalid GARMIN_MCP_TRANSPORT; expected one of stdio, streamable-http, sse"
+)
+_INVALID_PORT_ERROR = (
+    "GARMIN_MCP_PORT must be an integer from 1 through 65535"
+)
+_REMOTE_HTTP_BIND_ERROR = (
+    "Refusing unauthenticated remote HTTP binding because this server does not "
+    "provide HTTP authentication. Use an authenticating reverse proxy, or "
+    "explicitly set GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE=true to accept "
+    "this danger."
+)
+
+
+def _canonical_loopback_host(host: str) -> str | None:
+    """Return a FastMCP-protected canonical bind for a loopback host."""
+    if host.lower() in _LOCALHOST_ALIASES:
+        return "127.0.0.1"
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if not address.is_loopback:
+        return None
+    return "127.0.0.1" if address.version == 4 else "::1"
 
 
 class _GarminProxy:
@@ -227,15 +268,26 @@ def _parse_transport_config() -> tuple[str, str, int]:
     """Read and validate HTTP transport env vars. Raises ValueError on bad input."""
     transport = os.getenv("GARMIN_MCP_TRANSPORT", "stdio").strip().lower()
     if transport not in _VALID_TRANSPORTS:
-        raise ValueError(
-            f"Invalid GARMIN_MCP_TRANSPORT {transport!r}; "
-            f"expected one of {', '.join(_VALID_TRANSPORTS)}"
-        )
+        raise ValueError(_INVALID_TRANSPORT_ERROR)
     # Bind to loopback by default: the HTTP transport performs no authentication,
     # so a 0.0.0.0 default would expose full read/write access to the user's
-    # Garmin account to the whole network. Opt in explicitly with GARMIN_MCP_HOST.
-    http_host = os.getenv("GARMIN_MCP_HOST", "127.0.0.1")
-    http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
+    # Garmin account to the whole network.
+    http_host = os.getenv("GARMIN_MCP_HOST", "127.0.0.1").strip()
+    try:
+        http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
+    except ValueError:
+        raise ValueError(_INVALID_PORT_ERROR) from None
+    if not 1 <= http_port <= 65535:
+        raise ValueError(_INVALID_PORT_ERROR)
+    allow_unauthenticated_remote = (
+        os.getenv("GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE", "").strip().lower()
+        in ("true", "1", "yes")
+    )
+    canonical_loopback = _canonical_loopback_host(http_host)
+    if canonical_loopback is not None:
+        http_host = canonical_loopback
+    elif transport in _HTTP_TRANSPORTS and not allow_unauthenticated_remote:
+        raise ValueError(_REMOTE_HTTP_BIND_ERROR)
     return transport, http_host, http_port
 
 
@@ -469,6 +521,7 @@ def main():
     #   GARMIN_MCP_TRANSPORT - stdio (default) | streamable-http | sse
     #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 127.0.0.1)
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
+    #   GARMIN_MCP_ALLOW_UNAUTHENTICATED_REMOTE - dangerous remote HTTP opt-in
     try:
         transport, http_host, http_port = _parse_transport_config()
     except ValueError as exc:
@@ -531,6 +584,15 @@ def main():
         print(f"Tool filter: allowlist of {len(enabled_tools)} tool(s).", file=sys.stderr)
     elif disabled_tools:
         print(f"Tool filter: denylist of {len(disabled_tools)} tool(s).", file=sys.stderr)
+    if (
+        not _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
+        and _normalized_profile_name(os.getenv("GARMIN_TOOL_PROFILE"))
+        == UPSTREAM_FULL_PROFILE
+    ):
+        print(
+            "Tool filter: full upstream-compatible tool surface active.",
+            file=sys.stderr,
+        )
 
     # Register tools from all modules
     app = activity_management.register_tools(app)

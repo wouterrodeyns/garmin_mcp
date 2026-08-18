@@ -46,12 +46,13 @@ def test_readme_points_ai_coaches_to_the_workout_docs_and_profile():
         assert expected in README
 
 
-def test_readme_guarantees_unset_profile_keeps_full_default_registration():
-    readme = README.lower()
-    assert "garmin_tool_profile" in readme
-    assert "unset" in readme
+def test_readme_documents_ai_coach_default_and_explicit_upstream_profile():
+    readme = " ".join(README.lower().split()).replace("`", "")
+    assert "ai-coach is the default profile when garmin_tool_profile is unset or empty" in readme
+    assert "garmin_tool_profile=ai-coach" in readme
+    assert "garmin_tool_profile=upstream-full" in readme
     assert "full upstream tool registration" in readme
-    assert "all tools" in readme or "full upstream tools" in readme
+    assert "full upstream tool registration is an explicit choice" in readme
 
 
 def test_ai_workouts_docs_covers_threshold_schema_and_partial_success():
@@ -169,16 +170,17 @@ def test_raw_upload_strength_docs_match_optional_category_contract():
     assert "passed through" in source_lower
 
 
-def test_ai_workouts_docs_names_package_seam_and_unchanged_compatibility():
+def test_ai_workouts_docs_names_package_seam_and_upstream_full_compatibility():
     compatibility = SECTIONS["upstream compatibility"].lower()
     for expected in (
         "ai_workouts",
         "minimal workouts seam",
         "authentication",
-        "default registration",
-        "unchanged",
+        "upstream-full",
+        "upstream tools",
     ):
         assert expected in compatibility
+    assert "default registration remain unchanged" not in compatibility
 
 
 def test_ai_workouts_docs_protects_safe_create_flow_order():
@@ -280,8 +282,9 @@ def test_ai_workouts_docs_explains_success_is_not_separate_calendar_confirmation
     assert "not a separate calendar confirmation" in update
 
 
-def test_ai_workouts_docs_describes_profile_and_unchanged_default():
+def test_ai_workouts_docs_describes_profile_defaults_and_explicit_precedence():
     profile = SECTIONS["the ai coach tool profile"]
+    profile_normalized = " ".join(profile.lower().split()).replace("`", "")
     tools = re.findall(r"^\d+\. `([^`]+)`$", profile, re.MULTILINE)
     expected = {
         "get_training_context",
@@ -305,11 +308,27 @@ def test_ai_workouts_docs_describes_profile_and_unchanged_default():
     assert set(tools) == expected
     assert set(tools) == TOOL_PROFILES["ai-coach"]
     assert tools.index("update_workout") == tools.index("create_workout") + 1
-    assert "full upstream tool registration" in profile
+    assert (
+        "ai-coach is the default profile when garmin_tool_profile is unset or empty"
+        in profile_normalized
+    )
+    assert "garmin_tool_profile=upstream-full" in profile_normalized
+    assert "full upstream tool registration is an explicit choice" in profile_normalized
+    assert (
+        "selected profile and denylist are both ignored while the explicit allowlist is active"
+        in profile_normalized
+    )
+    assert "garmin_disabled_tools" in profile_normalized
+    assert "subtracts" in profile_normalized
 
-    precedence = profile.lower()
-    assert precedence.index("explicitly configured") < precedence.index("subtracts")
-    assert precedence.index("subtracts") < precedence.index("profile unset")
+    precedence = profile_normalized
+    assert precedence.index("garmin_enabled_tools") < precedence.index("garmin_disabled_tools")
+    assert precedence.index("garmin_disabled_tools") < precedence.index("selected or default profile")
+    assert not re.search(
+        r"[^.]*?(?:no profile|profile is unset|garmin_tool_profile is unset|profile unset)"
+        r"[^.]*?(?:broad|full upstream)",
+        profile_normalized,
+    )
     for hidden in ("upload_workout", "upload_workouts"):
         assert hidden in precedence
     assert "unrelated" in precedence

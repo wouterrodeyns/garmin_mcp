@@ -134,11 +134,20 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
 
 def test_explicit_enabled_tools_override_profile_and_disabled_tools():
     enabled, disabled = _resolve_tool_filters(
-        "ai-coach", " GET_DEVICES, get_workouts ", "get_workouts"
+        "upstream-full", " GET_DEVICES, get_workouts ", "get_workouts"
     )
 
     assert enabled == {"get_devices", "get_workouts"}
     assert disabled == set()
+
+
+@pytest.mark.parametrize("enabled_value", [",", ",,  ,", " , , "])
+def test_nonblank_allowlist_without_tool_names_is_rejected(enabled_value):
+    with pytest.raises(
+        ValueError,
+        match="^GARMIN_ENABLED_TOOLS must contain at least one tool name$",
+    ):
+        _resolve_tool_filters("upstream-full", enabled_value, None)
 
 
 def test_ai_coach_profile_subtracts_disabled_tools():
@@ -180,13 +189,32 @@ def test_profile_filter_warns_for_typo_in_disabled_tools_only():
     assert filt.unknown_filter_names() == ["create_workuout"]
 
 
-def test_empty_profile_preserves_denylist_behavior():
-    enabled, disabled = _resolve_tool_filters(None, None, " GET_DEVICES, get_devices ")
+@pytest.mark.parametrize("profile_value", [None, "", "   "])
+def test_unset_or_blank_profile_defaults_to_ai_coach(profile_value):
+    enabled, disabled = _resolve_tool_filters(
+        profile_value,
+        None,
+        " GET_WORKOUTS, get_workouts ",
+    )
+
+    assert enabled == TOOL_PROFILES["ai-coach"] - {"get_workouts"}
+    assert disabled == set()
+
+
+def test_upstream_full_profile_preserves_broad_registration_with_denylist():
+    enabled, disabled = _resolve_tool_filters(
+        "upstream-full", None, " GET_DEVICES, get_devices "
+    )
 
     assert enabled == set()
     assert disabled == {"get_devices"}
 
 
 def test_unknown_profile_names_are_rejected():
-    with pytest.raises(ValueError, match=r"Unknown GARMIN_TOOL_PROFILE.*ai-coach"):
-        _resolve_tool_filters("unknown", None, None)
+    with pytest.raises(ValueError) as error:
+        _resolve_tool_filters("TOP_SECRET_PROFILE", None, None)
+
+    assert str(error.value) == (
+        "Unknown GARMIN_TOOL_PROFILE; valid profile(s): ai-coach, upstream-full"
+    )
+    assert "TOP_SECRET_PROFILE" not in str(error.value)
