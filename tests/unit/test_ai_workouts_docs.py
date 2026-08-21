@@ -288,6 +288,7 @@ def test_ai_workouts_docs_describes_profile_defaults_and_explicit_precedence():
     tools = re.findall(r"^\d+\. `([^`]+)`$", profile, re.MULTILINE)
     expected = {
         "get_training_context",
+        "get_target_events",
         "get_sleep_trend",
         "get_wellness_heart_rate",
         "analyze_activity",
@@ -304,7 +305,7 @@ def test_ai_workouts_docs_describes_profile_defaults_and_explicit_precedence():
         "unschedule_workout",
         "delete_workout",
     }
-    assert len(tools) == 16
+    assert len(tools) == 17
     assert set(tools) == expected
     assert set(tools) == TOOL_PROFILES["ai-coach"]
     assert tools.index("update_workout") == tools.index("create_workout") + 1
@@ -332,6 +333,8 @@ def test_ai_workouts_docs_describes_profile_defaults_and_explicit_precedence():
     for hidden in ("upload_workout", "upload_workouts"):
         assert hidden in precedence
     assert "unrelated" in precedence
+    assert "exactly these 16 tools" not in DOCS.lower()
+    assert "sixteen tools" not in DOCS.lower()
 
 
 def test_ai_workouts_docs_protects_pinned_ids_and_available_update_api():

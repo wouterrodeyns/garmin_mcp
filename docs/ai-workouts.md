@@ -136,24 +136,25 @@ Typical concise responses are:
 
 ai-coach is the default profile when `GARMIN_TOOL_PROFILE` is unset or empty.
 Set `GARMIN_TOOL_PROFILE=ai-coach` explicitly when documenting that intent. The
-profile exposes exactly these 16 tools:
+profile exposes exactly these 17 tools:
 
 1. `get_training_context`
-2. `get_sleep_trend`
-3. `get_wellness_heart_rate`
-4. `analyze_activity`
-5. `get_activity_timeseries`
-6. `create_workout`
-7. `update_workout`
-8. `get_activities`
-9. `get_activities_by_date`
-10. `get_activity`
-11. `get_workouts`
-12. `get_workout_by_id`
-13. `get_scheduled_workouts`
-14. `schedule_workout`
-15. `unschedule_workout`
-16. `delete_workout`
+2. `get_target_events`
+3. `get_sleep_trend`
+4. `get_wellness_heart_rate`
+5. `analyze_activity`
+6. `get_activity_timeseries`
+7. `create_workout`
+8. `update_workout`
+9. `get_activities`
+10. `get_activities_by_date`
+11. `get_activity`
+12. `get_workouts`
+13. `get_workout_by_id`
+14. `get_scheduled_workouts`
+15. `schedule_workout`
+16. `unschedule_workout`
+17. `delete_workout`
 
 Profile precedence is explicit:
 

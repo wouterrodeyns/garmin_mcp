@@ -22,6 +22,7 @@ SETUP_PATH = ROOT / "docs" / "setup.md"
 
 PROFILE_TOOLS = {
     "get_training_context",
+    "get_target_events",
     "get_sleep_trend",
     "get_wellness_heart_rate",
     "analyze_activity",
@@ -306,6 +307,9 @@ def test_current_docs_publish_the_exact_profile_without_stale_eleven_claims():
     assert set(garmin_mcp.TOOL_PROFILES["ai-coach"]) == PROFILE_TOOLS
     combined = " ".join("\n".join((readme, training, workouts, setup)).lower().split())
     assert "exactly 11" not in combined
+    assert "exactly 16" not in combined
+    assert "16-tool" not in combined
+    assert "sixteen tools" not in combined
     assert "no existing upstream tool is removed" in combined
     for tool in sorted(PROFILE_TOOLS):
         assert tool in combined
@@ -313,7 +317,8 @@ def test_current_docs_publish_the_exact_profile_without_stale_eleven_claims():
     assert "ai-activity.md" in setup
     assert "ai-activity.md" in training
     assert "ai-activity.md" in workouts
-    assert "ai_training, ai_workouts, and ai_activity packages" in readme.lower()
+    for package in ("ai_training", "ai_events", "ai_workouts", "ai_activity"):
+        assert f"`{package}`" in readme
 
 
 def test_current_docs_keep_timeseries_as_a_narrow_follow_up_read():

@@ -151,6 +151,7 @@ def test_setup_client_config_fences_are_credential_free():
 README_PATH = ROOT / "README.md"
 PROFILE_TOOLS = {
     "get_training_context",
+    "get_target_events",
     "get_sleep_trend",
     "get_wellness_heart_rate",
     "analyze_activity",
@@ -260,10 +261,10 @@ def test_setup_runtime_section_pins_profile_defaults_full_opt_in_and_precedence(
     )
 
 
-def test_readme_pins_sixteen_tools_and_in_place_update_semantics():
+def test_readme_pins_seventeen_tools_and_in_place_update_semantics():
     lower = " ".join(_readme().lower().split())
     for expected in (
-        "16-tool surface",
+        "exactly 17 tools",
         "update_workout",
         "in-place",
         "preserves",

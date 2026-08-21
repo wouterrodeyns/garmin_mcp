@@ -66,6 +66,7 @@ ERROR_KEYS = ["code", "message"]
 
 EXPECTED_PROFILE = {
     "get_training_context",
+    "get_target_events",
     "get_sleep_trend",
     "get_wellness_heart_rate",
     "analyze_activity",
@@ -278,23 +279,33 @@ def test_documented_profile_matches_runtime_exactly_and_has_no_stale_count() -> 
     )
     assert profile is not None
     names = re.findall(r"^`([^`]+)`$", profile.group(1), re.MULTILINE)
-    assert len(names) == 16
+    assert len(names) == 17
     assert set(names) == TOOL_PROFILES["ai-coach"]
     setup = (ROOT / "docs" / "setup.md").read_text()
     setup_profile = re.search(
-        r"The `ai-coach` profile exposes exactly 16 tools:\s*\n\n(.*?)\n\nOther runtime variables",
+        r"The `ai-coach` profile exposes exactly 17 tools:\s*\n\n(.*?)\n\nOther runtime variables",
         setup,
         re.DOTALL,
     )
     assert setup_profile is not None
     setup_names = re.findall(r"`([^`]+)`", setup_profile.group(1))
-    assert len(setup_names) == 16
+    assert len(setup_names) == 17
     assert set(setup_names) == TOOL_PROFILES["ai-coach"]
     combined = "\n".join(path.read_text() for path in PUBLIC_DOC_PATHS).lower()
     assert "15-tool surface" not in combined
     assert "exactly 15 tools" not in combined
     assert "exactly these 15 tools" not in combined
-    for stale in ("14-tool", "exactly 14", "15-tool", "15 tools", "fifteen tools"):
+    for stale in (
+        "14-tool",
+        "exactly 14",
+        "15-tool",
+        "15 tools",
+        "fifteen tools",
+        "16-tool",
+        "exactly 16",
+        "16 tools",
+        "sixteen tools",
+    ):
         assert stale not in combined
 
 

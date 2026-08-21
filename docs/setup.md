@@ -130,23 +130,26 @@ when documenting that intent. Filtering follows this precedence:
    profile enables all tools exposed by the upstream-compatible server.
 4. When `GARMIN_TOOL_PROFILE` is unset or empty, `ai-coach` applies by default.
 
-See [training context](ai-training.md), [sleep trend evidence](ai-sleep-trend.md),
-[activity analysis](ai-activity.md),
-[activity time-series evidence](ai-activity-timeseries.md), [AI-friendly
-workouts](ai-workouts.md), and [wellness heart-rate evidence](ai-wellness-heart-rate.md)
-for the high-level coaching tools. The training
-context is the coach's eyes/current context, `analyze_activity` is the
-completed-session feedback overview, and `get_activity_timeseries` is its
-narrow follow-up for concrete short-interval evidence. Workout creation and
-in-place update (`create_workout` and `update_workout`) are the coach's
-hands/write operations; `get_sleep_trend` and `get_wellness_heart_rate` are
-deliberate evidence reads for those roles. Activity analysis and time-series evidence are
-read-only and do not replace the low-level `get_activity`
-compatibility/targeted read.
+For the high-level coaching tools, see [training context](ai-training.md),
+[target-event evidence](ai-target-events.md),
+[sleep trend evidence](ai-sleep-trend.md),
+[activity analysis](ai-activity.md), [activity time-series
+evidence](ai-activity-timeseries.md), [AI-friendly workouts](ai-workouts.md),
+and [wellness heart-rate evidence](ai-wellness-heart-rate.md).
 
-The `ai-coach` profile exposes exactly 16 tools:
+Training context is the coach's eyes/current context. `get_target_events` is a
+separate deliberate target-event read for event-aware questions.
+`analyze_activity` is the completed-session feedback overview, and
+`get_activity_timeseries` is its narrow follow-up for concrete short-interval
+evidence. Workout creation and in-place update (`create_workout` and
+`update_workout`) are the coach's hands/write operations. `get_sleep_trend` and
+`get_wellness_heart_rate` are deliberate evidence reads for those roles.
+Activity analysis and time-series evidence are read-only and do not replace the
+low-level `get_activity` compatibility/targeted read.
 
-`get_training_context`, `get_sleep_trend`, `get_wellness_heart_rate`, `analyze_activity`, `get_activity_timeseries`,
+The `ai-coach` profile exposes exactly 17 tools:
+
+`get_training_context`, `get_target_events`, `get_sleep_trend`, `get_wellness_heart_rate`, `analyze_activity`, `get_activity_timeseries`,
 `create_workout`, `update_workout`, `get_activities`, `get_activities_by_date`,
 `get_activity`, `get_workouts`, `get_workout_by_id`, `get_scheduled_workouts`,
 `schedule_workout`, `unschedule_workout`, and `delete_workout`.

@@ -28,6 +28,7 @@ docs/superpowers/*
 !docs/superpowers/plans/
 !docs/ai-workouts.md
 !docs/ai-sleep-trend.md
+!docs/ai-target-events.md
 .gitignore
 playground/*
 scratch/*
