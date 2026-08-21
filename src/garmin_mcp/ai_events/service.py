@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from datetime import date
 from math import isfinite
 
-DEFAULT_EVENT_DAYS = 180
-MAX_EVENT_DAYS = 366
-MAX_RETURNED_EVENTS = 100
+DEFAULT_LOOKAHEAD_DAYS = 180
+MAX_LOOKAHEAD_DAYS = 366
+MAX_EVENTS = 100
 MAX_TITLE_LENGTH = 256
 MAX_LOCATION_LENGTH = 256
 MAX_TIME_ZONE_LENGTH = 128
@@ -20,14 +20,28 @@ class EventFacts:
     """Normalized facts from one Garmin calendar event."""
 
     title: str
-    event_date: date
+    date: date
     is_race: bool | None
     primary_event: bool | None
     distance_km: float | None
     start_time_local: str | None
     time_zone: str | None
     location: str | None
-    private_uuid: str | None
+    source_uuid: str | None
+
+    def to_public_dict(self, today: date) -> dict[str, object]:
+        """Project facts into the public target-event representation."""
+        return {
+            "title": self.title,
+            "date": self.date.isoformat(),
+            "days_until": (self.date - today).days,
+            "is_race": self.is_race,
+            "primary_event": self.primary_event,
+            "distance_km": self.distance_km,
+            "start_time_local": self.start_time_local,
+            "time_zone": self.time_zone,
+            "location": self.location,
+        }
 
 
 def event_months(start: date, end: date) -> tuple[tuple[int, int], ...]:
@@ -77,14 +91,14 @@ def normalize_event(raw: object) -> tuple[EventFacts | None, bool]:
     return (
         EventFacts(
             title=title,
-            event_date=event_date,
+            date=event_date,
             is_race=is_race,
             primary_event=primary_event,
             distance_km=distance_km,
             start_time_local=start_time_local,
             time_zone=time_zone,
             location=location,
-            private_uuid=private_uuid,
+            source_uuid=private_uuid,
         ),
         any(
             (
@@ -96,21 +110,6 @@ def normalize_event(raw: object) -> tuple[EventFacts | None, bool]:
             )
         ),
     )
-
-
-def project_event(facts: EventFacts, start: date) -> dict[str, object]:
-    """Project normalized facts into the public target-event representation."""
-    return {
-        "title": facts.title,
-        "date": facts.event_date.isoformat(),
-        "days_until": (facts.event_date - start).days,
-        "is_race": facts.is_race,
-        "primary_event": facts.primary_event,
-        "distance_km": facts.distance_km,
-        "start_time_local": facts.start_time_local,
-        "time_zone": facts.time_zone,
-        "location": facts.location,
-    }
 
 
 def _normalize_required_text(value: object, maximum_length: int) -> str | None:
@@ -218,14 +217,13 @@ def _normalize_private_uuid(value: object) -> str | None:
 
 
 __all__ = [
-    "DEFAULT_EVENT_DAYS",
-    "MAX_EVENT_DAYS",
+    "DEFAULT_LOOKAHEAD_DAYS",
+    "MAX_EVENTS",
     "MAX_LOCATION_LENGTH",
-    "MAX_RETURNED_EVENTS",
+    "MAX_LOOKAHEAD_DAYS",
     "MAX_TIME_ZONE_LENGTH",
     "MAX_TITLE_LENGTH",
     "EventFacts",
     "event_months",
     "normalize_event",
-    "project_event",
 ]

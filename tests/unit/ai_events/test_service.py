@@ -9,16 +9,15 @@ from datetime import UTC, date, datetime
 import pytest
 
 from garmin_mcp.ai_events.service import (
-    DEFAULT_EVENT_DAYS,
-    MAX_EVENT_DAYS,
+    DEFAULT_LOOKAHEAD_DAYS,
+    MAX_EVENTS,
     MAX_LOCATION_LENGTH,
-    MAX_RETURNED_EVENTS,
+    MAX_LOOKAHEAD_DAYS,
     MAX_TIME_ZONE_LENGTH,
     MAX_TITLE_LENGTH,
     EventFacts,
     event_months,
     normalize_event,
-    project_event,
 )
 
 
@@ -53,33 +52,33 @@ def event_raw(**overrides: object) -> dict[str, object]:
 
 
 def test_public_normalization_constants() -> None:
-    assert (DEFAULT_EVENT_DAYS, MAX_EVENT_DAYS, MAX_RETURNED_EVENTS) == (180, 366, 100)
+    assert (DEFAULT_LOOKAHEAD_DAYS, MAX_LOOKAHEAD_DAYS, MAX_EVENTS) == (180, 366, 100)
     assert (MAX_TITLE_LENGTH, MAX_LOCATION_LENGTH, MAX_TIME_ZONE_LENGTH) == (256, 256, 128)
 
 
 def test_event_facts_is_frozen_with_exact_public_fields() -> None:
     facts = EventFacts(
         title="Spring Marathon",
-        event_date=date(2026, 5, 3),
+        date=date(2026, 5, 3),
         is_race=None,
         primary_event=None,
         distance_km=None,
         start_time_local=None,
         time_zone=None,
         location=None,
-        private_uuid=None,
+        source_uuid=None,
     )
 
     assert set(facts.__dataclass_fields__) == {
         "title",
-        "event_date",
+        "date",
         "is_race",
         "primary_event",
         "distance_km",
         "start_time_local",
         "time_zone",
         "location",
-        "private_uuid",
+        "source_uuid",
     }
     with pytest.raises(FrozenInstanceError):
         facts.title = "Changed"
@@ -138,17 +137,17 @@ def test_normalize_and_project_happy_event_without_mutating_or_exposing_uuid() -
     assert malformed is False
     assert facts == EventFacts(
         title="Spring Marathon",
-        event_date=date(2026, 5, 3),
+        date=date(2026, 5, 3),
         is_race=True,
         primary_event=False,
         distance_km=42.195,
         start_time_local="07:30",
         time_zone="Europe/Brussels",
         location="Antwerp",
-        private_uuid="private-event-id",
+        source_uuid="private-event-id",
     )
     assert raw == original
-    assert project_event(facts, date(2026, 5, 1)) == {
+    assert facts.to_public_dict(date(2026, 5, 1)) == {
         "title": "Spring Marathon",
         "date": "2026-05-03",
         "days_until": 2,
@@ -214,7 +213,7 @@ def test_normalize_keeps_valid_date_even_when_outside_a_future_period() -> None:
 
     assert malformed is False
     assert facts is not None
-    assert facts.event_date == date(2020, 1, 1)
+    assert facts.date == date(2020, 1, 1)
 
 
 def test_normalize_treats_missing_optional_fields_as_clean_nulls() -> None:
@@ -224,14 +223,14 @@ def test_normalize_treats_missing_optional_fields_as_clean_nulls() -> None:
     assert facts is not None
     assert facts == EventFacts(
         title="Spring Marathon",
-        event_date=date(2026, 5, 3),
+        date=date(2026, 5, 3),
         is_race=None,
         primary_event=None,
         distance_km=None,
         start_time_local=None,
         time_zone=None,
         location=None,
-        private_uuid=None,
+        source_uuid=None,
     )
 
 
@@ -425,7 +424,7 @@ def test_normalize_ignores_invalid_private_uuid_cleanly(uuid: object) -> None:
 
     assert malformed is False
     assert facts is not None
-    assert facts.private_uuid is None
+    assert facts.source_uuid is None
 
 
 def test_normalize_accepts_private_uuid_at_maximum_length() -> None:
@@ -435,4 +434,4 @@ def test_normalize_accepts_private_uuid_at_maximum_length() -> None:
 
     assert malformed is False
     assert facts is not None
-    assert facts.private_uuid == private_uuid
+    assert facts.source_uuid == private_uuid
