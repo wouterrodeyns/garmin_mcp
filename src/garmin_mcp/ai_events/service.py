@@ -86,7 +86,7 @@ def normalize_event(raw: object) -> tuple[EventFacts | None, bool]:
         raw.get("eventTimeLocal")
     )
     location, location_malformed = _normalize_location(raw.get("location"))
-    private_uuid = _normalize_private_uuid(raw.get("uuid"))
+    source_uuid = _normalize_private_uuid(raw.get("shareableEventUuid"))
 
     return (
         EventFacts(
@@ -98,7 +98,7 @@ def normalize_event(raw: object) -> tuple[EventFacts | None, bool]:
             start_time_local=start_time_local,
             time_zone=time_zone,
             location=location,
-            source_uuid=private_uuid,
+            source_uuid=source_uuid,
         ),
         any(
             (
@@ -164,8 +164,10 @@ def _normalize_event_time(value: object) -> tuple[str | None, str | None, bool]:
     if type(value) is not dict:
         return None, None, True
 
-    start_time_local, start_malformed = _normalize_start_time(value.get("start"))
-    time_zone, time_zone_malformed = _normalize_time_zone(value.get("timeZone"))
+    start_time_local, start_malformed = _normalize_start_time(
+        value.get("startTimeHhMm")
+    )
+    time_zone, time_zone_malformed = _normalize_time_zone(value.get("timeZoneId"))
     return start_time_local, time_zone, start_malformed or time_zone_malformed
 
 

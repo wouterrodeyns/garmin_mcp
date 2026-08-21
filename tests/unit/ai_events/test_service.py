@@ -126,9 +126,12 @@ def test_normalize_and_project_happy_event_without_mutating_or_exposing_uuid() -
         isRace=True,
         primaryEvent=False,
         completionTarget={"unitType": "distance", "value": 42195},
-        eventTimeLocal={"start": "07:30", "timeZone": " Europe/Brussels "},
+        eventTimeLocal={
+            "startTimeHhMm": "07:30",
+            "timeZoneId": " Europe/Brussels ",
+        },
         location=" Antwerp ",
-        uuid=" private-event-id ",
+        shareableEventUuid=" private-event-id ",
     )
     original = deepcopy(raw)
 
@@ -158,6 +161,21 @@ def test_normalize_and_project_happy_event_without_mutating_or_exposing_uuid() -
         "time_zone": "Europe/Brussels",
         "location": "Antwerp",
     }
+
+
+def test_normalize_ignores_former_event_time_and_uuid_keys() -> None:
+    facts, malformed = normalize_event(
+        event_raw(
+            eventTimeLocal={"start": "07:30", "timeZone": "Europe/Brussels"},
+            uuid="private-event-id",
+        )
+    )
+
+    assert malformed is False
+    assert facts is not None
+    assert facts.start_time_local is None
+    assert facts.time_zone is None
+    assert facts.source_uuid is None
 
 
 @pytest.mark.parametrize("raw", [None, [], "event", 7, DictSubclass()])
@@ -302,7 +320,9 @@ def test_normalize_accepts_zero_distance_target() -> None:
 
 @pytest.mark.parametrize("start", ["00:00", "23:59"])
 def test_normalize_accepts_hhmm_time_boundaries(start: str) -> None:
-    facts, malformed = normalize_event(event_raw(eventTimeLocal={"start": start}))
+    facts, malformed = normalize_event(
+        event_raw(eventTimeLocal={"startTimeHhMm": start})
+    )
 
     assert malformed is False
     assert facts is not None
@@ -313,16 +333,16 @@ def test_normalize_accepts_hhmm_time_boundaries(start: str) -> None:
     "event_time",
     [
         [],
-        DictSubclass(start="07:30"),
-        {"start": 1},
-        {"start": True},
-        {"start": StringSubclass("07:30")},
-        {"start": "7:30"},
-        {"start": "07:3"},
-        {"start": "07:30:00"},
-        {"start": "07.30"},
-        {"start": "24:00"},
-        {"start": "23:60"},
+        DictSubclass(startTimeHhMm="07:30"),
+        {"startTimeHhMm": 1},
+        {"startTimeHhMm": True},
+        {"startTimeHhMm": StringSubclass("07:30")},
+        {"startTimeHhMm": "7:30"},
+        {"startTimeHhMm": "07:3"},
+        {"startTimeHhMm": "07:30:00"},
+        {"startTimeHhMm": "07.30"},
+        {"startTimeHhMm": "24:00"},
+        {"startTimeHhMm": "23:60"},
     ],
 )
 def test_normalize_marks_invalid_event_time_malformed(event_time: object) -> None:
@@ -336,7 +356,12 @@ def test_normalize_marks_invalid_event_time_malformed(event_time: object) -> Non
 
 @pytest.mark.parametrize(
     ("event_time", "expected_time_zone"),
-    [({}, None), ({"start": None}, None), ({"timeZone": " UTC "}, "UTC"), (None, None)],
+    [
+        ({}, None),
+        ({"startTimeHhMm": None}, None),
+        ({"timeZoneId": " UTC "}, "UTC"),
+        (None, None),
+    ],
 )
 def test_normalize_treats_missing_time_start_as_clean(
     event_time: object, expected_time_zone: str | None
@@ -365,7 +390,9 @@ def test_normalize_validates_optional_time_zone(
     time_zone: object, expected_malformed: bool
 ) -> None:
     facts, malformed = normalize_event(
-        event_raw(eventTimeLocal={"start": "07:30", "timeZone": time_zone})
+        event_raw(
+            eventTimeLocal={"startTimeHhMm": "07:30", "timeZoneId": time_zone}
+        )
     )
 
     assert malformed is expected_malformed
@@ -377,7 +404,9 @@ def test_normalize_accepts_time_zone_at_maximum_length() -> None:
     time_zone = "x" * 128
 
     facts, malformed = normalize_event(
-        event_raw(eventTimeLocal={"start": "07:30", "timeZone": time_zone})
+        event_raw(
+            eventTimeLocal={"startTimeHhMm": "07:30", "timeZoneId": time_zone}
+        )
     )
 
     assert malformed is False
@@ -420,7 +449,7 @@ def test_normalize_accepts_location_at_maximum_length() -> None:
     "uuid", [None, "", "   ", 1, StringSubclass("uuid"), "x" * 257]
 )
 def test_normalize_ignores_invalid_private_uuid_cleanly(uuid: object) -> None:
-    facts, malformed = normalize_event(event_raw(uuid=uuid))
+    facts, malformed = normalize_event(event_raw(shareableEventUuid=uuid))
 
     assert malformed is False
     assert facts is not None
@@ -430,7 +459,7 @@ def test_normalize_ignores_invalid_private_uuid_cleanly(uuid: object) -> None:
 def test_normalize_accepts_private_uuid_at_maximum_length() -> None:
     private_uuid = "x" * 256
 
-    facts, malformed = normalize_event(event_raw(uuid=private_uuid))
+    facts, malformed = normalize_event(event_raw(shareableEventUuid=private_uuid))
 
     assert malformed is False
     assert facts is not None
