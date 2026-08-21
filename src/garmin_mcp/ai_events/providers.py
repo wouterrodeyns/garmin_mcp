@@ -22,7 +22,7 @@ def get_calendar_month(client: Any, year: int, month: int) -> CalendarMonthResul
 
     try:
         response = client.get_scheduled_workouts(year, month)
-    except Exception:
+    except Exception:  # noqa: BLE001 - provider boundary must sanitize every exception
         return CalendarMonthResult(month_key, failed=True)
 
     if response is None:
