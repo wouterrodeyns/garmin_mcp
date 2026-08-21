@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from math import isfinite
+
+from .providers import get_calendar_month
 
 DEFAULT_LOOKAHEAD_DAYS = 180
 MAX_LOOKAHEAD_DAYS = 366
@@ -13,6 +15,39 @@ MAX_TITLE_LENGTH = 256
 MAX_LOCATION_LENGTH = 256
 MAX_TIME_ZONE_LENGTH = 128
 _MAX_UUID_LENGTH = 256
+
+PUBLIC_EVENT_ERRORS = {
+    "invalid_days": {
+        "code": "invalid_days",
+        "message": "days must be an integer from 1 through 366.",
+    },
+    "client_unavailable": {
+        "code": "client_unavailable",
+        "message": "Garmin client is unavailable.",
+    },
+    "target_events_unavailable": {
+        "code": "target_events_unavailable",
+        "message": "Target-event calendar data is unavailable for the requested period.",
+    },
+}
+
+EVENT_WARNINGS = {
+    "provider_unavailable": {
+        "provider": "calendar_events",
+        "code": "provider_unavailable",
+        "message": "Target-event calendar data is unavailable for this month.",
+    },
+    "invalid_provider_response": {
+        "provider": "calendar_events",
+        "code": "invalid_provider_response",
+        "message": "Target-event calendar data returned an invalid response for this month.",
+    },
+    "events_truncated": {
+        "provider": "calendar_events",
+        "code": "events_truncated",
+        "message": "Additional target events were omitted after the 100-event output limit.",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -218,14 +253,158 @@ def _normalize_private_uuid(value: object) -> str | None:
     return normalized
 
 
+def get_target_events_service(
+    client: object | None,
+    days: int = DEFAULT_LOOKAHEAD_DAYS,
+    *,
+    today: date | None = None,
+) -> dict[str, object]:
+    """Return a bounded, sanitized view of scheduled Garmin target events."""
+    if type(days) is not int or not 1 <= days <= MAX_LOOKAHEAD_DAYS:
+        return _target_events_response(
+            status="error",
+            error=_public_error("invalid_days"),
+            period={"days": None, "start_date": None, "end_date": None},
+            events_available=False,
+        )
+
+    resolved_today = date.today() if today is None else today  # noqa: DTZ011
+    if type(resolved_today) is not date:
+        raise TypeError("today must be a built-in date instance")
+
+    end = resolved_today + timedelta(days=days - 1)
+    period = {
+        "days": days,
+        "start_date": resolved_today.isoformat(),
+        "end_date": end.isoformat(),
+    }
+    if client is None:
+        return _target_events_response(
+            status="error",
+            error=_public_error("client_unavailable"),
+            period=period,
+            events_available=False,
+        )
+
+    readable_month_found = False
+    degraded = False
+    warnings: list[dict[str, str]] = []
+    events: list[EventFacts] = []
+    seen: set[tuple[object, ...]] = set()
+
+    for year, month in event_months(resolved_today, end):
+        result = get_calendar_month(client, year, month)
+        if result.failed:
+            degraded = True
+            warnings.append(_month_warning("provider_unavailable", result.month))
+            continue
+        if result.invalid:
+            degraded = True
+            warnings.append(_month_warning("invalid_provider_response", result.month))
+            continue
+
+        readable_month_found = True
+        month_has_malformed_candidate = False
+        for raw in result.data:
+            facts, malformed = normalize_event(raw)
+            month_has_malformed_candidate = month_has_malformed_candidate or malformed
+            if facts is None or not resolved_today <= facts.date <= end:
+                continue
+
+            key = _event_identity(facts)
+            if key not in seen:
+                seen.add(key)
+                events.append(facts)
+
+        if month_has_malformed_candidate:
+            degraded = True
+            warnings.append(_month_warning("invalid_provider_response", result.month))
+
+    if not readable_month_found:
+        return _target_events_response(
+            status="error",
+            error=_public_error("target_events_unavailable"),
+            period=period,
+            events_available=False,
+            warnings=warnings,
+        )
+
+    events.sort(key=lambda facts: (facts.date, facts.title.casefold(), facts.title))
+    events_truncated = len(events) > MAX_EVENTS
+    if events_truncated:
+        events = events[:MAX_EVENTS]
+        warnings.append(dict(EVENT_WARNINGS["events_truncated"]))
+
+    return _target_events_response(
+        status="partial_success" if degraded else "success",
+        error=None,
+        period=period,
+        events_available=True,
+        events_truncated=events_truncated,
+        events=[facts.to_public_dict(resolved_today) for facts in events],
+        warnings=warnings,
+    )
+
+
+def _event_identity(facts: EventFacts) -> tuple[object, ...]:
+    if facts.source_uuid is not None:
+        return ("uuid", facts.source_uuid)
+    return (
+        "fallback",
+        facts.date,
+        facts.title,
+        facts.start_time_local,
+        facts.distance_km,
+        facts.location,
+    )
+
+
+def _public_error(code: str) -> dict[str, str]:
+    return dict(PUBLIC_EVENT_ERRORS[code])
+
+
+def _month_warning(code: str, month: str) -> dict[str, str]:
+    warning = EVENT_WARNINGS[code]
+    return {
+        "provider": warning["provider"],
+        "month": month,
+        "code": warning["code"],
+        "message": warning["message"],
+    }
+
+
+def _target_events_response(
+    *,
+    status: str,
+    error: dict[str, str] | None,
+    period: dict[str, int | str | None],
+    events_available: bool,
+    events_truncated: bool = False,
+    events: list[dict[str, object]] | None = None,
+    warnings: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
+    return {
+        "status": status,
+        "error": error,
+        "period": period,
+        "availability": {"events": events_available},
+        "events_truncated": events_truncated,
+        "events": [] if events is None else events,
+        "warnings": [] if warnings is None else warnings,
+    }
+
+
 __all__ = [
     "DEFAULT_LOOKAHEAD_DAYS",
+    "EVENT_WARNINGS",
     "MAX_EVENTS",
     "MAX_LOCATION_LENGTH",
     "MAX_LOOKAHEAD_DAYS",
     "MAX_TIME_ZONE_LENGTH",
     "MAX_TITLE_LENGTH",
+    "PUBLIC_EVENT_ERRORS",
     "EventFacts",
     "event_months",
+    "get_target_events_service",
     "normalize_event",
 ]
