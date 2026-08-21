@@ -1,9 +1,8 @@
 # Garmin MCP for AI Coaching
 
-A purpose-built Garmin MCP for AI coaching and workout creation, with
-in-place workout updates. This project
-is a fork of [Taxuspt's Garmin MCP](https://github.com/Taxuspt/garmin_mcp), keeps
-its maintained Garmin backend intentionally upstream-compatible, and is
+A purpose-built Garmin MCP for AI coaching and workout creation with in-place
+workout updates. It is a fork of [Taxuspt's Garmin MCP](https://github.com/Taxuspt/garmin_mcp) that
+keeps its maintained Garmin backend intentionally upstream-compatible and is
 installed from
 [wouterrodeyns/garmin_mcp](https://github.com/wouterrodeyns/garmin_mcp).
 
@@ -21,6 +20,7 @@ wellness evidence reads:
 | Tool | Role |
 |---|---|
 | [`get_training_context(days=14)`](docs/ai-training.md) | Context eyes: a compact, read-only factual snapshot before making a recommendation. |
+| [`get_target_events(days=180)`](docs/ai-target-events.md) | Target eyes: an explicit, bounded event read for event-aware questions. |
 | [`get_sleep_trend(days=7)`](docs/ai-sleep-trend.md) | Explicit, read-only multi-night sleep evidence when the compact snapshot is not enough. |
 | [`get_wellness_heart_rate(...)`](docs/ai-wellness-heart-rate.md) | Explicit, read-only all-day wellness heart-rate evidence when detailed samples are needed. |
 | [`analyze_activity(activity_id)`](docs/ai-activity.md) | Completed-session feedback read: bounded facts for the AI to interpret. |
@@ -30,6 +30,10 @@ wellness evidence reads:
 ```text
 User: Review my last 30 days and recommend today's run.
 AI:   get_training_context(days=30) -> factual context -> conservative advice.
+
+User: I am targeting a half marathon. How should that change the plan?
+AI:   get_training_context(days=30) -> get_target_events(days=180)
+      -> factual target context -> conservative advice.
 
 User: Put that workout on Garmin for tomorrow.
 AI:   explain the proposed workout, request confirmation, then
@@ -92,11 +96,12 @@ Garmin Connect China, and token recovery, see the
 
 ai-coach is the default profile when `GARMIN_TOOL_PROFILE` is unset or
 empty. Set `GARMIN_TOOL_PROFILE=ai-coach` explicitly in a client configuration
-when documenting that intent. This profile exposes this deliberate 16-tool
-surface:
+when documenting that intent. This profile exposes exactly 17 tools for AI
+coaching:
 
 ```text
 `get_training_context`
+`get_target_events`
 `get_sleep_trend`
 `get_wellness_heart_rate`
 `analyze_activity`
@@ -152,6 +157,8 @@ full upstream registration an explicit choice.
 
 - [Training context](docs/ai-training.md) documents aggregation windows,
   normalized fields, optional metrics, and structured warning/status behavior.
+- [Target-event evidence](docs/ai-target-events.md) documents the explicit
+  bounded calendar read, event fields, warnings, privacy boundary, and limits.
 - [Sleep trend evidence](docs/ai-sleep-trend.md) documents explicit bounded
   multi-night sleep facts, visible gaps, denominators, and interpretation limits.
 - [Wellness heart-rate evidence](docs/ai-wellness-heart-rate.md) documents the
@@ -191,9 +198,9 @@ reference.
 
 ## Compatibility, contributing, and license
 
-Fork-specific AI abstractions live in separate `ai_training`, `ai_workouts`, and
-`ai_activity` packages. The ai_training, ai_workouts, and ai_activity packages
-wrap Taxuspt's backend instead of replacing authentication,
+Fork-specific AI abstractions live in the `ai_training`, `ai_events`,
+`ai_workouts`, and `ai_activity` packages. These packages wrap Taxuspt's
+backend instead of replacing authentication,
 Garmin API handling, or workout normalization, keeping future upstream sync
 practical.
 

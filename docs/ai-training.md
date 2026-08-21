@@ -17,6 +17,12 @@ unavailable current date can simply mean the watch/device has not synced to
 Garmin Connect yet; it does not establish an unsupported account or device.
 Sync, then retry.
 
+Target events also remain separate from the compact context. Use
+[`get_target_events`](ai-target-events.md) only for an event-aware question,
+such as how a named race or target date should inform the discussion. Its
+calendar facts are not a coaching conclusion, and an empty result does not
+prove the athlete has no race or target.
+
 The implementation is pinned to `garminconnect==0.3.10`. Garmin metric
 availability varies by device and account, so every recovery and fitness metric
 described below is optional.
@@ -240,14 +246,16 @@ Warnings never include raw Garmin responses, tokens, or credentials.
 
 ## AI-coach profile and workflow
 
-Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 16 tools. The three
+Set `GARMIN_TOOL_PROFILE=ai-coach` to expose exactly 17 tools. The three
 primary coaching roles are context eyes (`get_training_context`),
 completed-session feedback (`analyze_activity`, with the narrow
 `get_activity_timeseries` follow-up for concrete short-interval evidence), and
 workout hands (`create_workout` plus in-place `update_workout`). Deliberate
 sleep-trend (`get_sleep_trend`) and all-day wellness-heart-rate
-(`get_wellness_heart_rate`) reads provide evidence for those roles. The full
-profile also preserves compatibility for focused reads and calendar operations:
+(`get_wellness_heart_rate`) reads provide evidence for those roles.
+`get_target_events` is a separate target-eyes read for event-aware planning.
+The full profile also preserves compatibility for focused reads and calendar
+operations:
 
 The compact snapshot does not imply a multi-night sleep pattern. The workflow
 is `get_training_context` for the current snapshot, then an explicit
@@ -262,7 +270,8 @@ User: "I haven't run for two months and I'm targeting a half marathon.
 Review my Garmin data and recommend how I should restart."
 
 Claude: get_training_context(days=30)
-        -> reviews training and recovery facts
+        -> get_target_events(days=180) when the race date or target matters
+        -> reviews training, recovery, and available target-event facts
         -> recommends a conservative return-to-running session
 
 After a completed session, `analyze_activity(activity_id)` is the bounded,

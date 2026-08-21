@@ -52,6 +52,7 @@ def _register_unfiltered_reference_tools():
         garmin_mcp.workouts,
         garmin_mcp.ai_workouts,
         garmin_mcp.ai_training,
+        garmin_mcp.ai_events,
         garmin_mcp.ai_activity,
         garmin_mcp.data_management,
         garmin_mcp.womens_health,
@@ -88,8 +89,9 @@ def test_main_defaults_to_exact_ai_coach_tool_profile(monkeypatch):
 
     assert run_calls
     assert run_calls[0]["transport"] == "stdio"
-    assert run_calls[0]["tool_count"] == 16
+    assert run_calls[0]["tool_count"] == 17
     assert set(run_calls[0]["tool_names"]) == garmin_mcp.TOOL_PROFILES["ai-coach"]
+    assert "get_target_events" in run_calls[0]["tool_names"]
     assert "get_devices" not in run_calls[0]["tool_names"]
 
 
@@ -190,10 +192,42 @@ def test_main_configures_and_registers_ai_training(monkeypatch):
     assert registered[0] is not None
 
 
+def test_main_configures_and_registers_ai_events_with_garmin_proxy(monkeypatch):
+    configured = []
+    registered = []
+    raw_client = Mock()
+    original_configure = garmin_mcp.ai_events.configure
+    original_register_tools = garmin_mcp.ai_events.register_tools
+
+    _set_safe_stdio_transport_environment(monkeypatch)
+    _clear_tool_filter_environment(monkeypatch)
+    monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: raw_client)
+    monkeypatch.setattr(
+        garmin_mcp.ai_events,
+        "configure",
+        lambda client: (configured.append(client), original_configure(client))[1],
+    )
+    monkeypatch.setattr(
+        garmin_mcp.ai_events,
+        "register_tools",
+        lambda app: (registered.append(app), original_register_tools(app))[1],
+    )
+    monkeypatch.setattr(FastMCP, "run", lambda self, **_kwargs: None)
+
+    garmin_mcp.main()
+
+    assert len(configured) == 1
+    assert len(registered) == 1
+    assert configured[0]._client is raw_client
+    assert registered[0] is not None
+
+
 def test_main_configures_and_registers_ai_activity_adjacent_to_ai_tools(monkeypatch):
     events = []
     original_activity_configure = garmin_mcp.ai_activity.configure
     original_activity_register_tools = garmin_mcp.ai_activity.register_tools
+    original_events_configure = garmin_mcp.ai_events.configure
+    original_events_register_tools = garmin_mcp.ai_events.register_tools
     original_training_configure = garmin_mcp.ai_training.configure
     original_training_register_tools = garmin_mcp.ai_training.register_tools
 
@@ -211,6 +245,11 @@ def test_main_configures_and_registers_ai_activity_adjacent_to_ai_tools(monkeypa
         lambda client: (events.append(("configure_activity", client)), original_activity_configure(client))[1],
     )
     monkeypatch.setattr(
+        garmin_mcp.ai_events,
+        "configure",
+        lambda client: (events.append(("configure_events", client)), original_events_configure(client))[1],
+    )
+    monkeypatch.setattr(
         garmin_mcp.ai_training,
         "register_tools",
         lambda app: (events.append(("register_training", app)), original_training_register_tools(app))[1],
@@ -220,14 +259,22 @@ def test_main_configures_and_registers_ai_activity_adjacent_to_ai_tools(monkeypa
         "register_tools",
         lambda app: (events.append(("register_activity", app)), original_activity_register_tools(app))[1],
     )
+    monkeypatch.setattr(
+        garmin_mcp.ai_events,
+        "register_tools",
+        lambda app: (events.append(("register_events", app)), original_events_register_tools(app))[1],
+    )
     monkeypatch.setattr(FastMCP, "run", lambda self, **_kwargs: None)
 
     garmin_mcp.main()
 
     names = [event[0] for event in events]
-    assert names.index("configure_training") < names.index("configure_activity")
-    assert names.index("register_training") < names.index("register_activity")
+    assert names.index("configure_training") < names.index("configure_events") < names.index("configure_activity")
+    assert names.index("register_training") < names.index("register_events") < names.index("register_activity")
+    assert events[names.index("configure_events")][1]._client is not None
     assert events[names.index("configure_activity")][1]._client is not None
+    assert names.count("configure_events") == 1
+    assert names.count("register_events") == 1
     assert names.count("configure_activity") == 1
     assert names.count("register_activity") == 1
 
@@ -329,6 +376,7 @@ def test_main_registers_exact_ai_coach_profile(monkeypatch):
 
     assert run_calls == [{
         "get_training_context",
+        "get_target_events",
         "get_sleep_trend",
         "get_wellness_heart_rate",
         "analyze_activity",
@@ -364,6 +412,7 @@ def test_ai_coach_profile_equals_actual_registered_tool_names(monkeypatch):
 
     assert run_calls == [{
         "get_training_context",
+        "get_target_events",
         "get_sleep_trend",
         "get_wellness_heart_rate",
         "analyze_activity",
@@ -380,8 +429,9 @@ def test_ai_coach_profile_equals_actual_registered_tool_names(monkeypatch):
         "unschedule_workout",
         "delete_workout",
     }]
-    assert len(run_calls[0]) == 16
+    assert len(run_calls[0]) == 17
     assert run_calls[0] == garmin_mcp.TOOL_PROFILES["ai-coach"]
+    assert "get_target_events" in run_calls[0]
     assert "get_activity_fit_data" not in run_calls[0]
     assert "move_workout" not in run_calls[0]
 

@@ -25,6 +25,7 @@ from garmin_mcp import training
 from garmin_mcp import workouts
 from garmin_mcp import ai_workouts
 from garmin_mcp import ai_training
+from garmin_mcp import ai_events
 from garmin_mcp import ai_activity
 from garmin_mcp import workout_templates
 from garmin_mcp import data_management
@@ -121,6 +122,7 @@ _UNKNOWN_TOOL_PROFILE_ERROR = (
 TOOL_PROFILES = {
     "ai-coach": {
         "get_training_context",
+        "get_target_events",
         "get_sleep_trend",
         "get_wellness_heart_rate",
         "analyze_activity",
@@ -562,6 +564,7 @@ def main():
     workouts.configure(garmin_client)
     ai_workouts.configure(garmin_client)
     ai_training.configure(garmin_client)
+    ai_events.configure(garmin_client)
     ai_activity.configure(garmin_client)
     data_management.configure(garmin_client)
     womens_health.configure(garmin_client)
@@ -606,6 +609,7 @@ def main():
     app = workouts.register_tools(app)
     app = ai_workouts.register_tools(app)
     app = ai_training.register_tools(app)
+    app = ai_events.register_tools(app)
     app = ai_activity.register_tools(app)
     app = data_management.register_tools(app)
     app = womens_health.register_tools(app)

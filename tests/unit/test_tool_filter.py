@@ -102,9 +102,10 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
 
     assert enabled == TOOL_PROFILES["ai-coach"]
     assert disabled == set()
-    assert len(enabled) == 16
+    assert len(enabled) == 17
     assert enabled == {
         "get_training_context",
+        "get_target_events",
         "get_sleep_trend",
         "get_wellness_heart_rate",
         "analyze_activity",
@@ -125,11 +126,22 @@ def test_ai_coach_profile_registers_selected_workout_tools_only():
         "upload_workout",
         "upload_workouts",
         "delete_workouts",
+        "upload_course",
+        "delete_course",
         "create_manual_activity",
         "get_activity_fit_data",
         "move_workout",
         "get_heart_rates",
     } & enabled
+
+
+def test_ai_coach_profile_allows_target_events_to_be_disabled():
+    enabled, disabled = _resolve_tool_filters(
+        "ai-coach", None, "get_target_events"
+    )
+
+    assert enabled == TOOL_PROFILES["ai-coach"] - {"get_target_events"}
+    assert disabled == set()
 
 
 def test_explicit_enabled_tools_override_profile_and_disabled_tools():
