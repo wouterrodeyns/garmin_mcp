@@ -79,8 +79,8 @@ Every response has these seven top-level keys, in this order: `status`,
 }
 ```
 
-`partial_success` keeps readable months and valid event facts when one or more
-requested months failed, was structurally invalid, or contained a malformed
+`partial_success` keeps readable months and valid event facts when any
+requested month failed, was structurally invalid, or contained a malformed
 event candidate. A structurally readable month with only malformed event
 candidates can itself produce `partial_success`, even when it is the sole
 readable month. The warning identifies the affected month without exposing a
