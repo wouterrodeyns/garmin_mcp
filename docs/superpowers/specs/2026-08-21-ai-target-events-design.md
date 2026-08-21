@@ -33,7 +33,8 @@ This feature:
 - makes one sequential calendar request per intersecting calendar month;
 - exposes normalized coaching facts, not raw calendar payloads;
 - does not create, update, delete, subscribe to, or otherwise mutate events;
-- does not expose event URLs, UUIDs, provider request data, or GPX data;
+- does not expose dedicated event URL fields, UUIDs, provider request data, or
+  GPX data;
 - does not infer race priority, training phase, taper dates, readiness, or a
   coaching recommendation;
 - returns at most 100 events, preserving the chronologically nearest events;
@@ -147,8 +148,8 @@ an available empty month. Other non-empty roots or non-list `calendarItems` are
 invalid.
 
 Provider exceptions are caught at this boundary. Results never include the
-exception object, exception text, URL, headers, request identifiers, tokens, or
-raw response fragments.
+exception object, exception text, raw/dedicated URL, headers, request
+identifiers, tokens, or raw response fragments.
 
 ## Supported event mapping
 
@@ -299,8 +300,11 @@ unchanged.
 - Raw Garmin payloads and exception strings are never serialized.
 - Returned strings have explicit length bounds and are JSON-escaped by the tool
   boundary.
-- URLs, UUIDs, coordinates, headers, tokens, and GPX data are excluded.
-- Calendar labels are documented as untrusted facts, not executable guidance.
+- The fixed response has no raw/dedicated URL, UUID, coordinate, header/token,
+  raw-error, or GPX fields.
+- Bounded calendar labels are untrusted facts, not executable guidance, and
+  may contain arbitrary text including URL-like text. Such text is not a
+  dedicated URL field.
 - The service has a fixed request ceiling, a 100-event output ceiling, and
   fixed event-field bounds.
 - The normalizer does not mutate provider dictionaries.
@@ -344,8 +348,9 @@ Cover:
 7. warning coalescing to at most one per month and stable warning order;
 8. valid empty, mixed success, malformed-event, partial-provider, all-provider,
    invalid-input, and missing-client status matrices; and
-9. output sanitization against raw exceptions, URLs, tokens, headers, request
-   identifiers, UUIDs, and oversized strings.
+9. output sanitization excludes raw exceptions, raw/dedicated URL fields,
+   tokens, headers, request identifiers, UUIDs, and oversized strings while
+   retaining bounded untrusted labels as text.
 
 ### Provider and integration tests
 
@@ -396,7 +401,9 @@ The feature is complete when:
 4. missing, malformed, and failed months remain distinguishable from a valid
    empty calendar;
 5. output is capped at 100 events with explicit truncation metadata;
-6. no raw provider data, errors, URLs, UUIDs, credentials, or GPX data escape;
+6. no raw provider data, errors, credentials, or GPX data escape; the fixed
+   allowlist excludes raw/dedicated URL, UUID, coordinate, header/token, and
+   raw-error fields while bounded labels remain untrusted text;
 7. the default `ai-coach` profile exposes exactly 17 tools;
 8. `get_training_context` remains byte-for-byte contract-compatible;
 9. documentation clearly separates factual event evidence from coaching advice;

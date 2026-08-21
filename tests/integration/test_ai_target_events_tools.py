@@ -96,30 +96,29 @@ async def test_get_target_events_delegates_once_and_serializes_compact_unicode_j
 
 
 @pytest.mark.asyncio
-async def test_get_target_events_uses_latest_configured_client_and_restores_global(
+async def test_get_target_events_keeps_the_client_configured_when_each_app_registered(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    original_client = object()
-    tools.garmin_client = original_client
     first_client = object()
     second_client = object()
-    app = FastMCP("AI Target Events")
+    first_app = FastMCP("AI Target Events A")
+    second_app = FastMCP("AI Target Events B")
 
     ai_events.configure(first_client)
-    ai_events.register_tools(app)
+    ai_events.register_tools(first_app)
     ai_events.configure(second_client)
+    ai_events.register_tools(second_app)
     observed_clients = []
 
     def observe_client(client, days):
-        observed_clients.append(tools.garmin_client)
+        observed_clients.append((client, days))
         return {"status": "success", "events": []}
 
-    # The registered closure reads the module-global client at call time.
     monkeypatch.setattr(tools, "get_target_events_service", observe_client)
-    await app.call_tool("get_target_events", {})
-    tools.garmin_client = original_client
+    await first_app.call_tool("get_target_events", {})
+    await second_app.call_tool("get_target_events", {})
 
-    assert observed_clients == [second_client]
+    assert observed_clients == [(first_client, 180), (second_client, 180)]
 
 
 @pytest.mark.asyncio

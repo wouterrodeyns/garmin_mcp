@@ -179,7 +179,8 @@ def _normalize_distance(value: object) -> tuple[float | None, bool]:
         return None, False
     if type(value) is not dict:
         return None, True
-    if value.get("unitType") != "distance":
+    unit_type = value.get("unitType")
+    if type(unit_type) is not str or unit_type != "distance":
         return None, False
 
     meters = value.get("value")

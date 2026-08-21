@@ -41,6 +41,14 @@ class StringSubclass(str):
     pass
 
 
+class ExplosiveUnitType:
+    def __eq__(self, other: object) -> bool:
+        raise RuntimeError("secret-bearing unit type equality")
+
+    def __ne__(self, other: object) -> bool:
+        raise RuntimeError("secret-bearing unit type inequality")
+
+
 def event_raw(**overrides: object) -> dict[str, object]:
     raw: dict[str, object] = {
         "itemType": "event",
@@ -277,6 +285,18 @@ def test_normalize_treats_missing_or_non_distance_target_as_clean_null(
     target: object,
 ) -> None:
     facts, malformed = normalize_event(event_raw(completionTarget=target))
+
+    assert malformed is False
+    assert facts is not None
+    assert facts.distance_km is None
+
+
+def test_normalize_ignores_explosive_non_string_distance_unit_type() -> None:
+    facts, malformed = normalize_event(
+        event_raw(
+            completionTarget={"unitType": ExplosiveUnitType(), "value": 5000}
+        )
+    )
 
     assert malformed is False
     assert facts is not None

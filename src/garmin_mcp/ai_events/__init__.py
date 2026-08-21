@@ -1,12 +1,5 @@
 """Compact, read-only Garmin target-event evidence for AI coaching."""
 
-from .service import (
-    DEFAULT_LOOKAHEAD_DAYS,
-    MAX_LOOKAHEAD_DAYS,
-    get_target_events_service,
-)
-
-
 def configure(client):
     """Configure target-event tools without importing them eagerly."""
     from .tools import configure as configure_tools
@@ -22,9 +15,6 @@ def register_tools(app):
 
 
 __all__ = [
-    "DEFAULT_LOOKAHEAD_DAYS",
-    "MAX_LOOKAHEAD_DAYS",
     "configure",
-    "get_target_events_service",
     "register_tools",
 ]

@@ -158,12 +158,21 @@ def test_target_event_guide_pins_status_warning_privacy_and_interpretation_limit
         "invalid_provider_response",
         "events_truncated",
         "target_events_unavailable",
-        "urls, uuids, coordinates, headers, tokens, raw errors, or gpx",
+        "fixed response has no raw/dedicated url, uuid, coordinate, header/token, raw-error, or gpx fields",
+        "bounded title and location labels are untrusted facts and may contain arbitrary text, including url-like text",
         "absence, an empty list, or a null field",
         "server does not make coaching conclusions",
-        "no urls, uuids, coordinates, headers, tokens, raw errors, or gpx",
     ):
         assert phrase in lower
+
+
+def test_target_event_guide_allows_partial_success_for_a_sole_degraded_month() -> None:
+    lower = " ".join(_guide().lower().split())
+    assert (
+        "a structurally readable month with only malformed event candidates can"
+        " itself produce `partial_success`"
+    ) in lower
+    assert "partial_success keeps readable months and valid event facts when another month" not in lower
 
 
 def test_current_docs_publish_the_exact_seventeen_tool_profile() -> None:

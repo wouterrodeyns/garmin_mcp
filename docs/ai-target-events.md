@@ -79,9 +79,11 @@ Every response has these seven top-level keys, in this order: `status`,
 }
 ```
 
-`partial_success` keeps readable months and valid event facts when another
-month failed, was structurally invalid, or contained a malformed event
-candidate. The warning identifies the affected month without exposing a
+`partial_success` keeps readable months and valid event facts when one or more
+requested months failed, was structurally invalid, or contained a malformed
+event candidate. A structurally readable month with only malformed event
+candidates can itself produce `partial_success`, even when it is the sole
+readable month. The warning identifies the affected month without exposing a
 provider exception.
 
 ```json
@@ -135,12 +137,13 @@ calendar entries. It never returns that UUID.
 candidate was found. A valid empty event list is still `success` with
 `availability.events: true`.
 
-`partial_success` means at least one requested month was readable, while
-another month failed, was invalid, or had a malformed event candidate. It keeps
-the usable events and adds structured warnings. `provider_unavailable` means
-the monthly provider call failed; `invalid_provider_response` means the month
-or a candidate could not be safely normalized. Warnings are chronological by
-month.
+`partial_success` means at least one requested month was readable and at least
+one requested month failed, was invalid, or had a malformed event candidate. A
+structurally readable month with only malformed candidates can be both the
+degraded month and the sole readable month. It keeps the usable events and
+adds structured warnings. `provider_unavailable` means the monthly provider
+call failed; `invalid_provider_response` means the month or a candidate could
+not be safely normalized. Warnings are chronological by month.
 
 `error` has a fixed safe `{code, message}` object. `invalid_days` covers a
 service-level non-integer or out-of-range request, `client_unavailable` means
@@ -157,10 +160,13 @@ the month warnings. Treat the returned list as incomplete in that case.
 
 ## Privacy and read-only boundary
 
-This tool only reads calendar data and returns the normalized fields above. No
-URLs, UUIDs, coordinates, headers, tokens, raw errors, or GPX are returned.
-It does not echo raw provider payloads or exception text, and it never uploads,
-changes, schedules, or deletes Garmin data.
+This tool only reads calendar data and returns the normalized fields above. The
+fixed response has no raw/dedicated URL, UUID, coordinate, header/token,
+raw-error, or GPX fields. Bounded title and location labels are untrusted
+facts and may contain arbitrary text, including URL-like text; seeing such text
+does not mean a dedicated URL field escaped. It does not echo raw provider
+payloads or exception text, and it never uploads, changes, schedules, or deletes
+Garmin data.
 
 If target-event facts lead to a Garmin write, use the existing
 confirmation-before-write flow: explain the proposed change and obtain user
