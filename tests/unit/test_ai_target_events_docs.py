@@ -95,8 +95,10 @@ def test_target_event_guide_covers_bounded_read_only_workflow() -> None:
         "get_target_events(days=180)",
         "exact integer from 1 through 366",
         "inclusive host-local calendar dates",
-        "at most 13 sequential monthly reads",
-        "no layer retries",
+        "at most 13 sequential `get_scheduled_workouts` provider calls",
+        "no retries at this layer",
+        "pinned `garminconnect` client may retry retryable network or 5xx transport failures",
+        "physical http attempts can exceed the requested-month count",
         "100 chronologically nearest events",
         "events_truncated",
         "read-only",
@@ -106,6 +108,13 @@ def test_target_event_guide_covers_bounded_read_only_workflow() -> None:
         "does not prove no race, account support, priority, fitness, readiness, or commitment",
     ):
         assert phrase in lower
+
+
+def test_target_event_guide_requires_confirmation_before_any_resulting_write() -> None:
+    lower = " ".join(_guide().lower().split())
+    assert "existing confirmation-before-write flow" in lower
+    assert "explain the proposed change and obtain user confirmation" in lower
+    assert "before create, update, schedule, or any other garmin write" in lower
 
 
 def test_target_event_guide_examples_have_the_exact_public_shape() -> None:
