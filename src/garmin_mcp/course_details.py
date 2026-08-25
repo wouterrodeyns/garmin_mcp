@@ -185,3 +185,21 @@ def get_course_details_service(client: Any, course_id: Any) -> dict[str, Any]:
         "course": course,
         "warnings": warnings,
     }
+
+
+def register_tools(app: Any) -> Any:
+    """Register the opt-in course-details MCP tool."""
+    registered_client = garmin_client
+
+    @app.tool()
+    async def get_course_details(course_id: StrictInt | StrictStr) -> str:
+        """Return a bounded, read-only scalar summary for one saved course.
+
+        This explicit read ignores route geometry, GPX, map data, owner data,
+        and private provider fields. It is outside the default ai-coach
+        profile and performs one Garmin detail read at most.
+        """
+        result = get_course_details_service(registered_client, course_id)
+        return json.dumps(result, separators=(",", ":"), ensure_ascii=False)
+
+    return app
