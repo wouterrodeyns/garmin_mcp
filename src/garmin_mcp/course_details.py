@@ -65,7 +65,11 @@ def _text(value: Any) -> str | None:
 def _metric(value: Any) -> int | float | None:
     if type(value) not in (int, float):
         return None
-    return value if isfinite(value) and value >= 0 else None
+    try:
+        finite = isfinite(value)
+    except OverflowError:
+        return None
+    return value if finite and value >= 0 else None
 
 
 def _course_template(course_id: int) -> dict[str, Any]:

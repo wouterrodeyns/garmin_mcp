@@ -463,7 +463,10 @@ def test_metrics_reject_bool_nan_infinity_negative_and_other_types(bad_metric):
         ("elevationLossMeter", "elevation_loss_m", {"distance_m": 10.0, "elevation_gain_m": 20.0}),
     ],
 )
-@pytest.mark.parametrize("bad_metric", [True, float("nan"), float("inf"), float("-inf"), -1, "12", None, object()])
+@pytest.mark.parametrize(
+    "bad_metric",
+    [True, float("nan"), float("inf"), float("-inf"), -1, "12", None, object(), 10**309],
+)
 def test_one_malformed_metric_preserves_other_metrics_and_one_warning(
     metric_key, output_key, retained_values, bad_metric
 ):
