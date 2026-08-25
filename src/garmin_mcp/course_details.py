@@ -1,6 +1,7 @@
 """Safe, selective reads for one saved Garmin course."""
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import StrictInt, StrictStr
@@ -66,6 +67,19 @@ def configure(client: Any) -> None:
     garmin_client = client
 
 
+class _ProviderResult:
+    def __init__(self, data: Any = None, failed: bool = False):
+        self.data = data
+        self.failed = failed
+
+
+def _fetch_course(client: Any, course_id: int) -> _ProviderResult:
+    try:
+        return _ProviderResult(client.connectapi(f"/course-service/course/{course_id}"))
+    except Exception:
+        return _ProviderResult(failed=True)
+
+
 def get_course_details_service(client: Any, course_id: Any) -> dict[str, Any]:
     """Return a bounded course summary for a validated request identifier."""
     validated_id = _parse_course_id(course_id)
@@ -73,4 +87,29 @@ def get_course_details_service(client: Any, course_id: Any) -> dict[str, Any]:
         return _error("invalid_course_id")
     if client is None:
         return _error("client_unavailable")
-    return _error("course_unavailable")
+
+    provider_result = _fetch_course(client, validated_id)
+    if provider_result.failed:
+        return _error("course_unavailable")
+
+    data = provider_result.data
+    if data is None or (isinstance(data, Mapping) and len(data) == 0):
+        return _error("course_not_found")
+    if not isinstance(data, Mapping):
+        return _error("invalid_course_response")
+
+    provider_id = data.get("courseId")
+    if (
+        type(provider_id) is not int
+        or provider_id <= 0
+        or provider_id > MAX_SAFE_COURSE_ID
+        or provider_id != validated_id
+    ):
+        return _error("invalid_course_response")
+
+    return {
+        "status": "success",
+        "error": None,
+        "course": _course_template(validated_id),
+        "warnings": [],
+    }
