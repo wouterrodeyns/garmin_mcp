@@ -203,3 +203,305 @@ def test_missing_invalid_and_mismatched_provider_course_id_are_invalid(provider_
         "course": None,
         "warnings": [],
     }
+
+
+@pytest.mark.parametrize(
+    ("activity_id", "activity"),
+    [
+        (1, "running"),
+        (2, "cycling"),
+        (3, "hiking"),
+        (4, "gravel_cycling"),
+        (5, "mountain_biking"),
+        (6, "trail_running"),
+        (9, "walking"),
+        (10, "road_biking"),
+    ],
+)
+def test_activity_type_maps_every_existing_upload_id(activity_id, activity):
+    client = RecordingClient(
+        {
+            "courseId": 123,
+            "courseName": "Course",
+            "activityTypePk": activity_id,
+            "distanceMeter": 1.0,
+            "elevationGainMeter": 1.0,
+            "elevationLossMeter": 1.0,
+        }
+    )
+
+    result = get_course_details_service(client, 123)
+
+    assert result["status"] == "success"
+    assert result["course"]["activity"] == activity
+    assert set(result["course"]) == {
+        "course_id",
+        "name",
+        "activity",
+        "distance_m",
+        "elevation_gain_m",
+        "elevation_loss_m",
+    }
+
+
+@pytest.mark.parametrize("activity_id", [True, 1.0, "1", 0, 999, None])
+def test_activity_type_requires_exact_int_and_known_id(activity_id):
+    client = RecordingClient(
+        {
+            "courseId": 123,
+            "courseName": "Course",
+            "activityTypePk": activity_id,
+            "distanceMeter": 1.0,
+            "elevationGainMeter": 1.0,
+            "elevationLossMeter": 1.0,
+        }
+    )
+
+    result = get_course_details_service(client, 123)
+
+    assert result["status"] == "partial_success"
+    assert result["course"]["activity"] is None
+    assert result["warnings"] == [
+        {
+            "code": "activity_type_unavailable",
+            "message": "Course activity type is unavailable.",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("course_name", "expected_name"),
+    [
+        ("A", "A"),
+        ("N" * 256, "N" * 256),
+        ("  Canal Loop  ", "Canal Loop"),
+    ],
+)
+def test_course_name_is_trimmed_and_limited(course_name, expected_name):
+    client = RecordingClient(
+        {
+            "courseId": 123,
+            "courseName": course_name,
+            "activityTypePk": 1,
+            "distanceMeter": 1.0,
+            "elevationGainMeter": 1.0,
+            "elevationLossMeter": 1.0,
+        }
+    )
+
+    result = get_course_details_service(client, 123)
+
+    assert result["status"] == "success"
+    assert result["course"]["name"] == expected_name
+    assert result["warnings"] == []
+
+
+@pytest.mark.parametrize("course_name", ["", "   ", "X" * 257, None, 123, True])
+def test_invalid_course_names_are_partial_with_one_warning(course_name):
+    client = RecordingClient(
+        {
+            "courseId": 123,
+            "courseName": course_name,
+            "activityTypePk": 1,
+            "distanceMeter": 1.0,
+            "elevationGainMeter": 1.0,
+            "elevationLossMeter": 1.0,
+        }
+    )
+
+    result = get_course_details_service(client, 123)
+
+    assert result["status"] == "partial_success"
+    assert result["course"]["name"] is None
+    assert result["warnings"] == [
+        {
+            "code": "course_name_unavailable",
+            "message": "Course name is unavailable.",
+        }
+    ]
+
+
+@pytest.mark.parametrize("metric_value", [0, 12, 12.5])
+@pytest.mark.parametrize("metric_key", ["distanceMeter", "elevationGainMeter", "elevationLossMeter"])
+def test_metrics_accept_finite_nonnegative_int_or_float(metric_key, metric_value):
+    client = RecordingClient(
+        {
+            "courseId": 123,
+            "courseName": "Course",
+            "activityTypePk": 1,
+            "distanceMeter": 1.0,
+            "elevationGainMeter": 1.0,
+            "elevationLossMeter": 1.0,
+            metric_key: metric_value,
+        }
+    )
+
+    result = get_course_details_service(client, 123)
+
+    output_key = {
+        "distanceMeter": "distance_m",
+        "elevationGainMeter": "elevation_gain_m",
+        "elevationLossMeter": "elevation_loss_m",
+    }[metric_key]
+    assert result["status"] == "success"
+    assert result["course"][output_key] == metric_value
+    assert result["warnings"] == []
+
+
+@pytest.mark.parametrize("bad_metric", [True, float("nan"), float("inf"), -1, "12", None, object()])
+def test_metrics_reject_bool_nan_infinity_negative_and_other_types(bad_metric):
+    client = RecordingClient(
+        {
+            "courseId": 123,
+            "courseName": "Course",
+            "activityTypePk": 1,
+            "distanceMeter": bad_metric,
+            "elevationGainMeter": bad_metric,
+            "elevationLossMeter": bad_metric,
+        }
+    )
+
+    result = get_course_details_service(client, 123)
+
+    assert result["status"] == "partial_success"
+    assert result["course"]["distance_m"] is None
+    assert result["course"]["elevation_gain_m"] is None
+    assert result["course"]["elevation_loss_m"] is None
+    assert result["warnings"] == [
+        {
+            "code": "invalid_course_metric",
+            "message": "One or more course distance or elevation metrics are unavailable.",
+        }
+    ]
+
+
+def test_warning_order_is_name_activity_metric():
+    client = RecordingClient(
+        {
+            "courseId": 123,
+            "courseName": " ",
+            "activityTypePk": 999,
+            "distanceMeter": -1,
+            "elevationGainMeter": float("nan"),
+            "elevationLossMeter": True,
+        }
+    )
+
+    result = get_course_details_service(client, 123)
+
+    assert result["status"] == "partial_success"
+    assert [warning["code"] for warning in result["warnings"]] == [
+        "course_name_unavailable",
+        "activity_type_unavailable",
+        "invalid_course_metric",
+    ]
+
+
+class HostileGeometry:
+    def __iter__(self):
+        raise AssertionError("geometry must not be iterated")
+
+    def __len__(self):
+        raise AssertionError("geometry must not be sized")
+
+    def __str__(self):
+        raise AssertionError("geometry must not be stringified")
+
+    def __repr__(self):
+        raise AssertionError("geometry must not be represented")
+
+
+def test_projection_excludes_all_private_and_geometry_fields():
+    sentinel = "private-course-details-sentinel"
+    response = {
+        "courseId": 123,
+        "courseName": "Canal Loop",
+        "activityTypePk": 1,
+        "distanceMeter": 10000.0,
+        "elevationGainMeter": 120.0,
+        "elevationLossMeter": 115.0,
+        "geoPoints": HostileGeometry(),
+        "courseLines": HostileGeometry(),
+        "coursePoints": HostileGeometry(),
+        "boundingBox": {"latitude": sentinel, "longitude": sentinel},
+        "startPoint": {"latitude": sentinel, "longitude": sentinel},
+        "userProfilePk": sentinel,
+        "userGroupPk": sentinel,
+        "ownerName": sentinel,
+        "profileName": sentinel,
+        "groupName": sentinel,
+        "firstName": sentinel,
+        "lastName": sentinel,
+        "description": sentinel,
+        "notes": sentinel,
+        "url": sentinel,
+    }
+    client = RecordingClient(response)
+
+    result = get_course_details_service(client, 123)
+    serialized = json.dumps(result)
+
+    assert result["status"] == "success"
+    assert result["course"] == {
+        "course_id": 123,
+        "name": "Canal Loop",
+        "activity": "running",
+        "distance_m": 10000.0,
+        "elevation_gain_m": 120.0,
+        "elevation_loss_m": 115.0,
+    }
+    for forbidden in (
+        "geoPoints",
+        "courseLines",
+        "coursePoints",
+        "boundingBox",
+        "startPoint",
+        "userProfilePk",
+        "userGroupPk",
+        "ownerName",
+        "profileName",
+        "groupName",
+        "firstName",
+        "lastName",
+        "description",
+        "notes",
+        "url",
+        sentinel,
+    ):
+        assert forbidden not in serialized
+
+
+@pytest.mark.parametrize(
+    "course_points",
+    [None, object(), [], [HostileGeometry()]],
+)
+def test_geometry_shape_and_size_do_not_change_status_or_warnings(course_points):
+    client = RecordingClient(
+        {
+            "courseId": 123,
+            "courseName": "Canal Loop",
+            "activityTypePk": 1,
+            "distanceMeter": 10000.0,
+            "elevationGainMeter": 120.0,
+            "elevationLossMeter": 115.0,
+            "coursePoints": course_points,
+            "geoPoints": HostileGeometry(),
+            "courseLines": HostileGeometry(),
+        }
+    )
+
+    result = get_course_details_service(client, 123)
+
+    assert result == {
+        "status": "success",
+        "error": None,
+        "course": {
+            "course_id": 123,
+            "name": "Canal Loop",
+            "activity": "running",
+            "distance_m": 10000.0,
+            "elevation_gain_m": 120.0,
+            "elevation_loss_m": 115.0,
+        },
+        "warnings": [],
+    }

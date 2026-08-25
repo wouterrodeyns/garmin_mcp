@@ -2,9 +2,12 @@
 
 import json
 from collections.abc import Mapping
+from math import isfinite
 from typing import Any
 
 from pydantic import StrictInt, StrictStr
+
+from .courses import _ACTIVITY_TYPE_IDS
 
 
 garmin_client: Any = None
@@ -23,6 +26,8 @@ WARNING_MESSAGES = {
     "activity_type_unavailable": "Course activity type is unavailable.",
     "invalid_course_metric": "One or more course distance or elevation metrics are unavailable.",
 }
+
+_ACTIVITY_BY_ID = {value: key for key, value in _ACTIVITY_TYPE_IDS.items()}
 
 
 def _parse_course_id(value: Any) -> int | None:
@@ -48,6 +53,19 @@ def _error(code: str) -> dict[str, Any]:
 
 def _warning(code: str) -> dict[str, str]:
     return {"code": code, "message": WARNING_MESSAGES[code]}
+
+
+def _text(value: Any) -> str | None:
+    if type(value) is not str:
+        return None
+    value = value.strip()
+    return value if 1 <= len(value) <= 256 else None
+
+
+def _metric(value: Any) -> int | float | None:
+    if type(value) not in (int, float):
+        return None
+    return value if isfinite(value) and value >= 0 else None
 
 
 def _course_template(course_id: int) -> dict[str, Any]:
@@ -107,9 +125,39 @@ def get_course_details_service(client: Any, course_id: Any) -> dict[str, Any]:
     ):
         return _error("invalid_course_response")
 
+    course = _course_template(validated_id)
+    warnings: list[dict[str, str]] = []
+
+    name = _text(data.get("courseName"))
+    if name is None:
+        warnings.append(_warning("course_name_unavailable"))
+    else:
+        course["name"] = name
+
+    activity_id = data.get("activityTypePk")
+    if type(activity_id) is not int or activity_id not in _ACTIVITY_BY_ID:
+        warnings.append(_warning("activity_type_unavailable"))
+    else:
+        course["activity"] = _ACTIVITY_BY_ID[activity_id]
+
+    metric_fields = (
+        ("distanceMeter", "distance_m"),
+        ("elevationGainMeter", "elevation_gain_m"),
+        ("elevationLossMeter", "elevation_loss_m"),
+    )
+    invalid_metric = False
+    for source_key, output_key in metric_fields:
+        metric = _metric(data.get(source_key))
+        if metric is None:
+            invalid_metric = True
+        else:
+            course[output_key] = metric
+    if invalid_metric:
+        warnings.append(_warning("invalid_course_metric"))
+
     return {
-        "status": "success",
+        "status": "partial_success" if warnings else "success",
         "error": None,
-        "course": _course_template(validated_id),
-        "warnings": [],
+        "course": course,
+        "warnings": warnings,
     }
