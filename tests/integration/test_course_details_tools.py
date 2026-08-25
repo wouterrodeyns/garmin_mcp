@@ -107,6 +107,20 @@ async def test_get_course_details_delegates_to_service_and_returns_json(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_registered_apps_capture_their_configured_clients():
+    client_a = RecordingProxy({"courseId": 123})
+    client_b = RecordingProxy({"courseId": 456})
+    app_a = _registered_app(client_a)
+    app_b = _registered_app(client_b)
+
+    await app_a.call_tool("get_course_details", {"course_id": 123})
+    await app_b.call_tool("get_course_details", {"course_id": 456})
+
+    assert client_a.calls == ["/course-service/course/123"]
+    assert client_b.calls == ["/course-service/course/456"]
+
+
+@pytest.mark.asyncio
 async def test_tool_makes_one_detail_read_and_no_mutation_or_nested_client_access():
     client = RecordingProxy({"courseId": 123})
     app = _registered_app(client)

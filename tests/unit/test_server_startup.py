@@ -364,9 +364,9 @@ def test_main_explicit_allowlist_overrides_unknown_profile(monkeypatch):
 def test_main_explicit_allowlist_registers_only_course_details(monkeypatch):
     run_calls = []
     _set_safe_stdio_transport_environment(monkeypatch)
+    monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai-coach")
     monkeypatch.setenv("GARMIN_ENABLED_TOOLS", "get_course_details")
-    monkeypatch.delenv("GARMIN_TOOL_PROFILE", raising=False)
-    monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
+    monkeypatch.setenv("GARMIN_DISABLED_TOOLS", "get_course_details")
     monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
 
     def capture_run(self, **_kwargs):
