@@ -167,6 +167,8 @@ full upstream registration an explicit choice.
   feedback read, sport-gated detail, stable envelope, and v1 boundaries.
 - [Activity time-series evidence](docs/ai-activity-timeseries.md) documents the
   narrow follow-up read, bounded windows, sparse sampling, and privacy limits.
+- [Course details](docs/course-details.md) documents the advanced, opt-in scalar
+  read and its geometry/privacy boundary.
 - [AI-friendly workouts](docs/ai-workouts.md) documents the readable workout
   schema, compiler, supported sports, targets, and scheduling result.
 - [Setup and operations](docs/setup.md) covers clients, authentication, local
