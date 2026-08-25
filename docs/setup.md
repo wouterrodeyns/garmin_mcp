@@ -161,6 +161,11 @@ Other runtime variables include:
 - `GARMIN_FIT_CONFIG`: persisted download configuration path; defaults to
   `~/.garminconnect_fit_config.json`.
 
+For the advanced, opt-in scalar course read, see [course details](course-details.md).
+It is outside `ai-coach`; enable it with `GARMIN_TOOL_PROFILE=upstream-full` or
+the explicit `GARMIN_ENABLED_TOOLS=get_course_details` allowlist. It ignores
+course geometry and does not change upload, list, or delete behavior.
+
 ## Transport
 
 The default transport is `stdio`, suitable for Claude Desktop, Codex, opencode,

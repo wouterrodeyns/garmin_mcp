@@ -59,6 +59,7 @@ def _register_unfiltered_reference_tools():
         garmin_mcp.nutrition,
         garmin_mcp.workout_builders,
         garmin_mcp.courses,
+        garmin_mcp.course_details,
         garmin_mcp.activity_analysis,
     ):
         app = module.register_tools(app)
@@ -93,6 +94,7 @@ def test_main_defaults_to_exact_ai_coach_tool_profile(monkeypatch):
     assert set(run_calls[0]["tool_names"]) == garmin_mcp.TOOL_PROFILES["ai-coach"]
     assert "get_target_events" in run_calls[0]["tool_names"]
     assert "get_devices" not in run_calls[0]["tool_names"]
+    assert "get_course_details" not in run_calls[0]["tool_names"]
 
 
 def test_main_registers_normalized_upstream_full_profile(monkeypatch, capsys):
@@ -357,6 +359,63 @@ def test_main_explicit_allowlist_overrides_unknown_profile(monkeypatch):
     garmin_mcp.main()
 
     assert run_calls == [["get_devices"]]
+
+
+def test_main_explicit_allowlist_registers_only_course_details(monkeypatch):
+    run_calls = []
+    _set_safe_stdio_transport_environment(monkeypatch)
+    monkeypatch.setenv("GARMIN_TOOL_PROFILE", "ai-coach")
+    monkeypatch.setenv("GARMIN_ENABLED_TOOLS", "get_course_details")
+    monkeypatch.setenv("GARMIN_DISABLED_TOOLS", "get_course_details")
+    monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
+
+    def capture_run(self, **_kwargs):
+        run_calls.append({tool.name for tool in asyncio.run(self.list_tools())})
+
+    monkeypatch.setattr(FastMCP, "run", capture_run)
+
+    garmin_mcp.main()
+
+    assert run_calls == [{"get_course_details"}]
+
+
+def test_main_upstream_full_includes_course_details(monkeypatch):
+    run_calls = []
+    _set_safe_stdio_transport_environment(monkeypatch)
+    monkeypatch.setenv("GARMIN_TOOL_PROFILE", "upstream-full")
+    monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
+    monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
+    monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
+
+    def capture_run(self, **_kwargs):
+        run_calls.append({tool.name for tool in asyncio.run(self.list_tools())})
+
+    monkeypatch.setattr(FastMCP, "run", capture_run)
+
+    garmin_mcp.main()
+
+    assert "get_course_details" in run_calls[0]
+    assert run_calls[0] == _register_unfiltered_reference_tools()
+
+
+def test_upstream_full_denylist_removes_course_details(monkeypatch):
+    run_calls = []
+    _set_safe_stdio_transport_environment(monkeypatch)
+    monkeypatch.setenv("GARMIN_TOOL_PROFILE", "upstream-full")
+    monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
+    monkeypatch.setenv("GARMIN_DISABLED_TOOLS", "get_course_details")
+    monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
+
+    def capture_run(self, **_kwargs):
+        run_calls.append({tool.name for tool in asyncio.run(self.list_tools())})
+
+    monkeypatch.setattr(FastMCP, "run", capture_run)
+
+    garmin_mcp.main()
+
+    assert run_calls == [
+        _register_unfiltered_reference_tools() - {"get_course_details"}
+    ]
 
 
 def test_main_registers_exact_ai_coach_profile(monkeypatch):
