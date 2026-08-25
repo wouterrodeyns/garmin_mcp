@@ -98,6 +98,14 @@ def _fetch_course(client: Any, course_id: int) -> _ProviderResult:
         return _ProviderResult(failed=True)
 
 
+def _read_mapping_value(data: Mapping[str, Any], key: str) -> tuple[bool, Any]:
+    """Read one allowlisted provider key without exposing provider failures."""
+    try:
+        return True, data.get(key)
+    except Exception:
+        return False, None
+
+
 def get_course_details_service(client: Any, course_id: Any) -> dict[str, Any]:
     """Return a bounded course summary for a validated request identifier."""
     validated_id = _parse_course_id(course_id)
@@ -111,13 +119,21 @@ def get_course_details_service(client: Any, course_id: Any) -> dict[str, Any]:
         return _error("course_unavailable")
 
     data = provider_result.data
-    if data is None or (isinstance(data, Mapping) and len(data) == 0):
+    if data is None:
         return _error("course_not_found")
     if not isinstance(data, Mapping):
         return _error("invalid_course_response")
+    try:
+        is_empty = len(data) == 0
+    except Exception:
+        return _error("invalid_course_response")
+    if is_empty:
+        return _error("course_not_found")
 
-    provider_id = data.get("courseId")
+    provider_id_read, provider_id = _read_mapping_value(data, "courseId")
     if (
+        not provider_id_read
+        or
         type(provider_id) is not int
         or provider_id <= 0
         or provider_id > MAX_SAFE_COURSE_ID
@@ -128,13 +144,18 @@ def get_course_details_service(client: Any, course_id: Any) -> dict[str, Any]:
     course = _course_template(validated_id)
     warnings: list[dict[str, str]] = []
 
-    name = _text(data.get("courseName"))
+    name_read, raw_name = _read_mapping_value(data, "courseName")
+    if not name_read:
+        return _error("invalid_course_response")
+    name = _text(raw_name)
     if name is None:
         warnings.append(_warning("course_name_unavailable"))
     else:
         course["name"] = name
 
-    activity_id = data.get("activityTypePk")
+    activity_read, activity_id = _read_mapping_value(data, "activityTypePk")
+    if not activity_read:
+        return _error("invalid_course_response")
     if type(activity_id) is not int or activity_id not in _ACTIVITY_BY_ID:
         warnings.append(_warning("activity_type_unavailable"))
     else:
@@ -147,7 +168,10 @@ def get_course_details_service(client: Any, course_id: Any) -> dict[str, Any]:
     )
     invalid_metric = False
     for source_key, output_key in metric_fields:
-        metric = _metric(data.get(source_key))
+        metric_read, raw_metric = _read_mapping_value(data, source_key)
+        if not metric_read:
+            return _error("invalid_course_response")
+        metric = _metric(raw_metric)
         if metric is None:
             invalid_metric = True
         else:

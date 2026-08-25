@@ -186,7 +186,7 @@ def test_mapping_subclass_is_accepted_without_recursive_inspection():
 
 @pytest.mark.parametrize(
     "provider_id",
-    [None, True, 0, -1, 9007199254740992, "123", 124],
+    [None, True, 0, -1, 9007199254740992, 123.0, "123", 124],
 )
 def test_missing_invalid_and_mismatched_provider_course_id_are_invalid(provider_id):
     response = {"courseName": "Course without an ID"} if provider_id is None else {"courseId": provider_id}
@@ -203,6 +203,86 @@ def test_missing_invalid_and_mismatched_provider_course_id_are_invalid(provider_
         "course": None,
         "warnings": [],
     }
+
+
+class FailingLengthMapping(Mapping):
+    def __len__(self):
+        raise RuntimeError("https://private.example/course?token=length-secret sentinel=length")
+
+    def __iter__(self):
+        raise AssertionError("provider mapping must not be recursively iterated")
+
+    def __getitem__(self, key):
+        raise AssertionError(f"unexpected provider key: {key}")
+
+
+def test_mapping_length_failure_returns_fixed_invalid_response_without_leakage():
+    client = RecordingClient(FailingLengthMapping())
+
+    result = get_course_details_service(client, 123)
+
+    assert result == {
+        "status": "error",
+        "error": {
+            "code": "invalid_course_response",
+            "message": "Course data had an unexpected shape.",
+        },
+        "course": None,
+        "warnings": [],
+    }
+    serialized = json.dumps(result)
+    assert "length-secret" not in serialized
+    assert "sentinel=length" not in serialized
+
+
+class FailingAccessMapping(Mapping):
+    _values = {
+        "courseId": 123,
+        "courseName": "Course",
+        "activityTypePk": 1,
+        "distanceMeter": 10.0,
+        "elevationGainMeter": 20.0,
+        "elevationLossMeter": 30.0,
+    }
+
+    def __init__(self, failing_key):
+        self.failing_key = failing_key
+
+    def __len__(self):
+        return len(self._values)
+
+    def __iter__(self):
+        raise AssertionError("provider mapping must not be recursively iterated")
+
+    def __getitem__(self, key):
+        if key == self.failing_key:
+            raise RuntimeError(
+                f"https://private.example/course?token={key}-secret sentinel={key}-sentinel"
+            )
+        return self._values[key]
+
+
+@pytest.mark.parametrize(
+    "failing_key",
+    ["courseId", "courseName", "activityTypePk", "distanceMeter", "elevationGainMeter", "elevationLossMeter"],
+)
+def test_mapping_allowlisted_key_failure_returns_fixed_invalid_response_without_leakage(failing_key):
+    client = RecordingClient(FailingAccessMapping(failing_key))
+
+    result = get_course_details_service(client, 123)
+
+    assert result == {
+        "status": "error",
+        "error": {
+            "code": "invalid_course_response",
+            "message": "Course data had an unexpected shape.",
+        },
+        "course": None,
+        "warnings": [],
+    }
+    serialized = json.dumps(result)
+    assert f"{failing_key}-secret" not in serialized
+    assert f"{failing_key}-sentinel" not in serialized
 
 
 @pytest.mark.parametrize(
@@ -367,6 +447,43 @@ def test_metrics_reject_bool_nan_infinity_negative_and_other_types(bad_metric):
     assert result["course"]["distance_m"] is None
     assert result["course"]["elevation_gain_m"] is None
     assert result["course"]["elevation_loss_m"] is None
+    assert result["warnings"] == [
+        {
+            "code": "invalid_course_metric",
+            "message": "One or more course distance or elevation metrics are unavailable.",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "output_key", "retained_values"),
+    [
+        ("distanceMeter", "distance_m", {"elevation_gain_m": 20.0, "elevation_loss_m": 30.0}),
+        ("elevationGainMeter", "elevation_gain_m", {"distance_m": 10.0, "elevation_loss_m": 30.0}),
+        ("elevationLossMeter", "elevation_loss_m", {"distance_m": 10.0, "elevation_gain_m": 20.0}),
+    ],
+)
+@pytest.mark.parametrize("bad_metric", [True, float("nan"), float("inf"), float("-inf"), -1, "12", None, object()])
+def test_one_malformed_metric_preserves_other_metrics_and_one_warning(
+    metric_key, output_key, retained_values, bad_metric
+):
+    response = {
+        "courseId": 123,
+        "courseName": "Course",
+        "activityTypePk": 1,
+        "distanceMeter": 10.0,
+        "elevationGainMeter": 20.0,
+        "elevationLossMeter": 30.0,
+        metric_key: bad_metric,
+    }
+    client = RecordingClient(response)
+
+    result = get_course_details_service(client, 123)
+
+    assert result["status"] == "partial_success"
+    assert result["course"][output_key] is None
+    for retained_key, retained_value in retained_values.items():
+        assert result["course"][retained_key] == retained_value
     assert result["warnings"] == [
         {
             "code": "invalid_course_metric",
