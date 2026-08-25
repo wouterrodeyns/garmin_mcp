@@ -107,6 +107,8 @@ def test_guide_documents_input_bounds_and_activity_mapping() -> None:
         "64 characters",
         "9007199254740991",
         "finite non-negative",
+        "within the ieee-754 binary64 finite range",
+        "1.7976931348623157e+308",
         "256 characters",
         "partial_success",
         "warnings",

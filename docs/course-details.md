@@ -126,9 +126,14 @@ Only these provider fields are projected:
 | `course_id` | validated request ID | Positive, safe integer; provider `courseId` must match it. |
 | `name` | `courseName` | Trimmed string of 1–256 characters; otherwise `null` with `course_name_unavailable`. |
 | `activity` | `activityTypePk` | Exact built-in integer mapped to a known activity; otherwise `null` with `activity_type_unavailable`. |
-| `distance_m` | `distanceMeter` | Finite non-negative integer or float; otherwise `null`. |
-| `elevation_gain_m` | `elevationGainMeter` | Finite non-negative integer or float; otherwise `null`. |
-| `elevation_loss_m` | `elevationLossMeter` | Finite non-negative integer or float; otherwise `null`. |
+| `distance_m` | `distanceMeter` | Finite non-negative integer or float within the IEEE-754 binary64 finite range (at most `1.7976931348623157e+308`); otherwise `null`. |
+| `elevation_gain_m` | `elevationGainMeter` | Finite non-negative integer or float within the IEEE-754 binary64 finite range (at most `1.7976931348623157e+308`); otherwise `null`. |
+| `elevation_loss_m` | `elevationLossMeter` | Finite non-negative integer or float within the IEEE-754 binary64 finite range (at most `1.7976931348623157e+308`); otherwise `null`. |
+
+The metric bound is inclusive: values must be exact built-in integers or
+floats with `0 <= value <= 1.7976931348623157e+308` and must be finite. Values
+outside that IEEE-754 binary64 finite range, including oversized integers, are
+unavailable rather than serialized.
 
 Malformed distance or elevation metrics produce one
 `invalid_course_metric` warning for the response, not one warning per field.

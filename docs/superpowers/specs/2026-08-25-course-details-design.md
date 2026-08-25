@@ -155,9 +155,9 @@ fixed, trusted objects in the deterministic order defined below.
 | `course_id` | The validated request ID, never an untrusted owner/profile ID. |
 | `name` | Trimmed course name, at most 256 characters, else `null`. This is the only returned name. |
 | `activity` | A known normalized activity key or `null`; raw provider codes are not returned. |
-| `distance_m` | Finite non-negative number from `distanceMeter`, else `null`. |
-| `elevation_gain_m` | Finite non-negative number from `elevationGainMeter`, else `null`. |
-| `elevation_loss_m` | Finite non-negative number from `elevationLossMeter`, else `null`. |
+| `distance_m` | Finite non-negative number from `distanceMeter` within the IEEE-754 binary64 finite range (at most `1.7976931348623157e+308`), else `null`. |
+| `elevation_gain_m` | Finite non-negative number from `elevationGainMeter` within the IEEE-754 binary64 finite range (at most `1.7976931348623157e+308`), else `null`. |
+| `elevation_loss_m` | Finite non-negative number from `elevationLossMeter` within the IEEE-754 binary64 finite range (at most `1.7976931348623157e+308`), else `null`. |
 
 ## Field mapping and validation
 
@@ -195,8 +195,9 @@ characters. Any other value produces `name: null`, exactly one
 `course_name_unavailable` warning, and `partial_success`.
 
 Number normalization accepts exact `int` or `float` values excluding booleans,
-requires finite values, and requires values greater than or equal to zero.
-Malformed optional metrics become `null` with one
+requires finite values, and requires values in the inclusive range from zero
+through `1.7976931348623157e+308`, the IEEE-754 binary64 finite maximum.
+Malformed optional metrics outside that bound become `null` with one
 `invalid_course_metric` warning per response, not one warning per field.
 
 ## Bounds and privacy

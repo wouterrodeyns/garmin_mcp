@@ -1,9 +1,15 @@
 import json
+import math
+import sys
 from collections.abc import Mapping
 
 import pytest
 
-from garmin_mcp.course_details import _parse_course_id, get_course_details_service
+from garmin_mcp.course_details import (
+    MAX_COURSE_METRIC,
+    _parse_course_id,
+    get_course_details_service,
+)
 
 
 class RecordingClient:
@@ -401,7 +407,10 @@ def test_invalid_course_names_are_partial_with_one_warning(course_name):
     ]
 
 
-@pytest.mark.parametrize("metric_value", [0, 12, 12.5])
+@pytest.mark.parametrize(
+    "metric_value",
+    [0, 12, 12.5, sys.float_info.max, math.nextafter(sys.float_info.max, 0.0)],
+)
 @pytest.mark.parametrize("metric_key", ["distanceMeter", "elevationGainMeter", "elevationLossMeter"])
 def test_metrics_accept_finite_nonnegative_int_or_float(metric_key, metric_value):
     client = RecordingClient(
@@ -426,6 +435,10 @@ def test_metrics_accept_finite_nonnegative_int_or_float(metric_key, metric_value
     assert result["status"] == "success"
     assert result["course"][output_key] == metric_value
     assert result["warnings"] == []
+
+
+def test_metric_bound_is_ieee754_binary64_finite_maximum():
+    assert MAX_COURSE_METRIC == sys.float_info.max
 
 
 @pytest.mark.parametrize("bad_metric", [True, float("nan"), float("inf"), -1, "12", None, object()])

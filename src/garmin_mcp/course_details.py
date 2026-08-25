@@ -3,6 +3,7 @@
 import json
 from collections.abc import Mapping
 from math import isfinite
+from sys import float_info
 from typing import Any
 
 from pydantic import StrictInt, StrictStr
@@ -12,6 +13,7 @@ from .courses import _ACTIVITY_TYPE_IDS
 
 garmin_client: Any = None
 MAX_SAFE_COURSE_ID = 9007199254740991
+MAX_COURSE_METRIC = float_info.max
 
 ERROR_MESSAGES = {
     "invalid_course_id": "course_id must be a positive integer or decimal string.",
@@ -66,10 +68,16 @@ def _metric(value: Any) -> int | float | None:
     if type(value) not in (int, float):
         return None
     try:
+        in_range = 0 <= value <= MAX_COURSE_METRIC
+    except OverflowError:
+        return None
+    if not in_range:
+        return None
+    try:
         finite = isfinite(value)
     except OverflowError:
         return None
-    return value if finite and value >= 0 else None
+    return value if finite else None
 
 
 def _course_template(course_id: int) -> dict[str, Any]:

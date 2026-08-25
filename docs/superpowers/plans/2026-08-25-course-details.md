@@ -165,12 +165,14 @@ The only allowed provider call is `client.connectapi(f"/course-service/course/{v
   import json
   from collections.abc import Mapping
   from math import isfinite
+  from sys import float_info
   from typing import Any
 
   from pydantic import StrictInt, StrictStr
 
   garmin_client: Any = None
   MAX_SAFE_COURSE_ID = 9007199254740991
+  MAX_COURSE_METRIC = float_info.max
 
   ERROR_MESSAGES = {
       "invalid_course_id": "course_id must be a positive integer or decimal string.",
@@ -293,8 +295,8 @@ The only allowed provider call is `client.connectapi(f"/course-service/course/{v
   - `test_activity_type_maps_every_existing_upload_id`: parameterize `(1, "running"), (2, "cycling"), (3, "hiking"), (4, "gravel_cycling"), (5, "mountain_biking"), (6, "trail_running"), (9, "walking"), (10, "road_biking")`; each response must expose only the normalized key.
   - `test_activity_type_requires_exact_int_and_known_id`: parameterize `True`, `1.0`, `"1"`, `0`, `999`, and `None`; assert `activity is None`, `partial_success`, and exactly one `activity_type_unavailable` warning for each. The existing eight known integer IDs must remain covered by the preceding mapping test.
   - `test_course_name_is_trimmed_and_limited`: cover one-character, 256-character, whitespace-trimmed, empty, whitespace-only, overlong, null, and non-string names. Invalid names yield one `course_name_unavailable` warning and `partial_success`.
-  - `test_metrics_accept_finite_nonnegative_int_or_float`: cover integer, float, and zero for all three fields.
-  - `test_metrics_reject_bool_nan_infinity_negative_and_other_types`: assert all malformed metrics become `None`, produce one total `invalid_course_metric` warning, and do not create one warning per field.
+  - `test_metrics_accept_finite_nonnegative_int_or_float`: cover integer, float, zero, and values through the IEEE-754 binary64 finite maximum for all three fields.
+  - `test_metrics_reject_bool_nan_infinity_negative_and_other_types`: assert all malformed or out-of-range metrics become `None`, produce one total `invalid_course_metric` warning, and do not create one warning per field.
   - `test_warning_order_is_name_activity_metric`: make all three categories malformed and assert warning codes occur in exactly that order.
 
 - [ ] **Step 2: Write RED tests for privacy and geometry isolation.**
@@ -336,7 +338,9 @@ The only allowed provider call is `client.connectapi(f"/course-service/course/{v
   def _metric(value: Any) -> int | float | None:
       if type(value) not in (int, float):
           return None
-      return value if isfinite(value) and value >= 0 else None
+      if not 0 <= value <= MAX_COURSE_METRIC:
+          return None
+      return value if isfinite(value) else None
   ```
 
   Normalize only `courseName`, `activityTypePk`, `distanceMeter`, `elevationGainMeter`, and `elevationLossMeter`. For `activityTypePk`, first require `type(value) is int`, then perform the inverse lookup. Never recursively walk, stringify, copy, log, or otherwise inspect geometry/private fields. Append each warning code at most once in the fixed order `course_name_unavailable`, `activity_type_unavailable`, `invalid_course_metric`; any warning changes status to `partial_success`.
@@ -483,7 +487,7 @@ The only allowed provider call is `client.connectapi(f"/course-service/course/{v
 
   - `test_course_details_guide_exists_and_names_signature`: require `get_course_details(course_id)`, the exact endpoint path, and read-only/one-call language.
   - `test_guide_documents_exact_schema_and_all_fixed_codes`: parse every JSON example and require top-level keys `status`, `error`, `course`, `warnings`; require all five error codes and all three warning codes.
-  - `test_guide_documents_input_bounds_and_activity_mapping`: require the positive integer/ASCII decimal rules, 64-character raw limit, JavaScript-safe maximum, name limit, finite nonnegative metric rules, and all eight activity mappings.
+  - `test_guide_documents_input_bounds_and_activity_mapping`: require the positive integer/ASCII decimal rules, 64-character raw limit, JavaScript-safe maximum, name limit, finite nonnegative metric rules within the IEEE-754 binary64 finite range, and all eight activity mappings.
   - `test_guide_documents_geometry_and_privacy_exclusions`: require explicit statements that `coursePoints`, `geoPoints`, `courseLines`, coordinates, owner/profile/group fields, names other than the course name, URLs, notes, raw payloads, and exception text are excluded/ignored.
   - `test_guide_documents_profile_opt_in_without_changing_ai_coach`: require `upstream-full` and `GARMIN_ENABLED_TOOLS=get_course_details`, and assert the README/setup profile lists still state exactly 17 tools and do not list `get_course_details` among them.
 
